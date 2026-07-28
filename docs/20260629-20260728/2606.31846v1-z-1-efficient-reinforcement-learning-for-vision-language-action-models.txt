@@ -1,0 +1,390 @@
+Title: Z-1: Efficient Reinforcement Learning for Vision-Language-Action Models
+
+URL Source: https://arxiv.org/pdf/2606.31846v1
+
+Published Time: Wed, 01 Jul 2026 01:40:29 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# Z-1: Efficient Reinforcement Learning for Vision-Language-Action Models 
+
+Zioneer Robot Team 
+
+# Abstract 
+
+Vision-Language-Action (VLA) models offer a promising framework for robotic manipulation by connecting language instructions, visual obser-vations, and continuous control. However, most existing policies remain limited by behavior cloning or supervised fine-tuning (SFT) from fixed demonstrations, which provides limited opportunity to improve from the policy’s own failures. In this paper, we present Z-1, a reinforcement learning (RL) post-training framework for flow-based VLA models. Built on top of π0.5, Z-1 uses only publicly released RoboCasa demonstrations for SFT and then applies a task-wise Group Relative Policy Optimization (GRPO) strategy across 24 standard RoboCasa tasks. To improve the efficiency and stability of online optimization, Z-1 combines shared-prefix rollout construction, tree-structured trajectory branching, completion-aware reward calibration, and selective joint training of VLM and Action Expert. Across all 24 RoboCasa tasks, Z-1 achieves an average success rate of 80 .6% , improv-ing over its SFT initialization by 13 .2% points and outperforms the published sota models. These results show that systematic GRPO post-training can substantially improve flow-based VLA policies without additional private demonstrations. 
+
+# 1 Introduction 
+
+Modern robotic manipulation increasingly requires policies that connect high-level language instructions [Zhao et al., 2026], visual observations [Bai et al., 2025], and low-level continuous control [Yang et al., 2025]. Vision-Language-Action (VLA) models [Sapkota et al., 2026] pro-vide a natural framework for this goal by unifying language understanding, visual perception, and action generation within a single policy. Recent systems, including RT-2 [Brohan et al., 2023a], OpenVLA [Kim et al., 2024], π0 [Black et al., 2026], and π0.5 [Intelligence et al., 2025b] have demonstrated strong potential on complex manipulation tasks by leveraging semantic and visual priors from foundation models. Despite this progress, most VLA policies are still primarily trained from human expert demonstrations through behavior cloning (BC) Torabi et al. [2018] or supervised fine-tuning (SFT) Brohan et al. [2023b]. Although imitation learning provides stable initialization, its performance is limited by the demonstration coverage [Chi et al., 2024]. In long-horizon and compositional tasks, small prediction errors can accumulate and push the robot into states that are poorly represented in training data [Kachaev et al., 2025]. Moreover, BC and SFT provide no direct mechanism for improving from the policy’s own failures, which limits its ability to optimize sparse task success through trial-and-error interaction. These limitations motivate interaction-based post-training for VLA policies. Reinforcement learning (RL) post-training offers a direct way to improve beyond imitation by collecting online rollouts and optimizing task-level rewards [Lu et al., 2025, Li et al., 2025]. Recent studies have shown that RL can further improve the performance of SFT model [Chen et al., 2026, Zhang et al., 2026, Ye et al., 2025, Intelligence et al., 2025a, 
+
+> arXiv:2606.31846v1 [cs.RO] 30 Jun 2026
+
+2026, Pan et al., 2026]. However, efficient and stable VLA-RL remains challenging. Rollout generation is expensive for flow-based VLA models; sparse rewards and long horizons increase optimization variance; and freezing the vision-language backbone can limit the correction of failures caused by visual grounding, spatial reasoning, or language-conditioned perception. In this work, we introduce Z-1, a modular RL post-training framework for flow-based VLA models. Z-1 is built on top of the π0.5 base model [Intelligence et al., 2025b] and uses only publicly released RoboCasa demonstration data for SFT [NVIDIA, 2024, Nasiriany et al., 2024]. Our pipeline first performs per-scene SFT on RoboCasa demonstrations then applies a task-wise Group Relative Policy Optimization (GRPO) [Shao et al., 2024] post-training strategy across standard RoboCasa tasks. Z-1 addresses these challenges with a modular GRPO design tailored to flow-based VLA policies. It constructs rollout groups with shared prefixes and tree-structured branching to reduce redundant simulation and focus group-relative comparisons on task-critical interaction phases. It further calibrates sparse rewards according to completion progress and selectively updates the vision-language module when action-only adaptation is insufficient. Together, these components improve the efficiency, stability, and adaptability of online post-training. We evaluate Z-1 on 24 standard RoboCasa tasks, and Z-1 improves substantially over its SFT initialization, achieving the best average success rate among the compared published RoboCasa results. These results show that GRPO post-training can effectively improve flow-based VLA policies without additional private demonstrations. Our contributions are summarized as follows: 
+
+• We present Z-1, a modular GRPO post-training framework for flow-based VLA models, and we propose prefix-based rollout construction, including shared-prefix GRPO and tree-structured prefix branching, to reduce redundant rollout computation while preserving trainable trajectory segments. 
+
+• We develop success-aware reward decay and joint training of VLM and action expert for completion-aware reward calibration and perception-action co-adaptation. 
+
+• We achieve a new sota performance over RoboCasa benchmark under the public demonstration setting, with ablation analysis supporting key design choices. 
+
+# 2 Related Work 
+
+2.1 Sota Models over RoboCasa 
+
+Building on recent VLA systems such as RT-2 [Brohan et al., 2023a], OpenVLA [Kim et al., 2024], π0 [Black et al., 2026], and π0.5 [Intelligence et al., 2025b], recent work has improved robotic action prediction by enriching visual-spatial representations, enlarging the training distribution, or building more generalist robot policies. X-WAM [Guo et al., 2026] explores world-action modeling for robotic manipulation by incorporating richer spatiotemporal visual structure into action prediction. Related depth-aware VLA models show that explicit geometric information can improve spatial reasoning and manipulation performance [Yuan et al., 2025]. These methods highlight the importance of structured visual-spatial representations for action generation. Another line of work studies generalist robot foundation models trained across diverse embodiments, environments, and tasks. GR00T [NVIDIA et al., 2025] is a representative open foundation model for generalist humanoid robots, trained to map multimodal observations and language instructions to robot actions across diverse skills. Such models often improve performance by increasing model capacity, data diversity, or embodiment coverage, while recent studies on robot data curation further show that data quality and coverage are critical for scalable robot learning [Hejna et al., 2025]. Z-1 is orthogonal to these directions. Rather than introducing a new world model, geometric representation, or generalist architecture, Z-1 studies how an existing flow-based VLA policy can be improved through task-level online reinforcement learning. This focus allows us to study the effect of RL post-training algorithm in a setting where only publicly released 2demonstrations are available. In particular, Z-1 investigates whether rollout construction, reward calibration, and trainable-module selection can substantially improve a flow-based VLA policy without relying on additional private demonstrations. 
+
+2.2 RL Post-Training for VLA Models 
+
+Reinforcement learning post-training has recently emerged as a promising approach of improving VLA policies beyond demonstration-based initialization. In contrast to behavior cloning or supervised fine-tuning, online RL allows the policy to collect its own interaction data and optimize task-level success signals. This is especially important for long-horizon manipulation tasks, where small imitation errors can compound and lead to states that are poorly covered by demonstrations. Several recent studies have explored this direction. Recent studies, including πRL [Chen et al., 2026], ReinFlow [Zhang et al., 2026], and VLA-R1 [Ye et al., 2025], have explored online RL fine-tuning after SFT, flow-based policy fine-tuning, and reasoning-oriented post-training for VLA policies. Recent π-series systems, including π∗ 
+
+> 0.6
+
+[Intelligence et al., 2025a] and π0.7 [Intelligence et al., 2026], further study learning from robot experience and steerable generalist robot policies, while SOP [Pan et al., 2026] investigates scalable online post-training. Despite this progress, efficient and stable RL post-training for flow-based VLA models remains challenging. First, online interaction remains costly in robot RL, motivating simulation-and digital-twin-based training pipelines [Xu et al., 2026]; this cost is amplified when each GRPO group member executes a full long-horizon trajectory independently. Second, sparse success rewards provide limited credit assignment, and binary task outcomes may fail to distinguish different successful trajectories. Third, freezing the vision-language backbone improves stability but can limit adaptation when failures arise from visual grounding, spatial reasoning, or language-conditioned perception rather than only low-level control. Recent spatially guided VLA models also highlight the importance of explicit spatial grounding for action prediction [Chen et al., 2025]. Z-1 aims to mitigate these challenges with a modular GRPO post-training framework. Instead of treating each rollout as an independent full trajectory, Z-1 constructs rollout groups with shared prefixes and tree-structured branching to reduce redundant prefix execution and focus comparisons on task-critical segments. It further introduces completion-aware reward calibration through Success-Aware Reward Decay and selectively updates the vision-language module together with the action expert for tasks where AE-only adaptation is insufficient. Together, these design choices emphasize rollout efficiency, optimization stability, and representation-action co-adaptation for flow-based VLA post-training. 
+
+# 3 Methodology 
+
+Z-1 follows a two-stage training pipeline. The first stage performs per-scene supervised fine-tuning (SFT), and the second stage applies task-wise GRPO post-training. Starting from a pretrained π0.5 base model, we first adapt Z-1 to RoboCasa using public demonstrations and then applies online interaction-based refinement to tasks selected by pre-evaluation training diagnostics. For the reinforcement learning stage, each task uses a fixed subset of Z-1 modules, chosen before final evaluation based on training-stage diagnostics such as SFT performance, early AE-only GRPO progress, and failure modes observed in training rollouts. No final evaluation rollouts are used for post-training or module selection. The available modules include Shared-Prefix GRPO, Tree-Structured Prefix Branching, Success-Aware Reward Decay, and VLM–Action Expert joint training. 
+
+3.1 Two-Stage Training 
+
+Z-1 builds on the pretrained π0.5 policy and contains two stages. 33.1.1 Stage 1: Per-scene SFT 
+
+We first adapt π0.5 to RoboCasa using publicly released demonstrations. Due to the limited amount of data, we train one SFT model per scene category rather than one model per task. Tasks within the same scene share object layouts, visual contexts, and manipulation primitives, so per-scene SFT improves data efficiency while avoiding per-task data fragmentation. During SFT, both the vision-language module and the action expert are updated. For each scene category, we select a stable SFT checkpoint with a held-out validation loss around 0.01 as the task-wise initialization. Depending on the scene category, we either directly fine-tune on the target scene or use an all-data warm-up followed by scene-specific fine-tuning. Detailed SFT schedules are provided in Appendix C. 
+
+3.1.2 Stage 2: Per-task GRPO post-training 
+
+Starting from the corresponding scene-specific SFT checkpoint, we perform task-wise GRPO post-training for tasks selected by training-stage diagnostics. When GRPO is applied, optimizing each task separately avoids gradient interference across heterogeneous tasks and allows each task to use a fixed subset of Z-1 modules. The enabled modules are not mutually exclusive. That is, a task may combine prefix-based rollout construction, completion-aware reward calibration, and VLM–Action Expert joint training when indicated by training diagnostics. For example, tasks with reliable approach behavior can enable flat Shared-Prefix GRPO for lightweight prefix reuse, whereas tasks requiring approach-phase refinement can enable Tree-Structured Prefix Branching to introduce rollout diversity progressively within the prefix. Tasks with large variation in successful completion time can enable Success-Aware Reward Decay, and tasks where AE-only GRPO is insufficient can further enable VLM–Action Expert joint training. Formally, we denote πθ as the base model initialized by SFT. For each training instance, GRPO samples a group of G rollouts G = {τ (i)}Gi=1 with returns Ri. The group-relative advantage is computed as 
+
+Ai = Ri − μR
+
+σR + ϵ , (1) where 
+
+μR = 1
+
+G
+
+> G
+
+∑
+
+> j=1
+
+Rj , σR =
+
+√√√√ 1
+
+G
+
+> G
+
+∑
+
+> j=1
+
+(Rj − μR)2. (2) Z-1 optimizes the clipped group-relative objective over trainable action chunks: 
+
+LGRPO (θ) = − 1
+
+∑Gi=1 |B i|
+
+> G
+
+∑
+
+> i=1
+
+∑
+
+> (x,a )∈B i
+
+min ( ρθ (x, a )Ai, clip ( ρθ (x, a ), 1 − η, 1 + η) Ai) , (3) where 
+
+ρθ (x, a ) = πθ (a | x)
+
+πθold (a | x) . (4) Here, Bi denotes the set of trainable action chunks in rollout i. For flow-based action generation, we follow the flow-SDE formulation of πRL [Chen et al., 2026]. This converts the deterministic flow sampling path into a stochastic Markov process with tractable transition likelihoods, allowing the action-chunk log-probability and the GRPO likelihood ratio to be computed from the rollout-time SDE transitions. Details are provided in Appendix D.3. Prefix chunks masked by Shared-Prefix GRPO are excluded from Bi, and we do not use an additional KL regularizer. 
+
+3.2 Shared-Prefix GRPO 
+
+Many manipulation trajectories usually contain two phases, an approach phase where the end effector approaches the objects and a second fine-manipulation phase, such as 4grasping. Standard GRPO is designed to compare final rewards of full trajectories, each sampled independently, during one group. However, the approach phases of trajectories have different intermediate states, and the final reward may reflect the sample quality of approach phase rather than the manipulation behavior, which should receive more attention during reinforcement learning. Thus, standard GRPO might dilute the group-relative reward signal, especially when task-critical decisions occur near the interaction region. To tackle this, we propose Shared-Prefix GRPO to reduce this confounding by forcing rollouts in the same GRPO group to share a common prefix. In detail, for each group, a leader rollout executes the prefix over the action-chunk window [0 , P ), where P is the prefix length in action chunks. The simulator state at the branching point is then cloned to initialize the remaining group trajectories. All trajectories then execute independent suffixes after the branching point, so their returns compare behaviors starting from the same entering state. The flat shared-prefix variant uses this one-shot branching construction. Prefix chunks are treated as a shared condition and excluded from the policy-gradient loss, and only suffix chunks enter Bi in the GRPO objective. Because the shared prefix is used only to define a common branching state, masking prefix chunks avoids assigning different suffix returns to identical prefix actions. This variant reduces redundant prefix computation and is most useful when the approach phase is already reliable after SFT. However, it is conservative because the entire prefix window is masked. For tasks whose approach behavior still requires RL refinement, Z-1 uses Tree-Structured Prefix Branching to reduce the fully masked segment. 
+
+3.3 Tree-Structured Prefix Branching 
+
+Tree-Structured Prefix Branching [Cao et al., 2026] generalizes flat Shared-Prefix GRPO by replacing one-shot branching with progressive hierarchical branching. Instead of keeping the entire group identical until the final branching point, it introduces intermediate branching points within the prefix. This creates a tree of rollout clusters, where early segments are shared by more rollouts, while later segments gradually become more diverse. More specifically, only the fully shared root segment is masked. Partially shared segments remain trainable because different rollout clusters have already branched and can receive different rewards and learning signals. Partially shared chunks are included only after their cluster has separated from other clusters, so their learning signal is associated with branch-specific returns rather than with an identical full-group prefix. Compared with flat Shared-Prefix GRPO, this reduces over-masking and allows more approach-phase chunks to contribute to the GRPO update. The GRPO objective and advantage estimator remain unchanged, and only the rollout group construction differs. Because Tree-Structured Prefix Branching uses a smaller group size in our implementation, it can reduce the number of effective GRPO groups that provide non-zero learning signals under a fixed batch size. We therefore increase the training batch size for this variant so that the number of effective learning groups remains comparable to the standard GRPO setting. We provide the detailed branching schedule, action-recording procedure, and implementation details in Appendix D.1. 
+
+3.4 Success-Aware Reward Decay 
+
+Manipulation tasks often provide sparse success rewards: a rollout receives a positive score only when the task is completed. Treating all successful rollouts identically makes the reward signal coarse, since an early completion and a late completion receive the same score. To address this problem, we use Success-Aware Reward Decay to introduce an ordering among successful rollouts according to completion time. The decay is applied only to successful trajectories. Let r be the original success score, and let di denote the number of action chunks elapsed from the start of rollout i until its first successful completion. We define the calibrated score as ˜ri = r · γdi , where γ ∈ (0 , 1] is the reward decay factor. When 
+
+γ = 1 , the original sparse reward is unchanged; when γ < 1, earlier successful completions receive larger positive scores than later successful completions. Failed rollouts keep their original failure reward. The calibrated score is used as the rollout return in GRPO. For groups containing both successful and failed rollouts, standard group-relative normalization is used, so the success-5failure distinction remains dominant. For groups where all rollouts succeed, Z-1 uses a non-negative completion-time ordering: Ai = Ri − min j Rj . This replaces the standard mean-normalized advantage only for all-success groups. Thus, the slowest successful rollout receives zero advantage, while earlier successful completions receive positive advantages. This avoids treating slower successful rollouts as negative examples, which can otherwise over-emphasize trajectory shortening at the expense of reliable task completion. This preserves the sparse success objective while providing finer group-relative feedback without task-specific dense reward shaping, an additional reward model, or explicit trajectory-length penalties. 
+
+Selective VLM–Action Expert Joint Training (Sel-JT) Many VLA-RL pipelines freeze the vision-language backbone and update only the action expert during online post-training. This AE-only setting is efficient and stable when the SFT checkpoint already provides sufficient visual grounding and language-conditioned representations. We also apply the AE-only GRPO as the default configuration. However, AE-only adaptation can be insufficient for tasks with low SFT success or perception-sensitive failures, where the limiting factor may be inaccurate object localization, weak spatial grounding, or poor alignment between vision-language representations and action generation. For such tasks, Z-1 selectively enables VLM–Action Expert joint training according to training-stage diagnostics, including SFT success, early AE-only GRPO progress, and failure modes observed in training rollouts. The selected trainable module configuration is fixed before final evaluation, and no final evaluation rollouts are used for module or model selection. Both AE-only and joint-training settings use the same rollout construction, advantage estimator, likelihood-ratio computation, and clipped GRPO objective. They differ only in which model parameters receive gradients. In the AE-only setting, GRPO freezes the PaliGemma vision-language backbone and updates only the action expert. When joint training is enabled, the vision-language backbone is included in the trainable parameter set and optimized together with the action expert. This allows task-level RL feedback to adapt perception, grounding, and action generation jointly without changing the underlying GRPO objective. Implementation details are provided in Appendix D.4. 
+
+# 4 Experiments 
+
+We evaluate Z-1 on RoboCasa , a large-scale simulated household manipulation benchmark. Our evaluation covers 24 standard manipulation tasks, including spanning doors, drawers, pick-and-place, microwave, sink/faucet, stove, and coffee-making scenarios. We use task success rate as the primary evaluation metric. All success rates are reported in percentages and rounded to one decimal place unless otherwise specified. The experiments are designed to answer three research questions: 1. How Z-1 compares with previously reported RoboCasa SOTA, 2. To what extent GRPO post-training improves the supervised fine-tuned initialization, and 3. To what extent different task categories can benefit from online post-training. 
+
+4.1 Experimental Setup 4.1.1 Base model and training pipeline 
+
+As we investigate a post-training method, we build Z-1 on top of the pretrained π0.5
+
+base model. As described in Section 3, we first perform supervised fine-tuning (SFT) using the publicly released RoboCasa demonstrations, and then we apply task-specific GRPO post-training when selected by training-stage diagnostics. The SFT stage uses 1, 199 
+
+demonstrations in total and is implemented with the official OpenPI JAX training code. We use scene-specific SFT as the default adaptation strategy. For the door, drawer, and microwave scenes with limited data, we adopt a two-stage SFT schedule to provide a stronger 6initialization, where the model is first fine-tuned on all 1, 199 RoboCasa demonstrations and then further fine-tuned on the target scene-specific demonstrations. For the other scenes, we directly fine-tune on the corresponding scene-specific demonstrations. This produces the per-scene SFT initialization used by the post-training pipeline. We denote these models as Z-1 SFT and denote the final task-wise policy selected by the Z-1 post-training pipeline as Z-1 RL. 
+
+4.1.2 RL implementation 
+
+Our GRPO implementation is based on the RLinf framework and operates on the Z-1 SFT checkpoints. For tasks selected for RL, post-training starts from the corresponding scene-specific SFT checkpoint and collects online rollouts in the RoboCasa simulator. We implement the Z-1 modules described in Section 3 on top of the original RLinf codebase, including Shared-Prefix GRPO, Tree-Structured Prefix Branching, Success-Aware Reward Decay, and selective VLM–Action Expert joint training. These modules modify rollout construction, reward calibration, and trainable parameter selection while keeping the underlying group-relative policy optimization objective unchanged. Unless otherwise specified, RL updates only the action expert. When training-stage diagnos-tics indicate that action-expert-only adaptation is insufficient, we enable joint training of the vision-language module and the action expert. We do not use an additional KL regularizer during GRPO post-training. For each task, the module configuration is fixed before the final evaluation. 
+
+4.1.3 Evaluation protocol 
+
+We evaluate Z-1 SFT and Z-1 RL using independent evaluation rollouts with multiple random seeds, without reusing any training trajectories. Task success rate is computed over all evaluation rollouts. Category-level results are computed as the unweighted average of task-level success rates within each category, and the overall average is computed as the unweighted average across all 24 tasks. Detailed evaluation budgets, including the number of seeds and rollouts per task, are provided in Appendix C.5. 
+
+4.1.4 Baselines and Comparisons 
+
+We compare Z-1 with four previously published RoboCasa results: GR00T, GR00T N1.5, Video Generators are Robot Policies (Video Policy), and X-WAM. The GR00T and GR00T N1.5 results are taken from their reported RoboCasa evaluations [NVIDIA et al., 2025]; the Video Policy results are taken from the reported RoboCasa evaluation in [Liang et al., 2025]; and the X-WAM results are taken from the reported RoboCasa evaluation in [Guo et al., 2026]. We compare against the numbers reported in the corresponding papers and interpret the comparison as a reference to published RoboCasa performance rather than a fully controlled reproduction study. For consistency, all baseline and Z-1 results are reported as success rates in percentages. 
+
+4.2 Main Results 
+
+Figure 1 summarizes the category-level results of Z-1 with and compared baselines on 
+
+RoboCasa . Z-1 RL achieves a sota average success rate of 80 .6% across 24 RoboCasa tasks under the public RoboCasa demonstration setting. Compared with its Z-1 SFT initialization, Z-1 RL improves the average success rate from 67 .4% to 80 .6% , corresponding to a gain of 13 .2 percentage points. Also, when compared across 7 categories, Z-1 RL consistently improved Z-1 SFT’s performance. These demonstrate that the Z-1 RL post-training method provides substantial gains beyond supervised fine-tuning. Compared the averaged success rate with other sota baselines, Z-1 RL outperforms the reported GR00T, GR00T N1.5, Video Policy, and X-WAM results by 30 .9, 20 .9, 17 .3, and 
+
+1.4 percentage points, respectively. Although the average gain over X-WAM, the strongest published baseline in our comparison, is modest, Z-1 RL outperforms X-WAM across 5
+
+categories out of 7 in total. Note that X-WAM introduces the depth information, while our Z-1 RL only uses publicly released RoboCasa demonstrations. The improvement is especially 7Door Drawer PnP Micro. Sink Stove Coffee Avg.      
+
+> 20
+> 40
+> 60
+> 80
+> 100
+> +1.4 pp over X-WAM
+> Success Rate (%)
+> GR00T GR00T N1.5 Video Policy X-WAM Z-1 SFT Z-1 RL
+
+Figure 1: Category-level and averaged success rates on RoboCasa across all compared methods. PnP and Micro. denote Pick-and-Place and Microwave, respectively. The Avg. group reports the mean success rate over all 24 RoboCasa tasks. Baseline results are taken from the corresponding papers, while Z-1 SFT and Z-1 RL are evaluated by us. Z-1 RL achieves the best average performance among the compared published methods, with an average success rate of 80.6%, improving over X-WAM’s 79 .2% by 1.4 percentage points. pronounced in drawer, sink/faucet, and several pick-and-place tasks, where online RL can refine interaction behavior beyond the SFT policy. 
+
+4.2.1 RL Improvements over Different Tasks 
+
+The gains from Z-1 RL are not uniform across categories. We observe that RL improve from 93 .2% to 97 .0% on door tasks, from 83 .4% to 96 .1% on drawer tasks, and improves from 63 .2% to 94 .3% on sink/faucet tasks. These categories often require precise interaction after the robot reaches the target object, which aligns with the motivation of Shared-Prefix GRPO and Tree-Structured Prefix Branching. We also observe substantial improvement on pick-and-place tasks, from 53 .9% to 70 .9% 
+
+specifically. Microwave tasks already benefit from the SFT stage and remain at 94 .8% after RL, suggesting that the SFT checkpoint already captures the required behavior for this category. Stove tasks remain challenging that the success rates of all methods are low. Z-1 RL improves over Z-1 SFT, but still underperforms X-WAM on this category. This indicates that stove manipulation may require stronger representation adaptation, more targeted exploration, or additional failure recovery mechanisms. 
+
+4.3 Ablation and Analysis 4.3.1 Effect of Shared Prefix and Prefix Tree 
+
+We analyze the effect of prefix-based rollout construction on the TurnOnSinkFaucet task. This task requires the policy to first reach the sink area and then execute precise contact-rich manipulation to turn on the faucet. It therefore provides a useful setting for studying whether group-relative policy optimization benefits from reducing variation in the early trajectory segment. Figure 2 compares three variants, vanilla GRPO, flat Shared-Prefix GRPO, and Tree-Structured Prefix Branching. Overall, both prefix-based variants achieve higher success rates than vanilla GRPO. This result suggests that sharing early trajectory prefixes can make group-relative comparisons more informative. Without prefix sharing, rollouts in the same group may differ substantially during the approach phase, such as in the arm pose or the 80 50 100 150 200     
+
+> Training Steps
+> 0.4
+> 0.6
+> 0.8
+> Success Rate
+> GRPO
+> GRPO + SharePrefix
+> GRPO + Prefix Tree
+> 050 100 150 200
+> Training Steps
+> 0.000
+> 0.002
+> 0.004
+> 0.006
+> Policy Loss
+> GRPO
+> GRPO + SharePrefix
+> GRPO + Prefix Tree
+> TurnOnSinkFaucet: GRPO vs. GRPO + SharePrefix vs. GRPO + Prefix Tree
+
+Figure 2: Training performance comparison on the TurnOnSinkFaucet task across three GRPO variants: vanilla GRPO, GRPO with a flat shared prefix (SharePrefix), and GRPO with Tree-Structured Prefix Branching (Prefix Tree). Left: success rate over training steps. Right: policy loss over training steps. Both prefix-based variants improve over vanilla GRPO. Prefix Tree achieves the strongest final success rate and a faster loss decrease in this run, while flat SharePrefix provides a more stable alternative in practice. state from which the faucet interaction begins. These differences can introduce irrelevant variation into the reward comparison and make it harder to assign credit to the generated actions that determine task success. Flat Shared-Prefix GRPO addresses this issue by branching multiple suffix rollouts from the same prefix state. As a result, reward differences within a group are more directly tied to post-prefix manipulation behavior. Compared with vanilla GRPO, this yields a cleaner optimization signal and leads to more stable improvement in success rate. Prefix Tree further improves the final success rate in this experiment. It also shows a faster policy-loss decrease, indicating that preserving more trainable trajectory segments can provide a stronger learning signal. Unlike flat Shared-Prefix GRPO, which masks the full shared prefix, Prefix Tree only masks the fully shared root segment and allows later partially branched segments to contribute to the policy update. This method can reduce over-masking and make better use of rollout data. However, Prefix Tree introduces a stability trade-off. Because more prefix-region actions are exposed to policy updates, the resulting optimization signal is less conservative and can be more sensitive to task configuration, prefix length, and rollout stochasticity. In our experiments, this sometimes led to unstable training dynamics. By contrast, flat Shared-Prefix GRPO is more conservative as it masks the full shared prefix and focuses the update on the suffix after the shared state. Although this may discard some trainable prefix-region actions, it provides a robust and practical alternative when training stability is the primary concern. Overall, these results show that prefix-based rollout construction improves GRPO training on long-horizon manipulation tasks. Prefix Tree can achieve stronger peak performance when training remains stable, while flat Shared-Prefix GRPO offers a better stability–performance trade-off in practice. 
+
+4.3.2 Effect of Selective VLM–Action Expert Joint Training 
+
+We further evaluate the effect of Selective VLM–Action Expert Joint Training on the challenging TurnOnStove task. This task requires accurate visual grounding of the stove knob, precise spatial reaching, and contact-rich manipulation, making it difficult to solve by only adapting the action expert when the visual-language representation is suboptimal. Figure 3 compares standard GRPO, which updates only the action expert, with our selective joint-training variant, denoted as GRPO + Sel-JT. GRPO + Sel-JT consistently achieves a higher success rate than the AE-only baseline throughout the training phase, indicating that updating the VLM together with the action expert provides a more effective learning signal 950 100 150 200     
+
+> Training Steps
+> 0.3
+> 0.4
+> 0.5
+> Success Rate
+> GRPO
+> GRPO + Sel-JT
+> 050 100 150 200
+> Training Steps
+> 0.002
+> 0.001
+> 0.000
+> 0.001
+> Policy Loss
+> GRPO
+> GRPO + Sel-JT
+> TurnOnStove: GRPO vs. GRPO + Sel-JT
+
+Figure 3: Training curves on the TurnOnStove task. Left : Success rate over training steps. 
+
+Right : Policy loss over training steps. Our method ( GRPO + Sel-JT , red) consistently achieves higher success rate and lower policy loss compared to the baseline ( GRPO , blue), demonstrating the effectiveness of Selective VLM–Action Expert Joint Training. for this difficult task. In contrast, AE-only GRPO is constrained by the frozen representation and shows limited improvement. The policy-loss curve further supports these observations. GRPO + Sel-JT obtains a lower policy loss than AE-only GRPO, suggesting that joint training makes the policy easier to optimize under task-level RL feedback. This is consistent with our motivation that for tasks where failures may arise from inaccurate visual grounding or weak language-conditioned spatial representation, freezing the VLM limits the action expert to operate on imperfect features. Selective joint training allows the model to adapt perception, grounding, and action generation together, leading to more stable and effective improvement. These results validate the selective nature of our method. Rather than jointly training the VLM for all tasks, Z-1 enables VLM–Action Expert joint training only when training-stage diagnostics indicate that AE-only optimization is insufficient. This strategy improves task performance while avoiding unnecessary representation drift and training cost when the SFT representation is already sufficient. 
+
+4.3.3 Effect of Success-Aware Reward Decay 
+
+We analyze Success-Aware Reward Decay on the PnPStoveToCounter task and compare it with both standard GRPO and a Reward Penalty variant. The Reward Penalty variant uses the same completion-aware reward calibration but keeps the original mean-normalized GRPO advantage for all groups. As a result, in all-success groups, successful rollouts that complete later than the group average can receive negative advantages. As shown in Figure 4, both reward-based variants improve over standard GRPO, indicating that completion time provides useful information beyond binary task success. However, the two variants exhibit different optimization behavior. Reward Penalty substantially reduces average completion steps, showing that explicitly penalizing slower successful trajectories provides a strong signal for shorter executions. At the same time, its success rate increases more slowly, suggesting that penalizing successful but slower rollouts can make optimization overly aggressive when the policy is still learning reliable task completion. In contrast, Success-Aware Reward Decay achieves faster and more stable success-rate improvement while also reducing completion steps. As described in Section 3, it replaces mean normalization with a non-negative minimum-baseline ordering in all-success groups, so later successful rollouts are not assigned negative advantages. Instead, earlier successful completions receive larger positive advantages. This preserves the sparse success objective while encouraging more direct successful behaviors when they are available. 10 50 100 150 200     
+
+> Training Steps
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> Success Rate
+> GRPO
+> GRPO + Rewards Decay
+> GRPO + Rewards Penalty
+> 050 100 150 200
+> Training Steps
+> 200
+> 250
+> 300
+> 350
+> Avg Completion Steps
+> GRPO
+> GRPO + Rewards Decay
+> GRPO + Rewards Penalty
+> PnPStoveToCounter: GRPO vs. GRPO + Rewards Decay
+
+Figure 4: Training curves on the PnPStoveToCounter task comparing standard GRPO, GRPO with Reward Penalty, and GRPO with Success-Aware Reward Decay. Left : success rate over training steps. Right : average completion steps over training steps, where lower values indicate shorter successful executions. Reward Penalty applies the standard mean-normalized GRPO advantage after completion-aware reward calibration, causing slower successful rollouts to receive negative advantages in all-success groups. This strongly reduces completion steps but slows success-rate improvement. Success-Aware Reward Decay uses a non-negative ordering among successful rollouts, achieving faster success-rate improvement while still encouraging shorter executions. Shaded points represent raw values, and solid lines show smoothed trends. 
+
+# 5 Conclusion 
+
+We presented Z-1, a reinforcement learning post-training framework for flow-based Vision-Language-Action models. Built on top of the pretrained π0.5 policy, Z-1 first adapts to RoboCasa through per-scene supervised fine-tuning using only publicly released demonstra-tions, and then Z-1 applies a task-wise GRPO post-training strategy selected by training-stage diagnostics. We introduces a set of complementary modules, including Shared-Prefix GRPO, Tree-Structured Prefix Branching, Success-Aware Reward Decay, and selective VLM–Action Expert joint training, to improve the efficiency, stability, and adaptability of online optimiza-tion. On 24 RoboCasa manipulation tasks, Z-1 RL improves the average success rate from 67 .4% 
+
+of SFT to 80 .6% after the reinforcement post-training. Z-1 RL achieves the best average performance among the compared published RoboCasa results, establishing a new sota method in this setting. The improvements are especially large in contact-rich tasks such as drawer manipulation and sink/faucet control, where shared-prefix rollout construction and task-specific GRPO provide a cleaner learning signal for fine manipulation behavior. Despite these gains, several challenges remain. Z-1 is less competitive than X-WAM on stove tasks, indicating that long-horizon transport, spatial reasoning, and robust recovery from intermediate failures remain difficult for the current framework. Future work may further improve Z-1 by incorporating stronger exploration, richer visual-spatial representations, and cross-task RL post-training. Overall, our results show that carefully designed GRPO post-training can substantially improve flow-based VLA policies without relying on additional private demonstrations. 11 References 
+
+Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen, Xionghui Chen, Zesen Cheng, Lianghao Deng, Wei Ding, Chang Gao, Chunjiang Ge, Wenbin Ge, Zhifang Guo, Qidong Huang, Jie Huang, Fei Huang, Binyuan Hui, Shutong Jiang, Zhaohai Li, Mingsheng Li, Mei Li, Kaixin Li, Zicheng Lin, Junyang Lin, Xuejing Liu, Jiawei Liu, Chenglong Liu, Yang Liu, Dayiheng Liu, Shixuan Liu, Dunjie Lu, Ruilin Luo, Chenxu Lv, Rui Men, Lingchen Meng, Xuancheng Ren, Xingzhang Ren, Sibo Song, Yuchong Sun, Jun Tang, Jianhong Tu, Jianqiang Wan, Peng Wang, Pengfei Wang, Qiuyue Wang, Yuxuan Wang, Tianbao Xie, Yiheng Xu, Haiyang Xu, Jin Xu, Zhibo Yang, Mingkun Yang, Jianxin Yang, An Yang, Bowen Yu, Fei Zhang, Hang Zhang, Xi Zhang, Bo Zheng, Humen Zhong, Jingren Zhou, Fan Zhou, Jing Zhou, Yuanzhi Zhu, and Ke Zhu. Qwen3-vl technical report, 2025. URL 
+
+https://arxiv.org/abs/2511.21631 .Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. π0: A vision-language-action flow model for general robot control, 2026. URL https://arxiv.org/abs/2410.24164 .Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Xi Chen, Krzysztof Choromanski, Tianli Ding, Danny Driess, Avinava Dubey, Chelsea Finn, Pete Florence, Chuyuan Fu, Montse Gonzalez Arenas, Keerthana Gopalakrishnan, Kehang Han, Karol Hausman, Alexander Herzog, Jasmine Hsu, Brian Ichter, Alex Irpan, Nikhil Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Lisa Lee, Tsang-Wei Edward Lee, Sergey Levine, Yao Lu, Henryk Michalewski, Igor Mordatch, Karl Pertsch, Kanishka Rao, Krista Reymann, Michael Ryoo, Grecia Salazar, Pannag Sanketi, Pierre Sermanet, Jaspiar Singh, Anikait Singh, Radu Soricut, Huong Tran, Vincent Vanhoucke, Quan Vuong, Ayzaan Wahid, Stefan Welker, Paul Wohlhart, Jialin Wu, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe Yu, and Brianna Zitkovich. Rt-2: Vision-language-action models transfer web knowledge to robotic control, 2023a. URL https://arxiv.org/abs/2307.15818 .Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman, Alex Herzog, Jasmine Hsu, Julian Ibarz, Brian Ichter, Alex Irpan, Tomas Jackson, Sally Jesmonth, Nikhil J Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Kuang-Huei Lee, Sergey Levine, Yao Lu, Utsav Malla, Deeksha Manjunath, Igor Mordatch, Ofir Nachum, Carolina Parada, Jodilyn Peralta, Emily Perez, Karl Pertsch, Jornell Quiambao, Kanishka Rao, Michael Ryoo, Grecia Salazar, Pannag Sanketi, Kevin Sayed, Jaspiar Singh, Sumedh Sontakke, Austin Stone, Clayton Tan, Huong Tran, Vincent Vanhoucke, Steve Vega, Quan Vuong, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe Yu, and Brianna Zitkovich. Rt-1: Robotics transformer for real-world control at scale, 2023b. URL https://arxiv.org/abs/2212.06817 .Lang Cao, Hui Ruan, Yongqian Li, Peng Chao, Wu Ning, Haonan Song, Renhong Chen, and Yitong Li. Treeadv: Tree-structured advantage redistribution for group-based rl, 2026. URL https://arxiv.org/abs/2601.03703 .Kang Chen, Zhihao Liu, Tonghe Zhang, Zhen Guo, Si Xu, Hao Lin, Hongzhi Zang, Xiang Li, Quanlu Zhang, Zhaofei Yu, Guoliang Fan, Tiejun Huang, Yu Wang, and Chao Yu. 
+
+πRL : Online rl fine-tuning for flow-based vision-language-action models, 2026. URL 
+
+https://arxiv.org/abs/2510.25889 .Xinyi Chen, Yilun Chen, Yanwei Fu, Ning Gao, Jiaya Jia, Weiyang Jin, Hao Li, Yao Mu, Jiangmiao Pang, Yu Qiao, Yang Tian, Bin Wang, Bolun Wang, Fangjing Wang, Hanqing Wang, Tai Wang, Ziqin Wang, Xueyuan Wei, Chao Wu, Shuai Yang, Jinhui Ye, Junqiu Yu, Jia Zeng, Jingjing Zhang, Jinyu Zhang, Shi Zhang, Feng Zheng, Bowen Zhou, and Yangkun Zhu. Internvla-m1: A spatially guided vision-language-action framework for generalist robot policy, 2025. URL https://arxiv.org/abs/2510.13778 .Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du, Benjamin Burchfiel, Russ Tedrake, and Shuran Song. Diffusion policy: Visuomotor policy learning via action diffusion, 2024. URL https://arxiv.org/abs/2303.04137 .12 Jun Guo, Qiwei Li, Peiyan Li, Zilong Chen, Nan Sun, Yifei Su, Heyun Wang, Yuan Zhang, Xinghang Li, and Huaping Liu. Unified 4d world action modeling from video priors with asynchronous denoising, 2026. URL https://arxiv.org/abs/2604.26694 .Joey Hejna, Suvir Mirchandani, Ashwin Balakrishna, Annie Xie, Ayzaan Wahid, Jonathan Tompson, Pannag Sanketi, Dhruv Shah, Coline Devin, and Dorsa Sadigh. Robot data curation with mutual information estimators, 2025. URL https://arxiv.org/abs/2502. 08623 .Physical Intelligence, Ali Amin, Raichelle Aniceto, Ashwin Balakrishna, Kevin Black, Ken Conley, Grace Connors, James Darpinian, Karan Dhabalia, Jared DiCarlo, Danny Driess, Michael Equi, Adnan Esmail, Yunhao Fang, Chelsea Finn, Catherine Glossop, Thomas Godden, Ivan Goryachev, Lachy Groom, Hunter Hancock, Karol Hausman, Gashon Hussein, Brian Ichter, Szymon Jakubczak, Rowan Jen, Tim Jones, Ben Katz, Liyiming Ke, Chandra Kuchi, Marinda Lamb, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Yao Lu, Vishnu Mano, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Charvi Sharma, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, Will Stoeckle, Alex Swerdlow, James Tanner, Marcel Torne, Quan Vuong, Anna Walling, Haohuan Wang, Blake Williams, Sukwon Yoo, Lili Yu, Ury Zhilinsky, and Zhiyuan Zhou. 
+
+π∗
+
+> 0.6
+
+: a vla that learns from experience, 2025a. URL https://arxiv.org/abs/2511.14759 .Physical Intelligence, Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky. π0.5: a vision-language-action model with open-world generalization, 2025b. URL https://arxiv.org/abs/2504.16054 .Physical Intelligence, Bo Ai, Ali Amin, Raichelle Aniceto, Ashwin Balakrishna, Greg Balke, Kevin Black, George Bokinsky, Shihao Cao, Thomas Charbonnier, Vedant Choudhary, Foster Collins, Ken Conley, Grace Connors, James Darpinian, Karan Dhabalia, Maitrayee Dhaka, Jared DiCarlo, Danny Driess, Michael Equi, Adnan Esmail, Yunhao Fang, Chelsea Finn, Catherine Glossop, Thomas Godden, Ivan Goryachev, Lachlan Groom, Haroun Habeeb, Hunter Hancock, Karol Hausman, Gashon Hussein, Victor Hwang, Brian Ichter, Connor Jacobsen, Szymon Jakubczak, Rowan Jen, Tim Jones, Gregg Kammerer, Ben Katz, Liyiming Ke, Mairbek Khadikov, Chandra Kuchi, Marinda Lamb, Devin LeBlanc, Brendon LeCount, Sergey Levine, Xinyu Li, Adrian Li-Bell, Vladislav Lialin, Zhonglin Liang, Wallace Lim, Yao Lu, Enyu Luo, Vishnu Mano, Nandan Marwaha, Aikys Mongush, Liam Murphy, Suraj Nair, Tyler Patterson, Karl Pertsch, Allen Z. Ren, Gavin Schelske, Charvi Sharma, Baifeng Shi, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, Will Stoeckle, Jiaming Tang, Jimmy Tanner, Shalom Tekeste, Marcel Torne, Kyle Vedder, Quan Vuong, Anna Walling, Haohuan Wang, Jason Wang, XuDong Wang, Chris Whalen, Samuel Whitmore, Blake Williams, Charles Xu, Sukwon Yoo, Lili Yu, Wuming Zhang, Zhuoyang Zhang, and Ury Zhilinsky. π0.7: a steerable generalist robotic foundation model with emergent capabilities, 2026. URL https://arxiv.org/abs/2604.15483 .Nikita Kachaev, Mikhail Kolosov, Daniil Zelezetsky, Alexey K. Kovalev, and Aleksandr I. Panov. Don’t blind your vla: Aligning visual representations for ood generalization, 2025. URL https://arxiv.org/abs/2510.25616 .Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam, Pannag Sanketi, Quan Vuong, Thomas Kollar, Benjamin Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey Levine, Percy Liang, and Chelsea Finn. Openvla: An open-source vision-language-action model, 2024. URL 
+
+https://arxiv.org/abs/2406.09246 .Haozhan Li, Yuxin Zuo, Jiale Yu, Yuhao Zhang, Zhaohui Yang, Kaiyan Zhang, Xuekai Zhu, Yuchen Zhang, Tianxing Chen, Ganqu Cui, Dehui Wang, Dingxiang Luo, Yuchen Fan, Youbang Sun, Jia Zeng, Jiangmiao Pang, Shanghang Zhang, Yu Wang, Yao Mu, Bowen 13 Zhou, and Ning Ding. Simplevla-rl: Scaling vla training via reinforcement learning, 2025. URL https://arxiv.org/abs/2509.09674 .Junbang Liang, Pavel Tokmakov, Ruoshi Liu, Sruthi Sudhakar, Paarth Shah, Rares Ambrus, and Carl Vondrick. Video generators are robot policies, 2025. URL https://arxiv.org/ abs/2508.00795 .Guanxing Lu, Wenkai Guo, Chubin Zhang, Yuheng Zhou, Haonan Jiang, Zifeng Gao, Yansong Tang, and Ziwei Wang. Vla-rl: Towards masterful and general robotic manipulation with scalable reinforcement learning, 2025. URL https://arxiv.org/abs/2505.18719 .Soroush Nasiriany, Abhiram Maddukuri, Lance Zhang, Adeet Parikh, Aaron Lo, Abhishek Joshi, Ajay Mandlekar, and Yuke Zhu. Robocasa: Large-scale simulation of everyday tasks for generalist robots, 2024. URL https://arxiv.org/abs/2406.02523 .NVIDIA. Robocasa-cosmos-policy. https://huggingface.co/datasets/nvidia/ RoboCasa-Cosmos-Policy , 2024. Dataset on Hugging Face. Accessed: 2026-06-26. NVIDIA, :, Johan Bjorck, Fernando Castañeda, Nikita Cherniadev, Xingye Da, Runyu Ding, Linxi "Jim" Fan, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer Huang, Joel Jang, Zhenyu Jiang, Jan Kautz, Kaushil Kundalia, Lawrence Lao, Zhiqi Li, Zongyu Lin, Kevin Lin, Guilin Liu, Edith Llontop, Loic Magne, Ajay Mandlekar, Avnish Narayan, Soroush Nasiriany, Scott Reed, You Liang Tan, Guanzhi Wang, Zu Wang, Jing Wang, Qi Wang, Jiannan Xiang, Yuqi Xie, Yinzhen Xu, Zhenjia Xu, Seonghyeon Ye, Zhiding Yu, Ao Zhang, Hao Zhang, Yizhou Zhao, Ruijie Zheng, and Yuke Zhu. Gr00t n1: An open foundation model for generalist humanoid robots, 2025. URL https://arxiv.org/abs/2503.14734 .Mingjie Pan, Siyuan Feng, Qinglin Zhang, Xinchen Li, Jianheng Song, Chendi Qu, Yi Wang, Chuankang Li, Ziyu Xiong, Zhi Chen, Yi Liu, and Jianlan Luo. Sop: A scalable online post-training system for vision-language-action models, 2026. URL https://arxiv.org/ abs/2601.03044 .Ranjan Sapkota, Yang Cao, Konstantinos I. Roumeliotis, and Manoj Karkee. Vision-language-action (vla) models: Concepts, progress, applications and challenges, 2026. URL 
+
+https://arxiv.org/abs/2505.04769 .Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in open language models, 2024. URL https://arxiv.org/abs/ 2402.03300 .Faraz Torabi, Garrett Warnell, and Peter Stone. Behavioral cloning from observation, 2018. URL https://arxiv.org/abs/1805.01954 .Qinwen Xu, Jiaming Liu, Rui Zhou, Shaojun Shi, Nuowei Han, Zhuoyang Liu, Chenyang Gu, Shuo Gu, Yang Yue, Gao Huang, Wenzhao Zheng, Sirui Han, Peng Jia, and Shang-hang Zhang. Twinrl: Digital twin-driven reinforcement learning for real-world robotic manipulation, 2026. URL https://arxiv.org/abs/2602.09023 .Ling Yang, Zhilong Zhang, Yang Song, Shenda Hong, Runsheng Xu, Yue Zhao, Wentao Zhang, Bin Cui, and Ming-Hsuan Yang. Diffusion models: A comprehensive survey of methods and applications, 2025. URL https://arxiv.org/abs/2209.00796 .Angen Ye, Zeyu Zhang, Boyuan Wang, Xiaofeng Wang, Dapeng Zhang, and Zheng Zhu. Vla-r1: Enhancing reasoning in vision-language-action models, 2025. URL https://arxiv. org/abs/2510.01623 .Tianyuan Yuan, Yicheng Liu, Chenhao Lu, Zhuoguang Chen, Tao Jiang, and Hang Zhao. Depthvla: Enhancing vision-language-action models with depth-aware spatial reasoning, 2025. URL https://arxiv.org/abs/2510.13375 .Tonghe Zhang, Chao Yu, Sichang Su, and Yu Wang. Reinflow: Fine-tuning flow matching policy with online reinforcement learning, 2026. URL https://arxiv.org/abs/2505. 22094 .14 Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou, Yingqian Min, Beichen Zhang, Junjie Zhang, Zican Dong, Yifan Du, Chen Yang, Yushuo Chen, Zhipeng Chen, Jinhao Jiang, Ruiyang Ren, Yifan Li, Xinyu Tang, Zikang Liu, Peiyu Liu, Jian-Yun Nie, and Ji-Rong Wen. A survey of large language models, 2026. URL 
+
+https://arxiv.org/abs/2303.18223 .15 Table 1: Full task-wise success rates on 24 RoboCasa tasks. All numbers are success rates in percentages.                                                                                                                                                             
+
+> Task GR00T GR00T N1.5 Video X-WAM Z-1 SFT Z-1 RL
+> OpenSingleDoor 59.0 62.0 68.0 96.0 95.8 95.8 CloseSingleDoor 83.0 94.0 100.0 96.0 83.3 98.4 OpenDoubleDoor 15.0 89.0 96.0 94.0 100.0 100.0 CloseDoubleDoor 75.0 56.0 98.0 87.0 93.8 93.8 OpenDrawer 79.0 81.0 46.0 85.0 66.7 92.2 CloseDrawer 99.0 100.0 96.0 100.0 100.0 100.0 PnPCounterToCabinet 36.0 57.0 42.0 67.0 54.2 76.6 PnPCabinetToCounter 20.0 26.0 36.0 73.0 37.5 76.6 PnPCounterToSink 10.0 26.0 44.0 79.0 66.7 73.4 PnPSinkToCounter 33.0 46.0 64.0 71.0 58.3 79.7 PnPCounterToStove 24.0 41.0 58.0 83.0 70.8 78.1 PnPStoveToCounter 29.0 60.0 64.0 80.0 70.8 84.4 PnPCounterToMicrowave 13.0 33.0 52.0 62.0 39.6 50.0 PnPMicrowaveToCounter 16.0 27.0 44.0 57.0 33.3 48.4 TurnOnMicrowave 78.0 66.0 92.0 82.0 89.6 89.6 TurnOffMicrowave 71.0 81.0 90.0 93.0 100.0 100.0 TurnOnSinkFaucet 63.0 85.0 84.0 92.0 29.2 98.4 TurnOffSinkFaucet 73.0 75.0 78.0 86.0 83.3 90.6 TurnSinkSpout 53.0 69.0 40.0 80.0 77.1 93.8 TurnOnStove 56.0 39.0 30.0 80.0 37.5 56.2 TurnOffStove 27.0 21.0 6.0 35.0 20.8 32.8 CoffeeSetupMug 23.0 38.0 22.0 45.0 37.5 37.5 CoffeeServeMug 73.0 67.0 76.0 82.0 79.2 95.3 CoffeePressButton 85.0 94.0 92.0 96.0 92.8 92.8
+> Average 49.7 59.7 63.3 79.2 67.4 80.6
+
+# A Full Author List and Contributions 
+
+Lang Cao and Renhong Chen equally contributed to this paper and are responsible for the proposal and implementation of the RL idea. Luyi Li is responding for the SFT training. 
+
+Peng Wang and Mofan Peng are responsible for data processing. Yitong Li supervised the project and provided guidance on research direction and technical development. 
+
+# B Full Task-wise Results 
+
+Table 1 reports the full task-wise success rates. Z-1 RL improves over Z-1 SFT on most tasks, while preserving performance on tasks that are already near saturation after SFT, such as OpenDoubleDoor, CloseDrawer, TurnOffMicrowave, and CoffeePressButton. 
+
+# C Training and Evaluation Details 
+
+C.1 SFT Training 
+
+Z-1 uses a two-stage training pipeline consisting of supervised fine-tuning (SFT) followed by task-wise GRPO post-training when selected by training-stage diagnostics. The SFT stage is implemented with the official OpenPI JAX training code using 1, 199 publicly released RoboCasa demonstrations. During SFT, both the vision-language module and the action expert are updated. We use scene-specific SFT checkpoints to initialize task-level RL when post-training is applied. For the door, drawer, and microwave scenes, we adopt a two-stage SFT schedule: the model is first fine-tuned on all 1, 199 RoboCasa demonstrations and then further fine-tuned on the demonstrations from the corresponding scene. For the remaining scenes, we directly fine-tune the model on the demonstrations from the corresponding scene. This produces one SFT checkpoint pool for each scene category. 16 C.2 Checkpoint Selection 
+
+For each scene category, we select a stable, converged SFT checkpoint with held-out validation loss around 0.01 as the initialization for GRPO post-training. We do not strictly select the checkpoint with the minimum validation loss, since small validation-loss differences near convergence are not necessarily predictive of downstream rollout performance. Each RoboCasa task selected for RL then starts from the selected checkpoint of its corresponding scene category. 
+
+C.3 GRPO Post-training 
+
+For GRPO post-training, each selected task is optimized independently from its scene-specific SFT checkpoint. Unless otherwise specified, RL updates only the action expert. We use AdamW with a learning rate of 5.0 × 10 −6, weight decay of 0.01 , and gradient clipping of 
+
+1.0. The micro-batch size is 16 , the global batch size is 1024 , and the default GRPO group size is 8. Each update uses 4 rollout epochs with 64 parallel training environments. The maximum episode length is adjusted according to the task. We use a clip ratio of 0.2 and do not use an additional KL regularizer, critic model, or reward model. Reward filtering uses lower and upper bounds of 0.1 and 0.99 , respectively. When Success-Aware Reward Decay is enabled, the reward decay factor is set to 0.998 .
+
+C.4 Ablation-specific Settings 
+
+For the shared-prefix ablation in Figure 2, we additionally use a simple prefix-decay schedule for the flat SharePrefix variant. Starting from training step 4, the shared prefix length is reduced from 15 action chunks to 0 by decreasing one chunk at each subsequent step. For the Prefix Tree variant, we use a tree group size of 4 instead of the default group size of 8, as this setting led to more stable optimization in preliminary runs. Because this smaller group size would reduce the number of effective GRPO groups that provide non-zero learning signal under a fixed global batch size, we increase the training batch size for this variant to keep the number of effective learning groups comparable to the default configuration. 
+
+C.5 Evaluation Protocol Details 
+
+We evaluate Z-1 SFT and Z-1 RL with multiple evaluation seeds and independent evaluation rollouts. For Z-1 SFT, we use 4 evaluation seeds and run 12 evaluation rollouts for each seed, resulting in 48 rollouts per task. For Z-1 RL, we use 8 evaluation seeds and run 8 evaluation rollouts for each seed, resulting in 64 rollouts per task. The different numbers of rollouts reflect our evaluation budget at the corresponding training stages; in both cases, task success is estimated from independent rollouts without reusing training trajectories. The reported success rate for each task is computed over all evaluation rollouts. Category-level results are computed as the unweighted average of task-level success rates within each category, and the overall average is computed as the unweighted average across all 24 tasks. 
+
+# D Additional Method Details 
+
+D.1 Tree-Structured Prefix Branching Details 
+
+Assume the rollout group size is G = 2 k. Given a full-branching depth P in action chunks, Z-1 defines branching points as 
+
+bℓ =
+
+⌊ P
+
+2k−ℓ
+
+⌋
+
+, ℓ = 1 , . . . , k. 
+
+Starting from one shared cluster, each branching point splits every current cluster into two sub-clusters. After k splits, all G rollouts continue independently from bk = P .For partially shared segments, followers execute the corresponding cluster leader’s action. We store the leader’s action, log-probability, and conditioning inputs for all followers in the cluster. Under deterministic state cloning and shared policy parameters, these records 17 are on-policy for the follower states. The GRPO objective and advantage estimator are unchanged; only the rollout group construction differs. 
+
+D.2 Success-Aware Reward Decay Details 
+
+For groups that contain both successful and failed rollouts, we keep the standard group-relative normalization: 
+
+Ai = Ri − μR
+
+σR + ϵ .
+
+This keeps the success-failure distinction as the dominant learning signal. For groups where all rollouts succeed, standard mean normalization would assign negative advantages to slower but still successful rollouts. To avoid turning completion-time calibration into an explicit penalty, we instead use the group minimum as the baseline: 
+
+Ai = Ri − min  
+
+> j
+
+Rj .
+
+This gives the slowest successful rollout zero advantage and gives earlier successful rollouts positive advantages. Therefore, Success-Aware Reward Decay does not penalize longer successful trajectories; it only introduces a non-negative ordering among successful rollouts. 
+
+Reward Penalty baseline. In the reward-decay ablation, we also compare against a Reward Penalty variant. This variant uses the same completion-aware calibrated returns as Success-Aware Reward Decay but keeps the standard mean-normalized GRPO advantage for all groups, including all-success groups. Therefore, slower successful rollouts can receive negative advantages when their calibrated returns are below the group mean. 
+
+D.3 Flow-SDE Likelihood Ratio for GRPO 
+
+Z-1 applies GRPO to a flow-based VLA policy. A direct application of policy-gradient methods to deterministic flow sampling is non-trivial because the final action chunk is generated through an integration path rather than sampled from an explicit one-step action distribution. To obtain a tractable policy ratio, we follow the flow-SDE formulation used in recent online RL fine-tuning methods for flow policies [Chen et al., 2026, Zhang et al., 2026]. The key idea is to convert the deterministic flow generation process into a stochastic Markov process by injecting Gaussian noise into the intermediate flow transitions. This provides exploration during rollout collection and yields transition densities that can be used for likelihood-ratio policy optimization. Let x denote the policy conditioning input, including the language instruction, visual observation, and proprioceptive state. For each action chunk, the flow-based action expert starts from an initial noise variable z0 and generates a sequence of intermediate latent variables 
+
+z0, z 1, . . . , z K ,
+
+where the final latent zK is decoded or interpreted as the action chunk a. Under the flow-SDE formulation, each transition is modeled as a Gaussian conditional distribution: 
+
+pθ (zk+1 | zk, x ) = N (zk+1 ; mθ (zk, x, t k), σ 2
+
+> k
+
+I) ,
+
+where mθ (zk, x, t k) is the discretized flow update predicted by the action expert at flow time 
+
+tk, and σk is the transition noise scale. In practice, mθ is determined by the velocity or denoising prediction of the flow-based action expert and the numerical integration rule used by the policy sampler. The log-probability of an action chunk is computed as the sum of transition log-probabilities along the sampled flow-SDE path: 
+
+log πθ (a | x) = 
+
+> K−1
+
+∑
+
+> k=0
+
+log pθ (zk+1 | zk, x ) + C, 
+
+where C contains terms independent of θ. For policy-ratio computation, this constant cancels out. During rollout collection, we store the sampled flow path together with the rollout-time 18 log-probability under the behavior policy πθold . During GRPO optimization, we recompute the log-probability of the same sampled path under the current policy πθ and form the action-chunk ratio as 
+
+ρθ (x, a ) = exp (log πθ (a | x) − log πθold (a | x)) .
+
+For a trajectory rollout, this ratio is evaluated independently for each trainable action chunk. Prefix chunks masked by Shared-Prefix GRPO are excluded from the loss and therefore do not contribute to the likelihood-ratio objective. For Tree-Structured Prefix Branching, only chunks selected as trainable under the branch construction are included. This design keeps the GRPO update restricted to action chunks whose sampled flow-SDE transitions and rollout-time log-probabilities are recorded. The resulting objective is the same clipped group-relative objective described in Section 3; the flow-SDE formulation only specifies how log πθ (a | x) and ρθ (x, a ) are computed for flow-based action generation. 
+
+D.4 Implementation of Selective VLM–Action Expert Joint Training 
+
+Selective VLM–Action Expert joint training is implemented by changing the trainable parameter set of the OpenPI actor. It does not change the rollout format, advantage computation, flow-SDE likelihood-ratio computation, or clipped GRPO objective. In our implementation, this is controlled by the expert-only training configuration of the OpenPI actor. In the default AE-only setting, expert-only training is enabled, and the PaliGemma vision-language backbone is frozen during GRPO. The frozen backbone includes the vision-language prefix encoder used to process image and language inputs. The action expert, which generates flow-based action chunks conditioned on the prefix representation and robot state, remains trainable. When joint training is enabled, expert-only freezing is disabled, and the vision-language backbone is included in the trainable parameter set together with the action expert. Thus, the same GRPO loss can update both the perception/language representation and the action-generation module. This allows task-level reward feedback to adapt visual grounding, language-conditioned spatial representations, and action generation jointly. During rollout collection, the policy stores the sampled flow-SDE chains, selected denoising indices, rollout-time action log-probabilities, and the corresponding model inputs. During training, the actor recomputes the current log-probabilities of the stored sampled chains under the updated policy and forms the likelihood ratio against the rollout-time log-probabilities. The clipped GRPO loss is then backpropagated through the trainable parameters selected for that task. In AE-only training, gradients are restricted to the action expert. In joint training, gradients also flow through the vision-language backbone. The trainable-module configuration is selected using training-stage diagnostics only, such as SFT success rate, early AE-only GRPO progress, and failure modes observed in training rollouts. The selected configuration is fixed before final evaluation, and no final evaluation rollouts are used for module selection. 19

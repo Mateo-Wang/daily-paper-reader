@@ -1,0 +1,482 @@
+Title: Reasoning-aware Speculative Decoding for Efficient Vision-Language-Action Models in Autonomous Driving
+
+URL Source: https://arxiv.org/pdf/2606.31160v1
+
+Published Time: Wed, 01 Jul 2026 00:34:13 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# Reasoning-aware Speculative Decoding for Efficient Vision-Language-Action Models in Autonomous Driving 
+
+Anh-Dung Dinh 
+
+School of Computer Science and Engineering UNSW Sydney 
+
+harry.dinh1@unsw.edu.au 
+
+Simon Khan 
+
+Air Force Research Laboratory 
+
+simon.khan@us.af.mil 
+
+Flora D. Salim ∗
+
+School of Computer Science and Engineering UNSW Sydney 
+
+flora.salim@unsw.edu.au 
+
+## Abstract 
+
+Modern Vision-Language-Action (VLA) planners for autonomous driving emit a chain-of-causation (CoC) reasoning step before producing a trajectory. The reasoning is autoregressive and dominates inference latency, while the trajectory head is parallel and cheap. Latency is an operational constraint in autonomous driving, so accelerating the reasoning step is the central problem we address. We observe that CoC reasoning has two qualitatively different needs: most tokens continue routine setup that follows naturally from the ego-trajectory history, and a small fraction encode commitments that require fresh visual evidence about an unexpected situation. We split this reasoning into two specialized paths: a routine reasoner that handles the predictable continuation by attending to trajectory history, and a deliberative reasoner (the unmodified VLA target) that handles novel cases by attending to current visual evidence, using the speculative decoding framework as the architectural template for how the two paths cooperate. Unlike standard speculative decoding, our routine reasoner is not a smaller replica of the target; the two reasoners are deliberately specialized to read different parts of the prompt. We propose two techniques to realize this. First, we introduce FlatRoPE , a 1D rotary positional embedding in the draft that breaks the rotational symmetry of the target’s 3D M-RoPE, redirecting attention away from visual tokens and onto trajectory-history tokens. Second, we introduce Action-aware RL (AARL) , a post-training stage that uses an action-quality reward together with a static-reference KL anchor. Together, our two-reasoner system reduces the reasoning-step running time by approximately 4× relative to the original Alpamayo planner. 
+
+## 1 Introduction 
+
+Modern Vision-Language-Action (VLA) planners for autonomous driving [ 27 , 11 , 23 ] are sequential by construction: the model first emits a chain-of-causation (CoC) reasoning text (15–20 tokens) and 
+
+then produces a trajectory. The reasoning is autoregressive through an 8B+ multimodal backbone; the trajectory is produced in parallel by a flow-matching action head conditioned on the backbone’s KV cache. The reasoning step is the bottleneck: it consumes an order of magnitude more wall-clock 
+
+> ∗Corresponding author. Preprint. Under review. Approved for public release: distribution is unlimited.
+> arXiv:2606.31160v1 [cs.CV] 30 Jun 2026
+
+budget than the trajectory itself, and latency in driving translates directly into how soon a control commitment can be issued. Accelerating the reasoning step is therefore the central problem we address. We observe that CoC reasoning has two different purposes. Most tokens continue routine setup. The next token follows naturally from the ego trajectory history (recent ego dynamics, partially-emitted CoC). A small fraction encode edge cases that require fresh visual evidence, such as a pedestrian half-stepping off a curb, an oncoming car crossing a center line – where the next token cannot be predicted from history alone. In this work we split the reasoning step into two paths specialized for these two needs: a routine reasoner that handles predictable continuation by attending to trajectory history, and a deliberative reasoner that handles the novel cases by attending to current visual evidence. The routine reasoner is fast and the deliberative reasoner is heavier; we use the speculative decoding framework [ 14 , 4] as the architectural template for how they cooperate – the routine reasoner proposes the next K tokens, the deliberative reasoner verifies them in one pass, and the longest matching prefix is committed. Critically, our routine reasoner is not a reduced-parameter distillation of the target model. The two reasoners are deliberately specialized to read different parts of the prompt: the routine reasoner attends primarily to trajectory-history positions where the next routine token can be predicted, while the deliberative reasoner is the unmodified VLA target and retains its full visual attention to detect novelty. The role of each is set by what kind of token-prediction it is good at, not by parameter count. The mechanism that produces this specialization on the draft side is a position-encoding change we call FlatRoPE : the natural choice for a multimodal draft – mirroring the target’s 3D M-RoPE. This couples the draft’s attention to the visual token cluster and diverts the attention budget away from the trajectory-history positions where routine signal lives (Section 4.2). FlatRoPE replaces 3D M-RoPE with plain 1D rotary, breaking the rotational symmetry of adjacent vision patches and redirecting the attention budget onto trajectory history. We further introduce a reinforcement-learning post-training stage (Section 4.3) with a three-component reward and a static-reference KL anchor that fixes a self-removal pathology in the standard policy anchor. Our contributions: 1. FlatRoPE : plain-1D rotary in the draft, motivated by an attention-entropy diagnostic show-ing that 3D M-RoPE clusters vision tokens and disproportionately reduces attention mass on trajectory-history tokens. FlatRoPE is the mechanism that produces the routine-reasoner-vs-deliberative-reasoner specialization on the draft side. Across two draft architectures and two open VLA targets, FlatRoPE consistently outperforms the 3D-mirroring baseline on accepted length. 2. AARL post-training with a static-reference KL anchor. The standard policy anchor self-removes as the draft drifts; the static reference does not. The result is the first post-training method we are aware of that improves both validation and held-out test accepted length on an open AV VLA. 3. Empirical validation that this specialization fits autonomous driving. We measure per-token attention budget at the draft’s input fusion (showing FlatRoPE redirects attention to trajectory history as designed), provide a token-level routing diagnostic on real CoC traces (showing the routine reasoner handles setup tokens autonomously while the deliberative reasoner is selectively invoked at visually-grounded decision points), and quantify end-to-end latency reduction on val, on-shelf, and off-shelf test splits. In summary, these three contributions produce a two-mode decoder whose routine path handles the majority of CoC tokens without invoking the deliberative path. With L = 4 .6 at block size 16 the routine path handles ∼ 78% of CoC tokens, giving a theoretical wall-clock speedup of 3.5× at iso-quality on Alpamayo-R1. 
+
+## 2 Related work 
+
+Vision-language-action models for driving. End-to-end VLA models for autonomous driving have rapidly converged on a common recipe: a vision-language backbone consumes multi-camera images and ego state, and an action head produces a future trajectory. EMMA [ 11 ] demonstrated end-to-end driving from a Gemini-class backbone; DriveLM [ 23 ] introduced graph-structured visual question answering as a planning interface. DriveGPT4 [ 31 ] showed that a multimodal LLM can be fine-tuned to emit interpretable driving rationales. 2Camera streams  Vision Space         
+
+> Vision
+> Encoder
+> Action gen.
+> Action Models
+> t = 0
+> traj. 1
+> t = 1
+> traj. 2
+> t = 2
+> traj.3
+> t = 3
+> Context Space
+> Ego states Velocity | History Action ...
+> System Prompt Task & Thinking Guidance Text
+> Tokenizer
+> Text Tokens
+> Trajectory
+> Tokenizer
+> Visual Tokens
+> Traj Tokens
+> Deliberative reasoning verifier
+> Routine reasoning Proposal
+> Verified Rejected
+> Target
+> Draft
+> Reasoning
+> Tokens
+> Proposed Reasoning Tokens
+
+Figure 1: Reasoning-Aware Speculative Decoding Framework : The target model encodes visual features and trajectory data into tokens, which a compact draft model then uses to generate reasoning proposals. While the target model maintains a broad visual focus, the draft model prioritizes historical trajectory patterns to perform lightweight, routine-based reasoning. In the event of a novel scenario, any disagreement between the models triggers a rejection by the target, initiating a new round of proposals to ensure accuracy. World-model-grounded VLAs such as GAIA-1 [ 8] and Wayve’s LINGO/UniAD-style stacks [ 28 , 9 ]couple language reasoning with imagined futures. RoboTron-Drive [ 10 ] and OmniDrive [ 24 ] focus on perception-grounded reasoning, while OpenEMMA [ 30 ] and MiniDrive [ 34 ] aim at compact, deployable variants. Alpamayo-R1 [ 27 ] and AutoVLA [ 35 ] – the two open targets we evaluate against – additionally emit a chain-of-causation (CoC) reasoning step before invoking a continuous flow-matching or diffusion trajectory head, making the autoregressive language portion the dominant inference cost. Our work targets exactly that bottleneck. 
+
+Efficiency for autonomous-driving reasoning. Two complementary directions have emerged. The first is architectural compaction : distilling the full VLA into a smaller backbone (MiniDrive [ 34 ], TinyDrive [ 7]), pruning attention heads, or quantizing weights and activations for on-vehicle deployment. The second is reasoning-aware inference : limiting the chain-of-thought to high-uncertainty scenarios via early exit [ 32 ] or selective deliberation [ 29 ], caching prompt prefixes across frames [ 33 ], or skipping the language step entirely on routine clips [ 6]. Both reduce when the deliberative model runs but do not change its per-token cost. Speculative decoding is orthogonal: it preserves the target’s exact greedy outputs while spreading the per-step cost across cheap routine-reasoner forwards. To our knowledge, no prior work has applied speculative decoding to AV CoC reasoning. 
+
+Speculative decoding and parallel-decoding methods. Leviathan et al. [14] and Chen et al. [4] introduced speculative decoding for autoregressive language models. The two main subsequent design axes have been (i) the draft architecture and (ii) the verification topology. On the draft side, Medusa [ 3 ] adds parallel prediction heads to the target itself; EAGLE/EAGLE-2/EAGLE-3 [ 15 –17 ]train an autoregressive draft conditioned on multi-layer target hidden states; SpS [ 12 ], BiLD [ 13 ], and KV-Reuse drafts [ 18 ] explore encoder-side acceleration; block-diffusion drafts [ 21 , 22 ] predict groups of tokens in parallel via masked-denoising objectives. On the verification side, tree-decoding variants [ 20 , 3, 16 ] verify multiple candidate paths in a single target forward via custom attention masks, trading more verify-time compute for higher accept rate. Lookahead decoding [ 5] eliminates the draft entirely by re-using the target itself as a noisy denoiser. Adjacent work compresses or shares the target’s KV cache across speculative iterations [ 19 , 1]. All of these target text-only chat or code completion. None have studied the position-encoding choice for drafts of multimodal targets, where the target’s native M-RoPE 3D structure couples the draft’s attention to the visual cluster – the phenomenon we identify and fix in this paper. 
+
+Two-mode reasoning in foundation models. A recurring design pattern in foundation-model inference is to route easy queries past the deliberative-reasoning path while preserving its outputs: chain-of-thought decomposition with selective rollouts [ 25 ] and self-consistency [ 26 ] both follow this pattern at the query level. Standard speculative decoding applies the same routing at the token 3level, but with a particular instantiation: the draft is a small imitator of the target, trained to match the target’s distribution. We depart from that recipe. Our routine reasoner is not a small target; it is specialized to attend to trajectory history, while the deliberative reasoner (the unmodified VLA target) retains its full visual attention. The two reasoners are good at different things by construction, and the speculative-decoding loop is the protocol that lets them cooperate. We make this specialization explicit in the AV setting and motivate where the routine reasoner’s attention budget should land – on the small trajectory-history slice where routine signal lives, not on the visual blob that the routine tokens never need to inspect. 
+
+## 3 Background 
+
+We define the two-stage VLA driving target, speculative decoding, and the multimodal rotary position encoding used by the targets we evaluate. Our specific design choices is deferred to Section 4. 
+
+3.1 Vision-language-action driving with reasoning Inputs. The target VLA, parameterized by θT , consumes a multi-camera observation I ∈ RC×H×W
+
+(stacked C views), an ego-state / history vector e ∈ Rde , and a textual prompt P ∈ V |P| over the target tokenizer’s vocabulary V. We collect them as x = ( I, e, P).
+
+Two-stage output. The target produces a rationale r ∈ V n – a chain-of-causation (CoC) for Alpamayo-R1, a chain-of-thought (CoT) for AutoVLA – followed by an action trajectory τ ∈ RTf ×da
+
+over a horizon of Tf control steps in da-dimensional action space (typically da = 2 for longitudinal acceleration and lateral curvature). 
+
+Stage 1 (autoregressive reasoning). The rationale is generated token by token by an autoregressive language model: 
+
+rt ∼ πT (· | x, r1: t−1; θT ), t = 1 , . . . , n, (1) terminating at a model-specific stop token. 
+
+Stage 2 (action generation). Conditioned on x and the committed rationale r, the target emits the trajectory through a model-specific function gT :
+
+τ = gT (x, r; θT ) . (2) The two targets instantiate gT differently. Alpamayo-R1 produces τ via a flow-matching diffusion head reading the backbone’s KV cache after position |P| + n:
+
+gAlpamayo  
+
+> T
+
+(x, r) = ODE vθT
+
+ τ s, s ; KV( x, r)  
+
+> s=0 →1
+
+, (3) where vθT is a learned vector field, s is the diffusion time, and τ 0 ∼ N (0 , I ). AutoVLA emits the trajectory as a discrete token sequence decoded autoregressively from the same backbone: 
+
+gAutoVLA  
+
+> T
+
+(x, r) = detokenize  a1: Tf
+
+ , at ∼ πT (· | x, r, a1: t−1; θT ) . (4) 
+
+Latency budget. Let CT be the per-token cost of one target forward pass and Cg the cost of gT . The total inference cost is 
+
+n · CT
+
+| {z } 
+
+> Stage 1
+
++ Cg
+
+|{z} 
+
+> Stage 2
+
+. (5) 
+
+3.2 Speculative decoding 
+
+A draft D with parameters θD defines a surrogate token distribution πD (· | x, r1: t−1; θD ) over V.Speculative decoding replaces Equation 1 with an iterative propose / verify / commit loop. Let i index the loop iteration, r1: ti denote the prefix already committed, and K a block size. 
+
+Propose. The draft emits K candidate tokens in a single forward: 
+
+ˆrti+1: ti+K = Propose K (πD , x, r1: ti ) . (6) 
+
+Verify. The target evaluates them in one batched forward pass: 
+
+r⋆ti+j = arg max  
+
+> v∈V
+
+πT
+
+ v | x, r1: ti , ˆrti+1: ti+j−1; θT
+
+, j = 1 , . . . , K. (7) 4Commit. The longest matching prefix is the accepted length: 
+
+ℓi = max 
+
+n
+
+l ∈ { 0, . . . , K } : ˆ rti+j = r⋆ti+j ∀j ≤ l
+
+o
+
+, (8) and the iteration commits ℓi + 1 tokens (the matched prefix plus a “bonus” from the target at position 
+
+ℓi + 1 ): 
+
+rti+1: ti+ℓi+1 = (ˆ rti+1 , . . . , ˆrti+ℓi , r⋆ti+ℓi+1 ), ti+1 = ti + ℓi + 1 . (9) The loop terminates when a stop token is committed. 
+
+Mean accepted length and theoretical speedup. 
+
+L = Ei[ℓi + 1] ∈ [1 , K + 1] , S ≈ L · CT
+
+C(K) 
+
+> T
+
++ C(K)
+
+> D
+
+, (10) where C(K) 
+
+> T
+
+and C(K) 
+
+> D
+
+are the per-iteration target-verify and draft-propose costs. 
+
+3.3 Multimodal rotary position encoding (M-RoPE) 
+
+The targets we evaluate use a multimodal extension of rotary position encoding (M-RoPE) [ 2] on every attention layer. 
+
+1D rotary. Let q ∈ Rh be a per-head query at sequence position m ∈ N with h even, and let 
+
+ω ∈ Rh/ 2 be a fixed frequency vector (typically ωd = b−2d/h for a base b, e.g. b = 10 ,000 ). Standard 1D rotary embedding pairs adjacent dimensions and rotates each pair by an angle proportional to position: 
+
+RoPE( q, m ) = R(m, ω) q, R(m, ω) = 
+
+> h/ 2−1
+
+M
+
+> d=0
+
+cos( mω d) − sin( mω d)sin( mω d) cos( mω d)
+
+
+
+, (11) where L denotes block-diagonal concatenation. 
+
+M-RoPE 3D. For multimodal sequences mixing text and image patches, the target assigns each token a three-axis position m = ( mT , m H , m W ) ∈ N3 – temporal, height, and width coordinates within the camera-frame grid. The head dimensions are partitioned by an mrope_section vector 
+
+(sT , s H , s W ) with sT + sH + sW = h/ 2. M-RoPE applies a separate rotation on each section driven by the corresponding axis position: 
+
+MRoPE( q, m) = 
+
+ RsT (mT , ωT ) q(T )
+
+RsH (mH , ωH ) q(H)
+
+RsW (mW , ωW ) q(W )
+
+ , (12) where q = [ q(T ); q(H); q(W )] is the head split along the feature dim, Rs is the s-pair block-rotation of Equation 11 restricted to 2s dimensions, and (ωT , ωH , ωW ) are the frequency vectors of the three axes; in practice each axis is allocated only a fraction of the head dimension (concrete values for the backbone we use are given in Section 5). For text tokens the three coordinates collapse to the sequence index, mT = mH = mW = m, and Equation 12 reduces to Equation 11. For image patches the three coordinates encode the frame and grid coordinates of the patch. 
+
+## 4 Method 
+
+4.1 The two-mode decoder: specialized draft and visual target 
+
+Building on Section 3.2, we instantiate the routine reasoner D as a small transformer that ingests the target’s hidden states at one or more layers as conditioning, and produces πD (· | x, r1: t). The hidden-state conditioning is deliberate, not incidental: the routine reasoner has only a small parameter budget (well under 1B), far too small to reproduce the target’s visual encoder from scratch. Re-running visual reasoning end-to-end inside D would either require scaling D until it is no longer “small” (and spec decoding’s speedup vanishes), or accepting a degraded visual representation. Instead we let D reuse the visual understanding the target has already computed: target hidden states, sliced 5from one or more layers, are fed into D as cross-attention K/V context. The target does the heavy visual work once; D’s parameters are spent on combining that context with the trajectory-history positions to predict the next routine token. Unlike a generic spec-decode draft trained to mimic the target’s distribution at every position, D is specialized: its attention is steered toward trajectory-history positions (recent ego dynamics + the partially-emitted CoC) rather than the visual cluster. The mechanism that produces this specialization is the position-encoding choice in Section 4.2; the consequence is that D is fast at predicting routine tokens (where trajectory history is sufficient) and intentionally weak on novel-situation tokens (where fresh visual evidence is required). The deliberative reasoner is the unmodified VLA target with its native 3D M-RoPE intact; it retains its full visual attention for verification and for emitting the bonus token when the routine reasoner is rejected. Two draft architecture families have established themselves in the spec-decoding literature and we evaluate both: a block diffusion draft that computes ˆrt+1: t+K via a single masked-denoising step, and an autoregressive draft with multi-layer feature fusion that emits K tokens via a depth-bounded chain. The specific architectures we instantiate (sizes, layer counts, fusion schemes) and the references they correspond to in the literature are deferred to Section 5. The trajectory head gT is unchanged from Equations 3-4; only Stage 1 of Equation 5 is replaced by the two-mode loop. 
+
+4.2 FlatRoPE: from 3D M-RoPE to 1D in the draft Background: target’s 3D M-RoPE. The multimodal language-model backbones used by current VLA targets apply 3D M-RoPE with hyperparameters mrope_section = ( sT , s H , s W ) summing to the rotary half-dim Dr = Dhead /2, and a boolean interleaved . Concretely, for each rotary-pair index d ∈ { 0, . . . , D r − 1} we define an axis assignment a(d) ∈ { T, H, W }:
+
+a(d) = 
+
+
+
+T, 0 ≤ d < s T ,H, sT ≤ d < s T + sH ,W, sT + sH ≤ d < D r ,
+
+(blocked) , a(d) = {T, H, W }(d mod 3) (interleaved) .
+
+(13) The specific MLLM family we evaluate against (along with concrete values of mrope_section 
+
+and the interleaved flag) is deferred to Section 5; the analysis below holds for any 3D-M-RoPE backbone with sT , s H , s W each substantially smaller than Dr . Each token i carries a 3D coordinate  pT (i), p H (i), p W (i), and the rotation angle at rotary-pair d is 
+
+ϕd(i) = θd pa(d)(i), θd = 10000 −2d/D head . (14) For text and ego-history tokens, all three coordinates collapse to the sequence index pT = pH =
+
+pW = m, so ϕd(i) = θd m(i) at every d and 3D M-RoPE reduces to 1D RoPE. For vision patches the three coordinates are independent grid offsets, and the rotation is genuinely three-dimensional. 
+
+Why mirroring is harmful. A natural draft design ingests target hidden states (already rotated by target M-RoPE) and applies the same 3D M-RoPE on its own queries – mirroring (sT , s H , s W ) and 
+
+interleaved . Two adjacent vision patches at (pT , p H , p W ) and (pT , p H , p W +1) differ only in the 
+
+sW -dim subspace of ϕ (similarly for height-adjacent patches in the sH subspace). Because each spatial axis is allocated only a fraction sW /D r (or sH /D r ) of the rotary dimensions – typically less than one third in current MLLM backbones – the post-rotation Q/K differ over only that small subspace and remain near-aligned in the rest. The dot-product after rotation collapses onto the cluster, the softmax cannot resolve individual patches, and the draft’s attention budget pools on the visual cluster as a whole. 
+
+FlatRoPE projection. We replace the draft’s 3D rotation with a 1D rotation indexed by the sequence position only. For every token i in the draft input – vision, text, ego-history alike – we set 
+
+pflat  
+
+> T
+
+(i) = pflat  
+
+> H
+
+(i) = pflat  
+
+> W
+
+(i) = m(i) ∈ { 0, 1, . . . , T seq − 1}. (15) Substituted into Equation 14, the per-dim phase becomes ϕflat  
+
+> d
+
+(i) = θd m(i), identical for every d
+
+regardless of the axis assignment a(d). Two important consequences follow. 
+
+(i) mrope_section and interleaved are structurally irrelevant under FlatRoPE. Both blocked 
+
+and interleaved axis assignments in Equation 13 collapse to the same scalar phase θdm(i), since the axis-selected coordinate is identical across T, H, W . Mismatch between the draft’s declared 
+
+mrope_section and the target’s no longer affects the draft’s queries or keys. We retain only the 6Table 1: Attention budget at layer-0 cross-attention of a converged block-diffusion draft, averaged over 32 heads and one test clip. 3D M-RoPE drains attention from the action-relevant trajectory and generated tokens onto the visual cluster; 1D restores it. Token type 1D rotary (ours) 3D M-RoPE (baseline) visual tokens 0.708 0.845 
+
+trajectory tokens 0.084 0.071 generated tokens 0.208 0.084 entropy within trajectory and text (norm.) 0.540 0.404 target’s θd schedule (same head dim, same base 10000 ) so target-derived hidden states and draft-side queries share frequency tables; the position projection itself is R3 → R via (pT , p H , p W ) 7 → m.
+
+(ii) The asymmetry between target and draft is intentional. The target’s hidden states are still produced under the spatially-aware 3D rotation (the target is unmodified); but the draft attends to them with queries rotated by 1D phases. After FlatRoPE projection, two vision patches with sequence positions mi̸ = mj differ in rotation across every rotary-pair d by θd(mj − mi), not just the sW or 
+
+sH subspace. Q/K post-rotation are well separated, the softmax discriminates between patches, and the freed budget redistributes onto trajectory-history positions where the next routine token lives. 
+
+Empirical confirmation. We measure the consequence on the layer-0 cross-attention pattern of a converged warm-SFT block-diffusion draft (Table 1). Visual tokens occupy ∼96% of the prompt sequence; trajectory and committed-CoC tokens are the remaining 4%. Under 3D M-RoPE the softmax pools mass on the visual cluster (84.5% of total mass) and starves trajectory tokens (7.1%) and the draft’s own generated tokens (8.4%). FlatRoPE pulls the visual mass down to 70.8%, restoring the freed budget to trajectory tokens (8.4%) and generated tokens (20.8%) – exactly the positions where the next routine-token signal lives. Within-trajectory-and-text attention entropy correspondingly rises from 0.404 to 0.540, indicating the softmax is now discriminating among trajectory and text positions rather than concentrating on a single sink token. 
+
+4.3 Action-aware RL post-training Problem formulation. After supervised fine-tuning, we want to further train the draft to maximize the realized speedup. From Equation 10, this is bounded by the mean accepted length. Define a per-prompt proposal ˆr1: K ∼ πθD (· | x) and its acceptance length against the target’s greedy continuation 
+
+r⋆:
+
+ℓ ˆr1: K ; x = max  k ∈ { 0, . . . , K } : ˆ rj = r⋆j ∀j ≤ k . (16) The post-training objective is to find draft parameters θ that maximize the expected acceptance length: 
+
+θ⋆ = arg max  
+
+> θ
+
+Ex∼D Eˆr∼πθD (·| x)
+
+ ℓ(ˆ r; x) . (17) 
+
+Why RL. Equation 17 is non-differentiable in θ: the acceptance length is a max over hard token-level argmax matches, with no smooth surrogate. The standard supervised proxy – per-position cross-entropy of πθD against r⋆ – treats every position uniformly and ignores the structural fact that an error at position k erases all gains at positions > k . Two well-known consequences are: (i) two policies with the same average per-position CE can have quite different L, depending on how their errors distribute across positions; and (ii) once SFT has converged, lowering CE further yields almost no L improvement (the residual CE comes mostly from genuinely uncertain positions). We therefore treat Equation 17 directly as a single-step contextual bandit, sample K rollouts per prompt, and apply group-relative policy optimization (GRPO) to estimate the gradient of E[ℓ].
+
+Action-aware reward. The acceptance length ℓ itself is a sparse 0/1-style signal – it provides no gradient until at least one position matches and it does not distinguish among rollouts that fail at the same position. We therefore replace ℓ with a denser proxy reward grounded in the trajectory the target ultimately produces. For each prompt x we sample K = 5 rollouts (stochastic only at greedy-rejected positions; greedy-matched positions are frozen at the deterministic argmax to reduce variance). For the k-th rollout we form a contaminated rationale ˜rk by replacing the first N rejected positions of 7r⋆ with the k-th sample, run the target’s flow-matching head gT to obtain τ mix  
+
+> k
+
+= gT (x, ˜rk), and compute 
+
+Rk = wtraj Rtraj  
+
+> k
+
++ wtext Rtext  
+
+> k
+
+, Rtraj  
+
+> k
+
+= − τ mix  
+
+> k
+
+− τ ⋆ 22, Rtext  
+
+> k
+
+= 1
+
+N
+
+X 
+
+> j∈R [: N]
+> k
+
+⊮ˆrk,j = r⋆j
+
+,
+
+(18) where τ ⋆ = gT (x, r⋆) is the target’s greedy trajectory and R[: N ] 
+
+> k
+
+are the substituted positions. The reward is ‘action-aware’ in the sense that token-level disagreements with the target are penalized in proportion to how much they perturb the target’s eventual trajectory, giving the draft direct gradient signal toward the positions whose token choice actually matters for downstream control. 
+
+GRPO update. The advantage is the group-relative baseline ˆAk = Rk − ¯R with ¯R = 1
+
+> K
+
+P 
+
+> k
+
+Rk.The policy gradient accumulates only over the sampled (rejected) positions: greedy positions have zero log-prob gradient by construction. Combined with the static-reference KL anchor (below), the per-prompt loss is 
+
+L(θ) = − 1
+
+K
+
+> K
+
+X
+
+> k=1
+
+ˆAk
+
+X
+
+> j∈R k
+
+log πθ
+
+ ˆrk,j x, ˜rk,<j 
+
+ + β · 1
+
+|A ref |
+
+X
+
+> j∈A ref
+
+KL  πθ (· | x, ·) ∥ πref (· | x, ·),
+
+(19) with β = 0 .02 in our runs. 
+
+Static-reference anchor. The KL term in Equation 19 is gated by an anchor set A ⊆ { 1, . . . , K }.The standard recipe defines the anchor against the live policy: Apolicy (θ) = {j : arg max πθ (·| ... ) = 
+
+r⋆j }. This gating self-removes during drift: as θ updates, a position whose argmax flips from correct to wrong is reclassified out of the anchor set, exactly when the regularizer would have corrected the flip. Empirically this manifests as draft_final regressing relative to mid-training checkpoints. We instead use a static reference set Aref = {j : arg max πref (·| ... ) = r⋆j } fixed at the start of post-training – positions where the frozen SFT-init was already correct receive permanent anchoring, positions where it was wrong remain free to move under the policy gradient. The single-line code-level diff can be found in appendix. The reference logits are produced by a frozen copy of the SFT draft in the same forward pass, contributing negligible additional cost. We find no benefit from periodically refreshing the reference, consistent with the analysis above: the pathology is the live-policy coupling itself, not the staleness. 
+
+## 5 Experiments 
+
+Targets and drafts. We evaluate two open AV VLA targets. Alpamayo-R1 [27 ] is 10B parameters with an 8B Qwen3-VL backbone and a flow-matching trajectory head; the autoregressive component emits CoC reasoning. AutoVLA [ 35 ] is an interesting work, but by the time we make submission, AutoVLA has not released the checkpoint yet. As a result, we will keep the extension of our work to AutoVLA in the future works. We pair each target with two drafts: DFlash [ 21 ], a small block-diffusion network operating on multi-layer target hidden states with block size K = 16 ;and EAGLE-3 [ 15 ], an autoregressive 1-layer draft with multi-layer feature fusion (target hiddens at layers {1, 17 , 32 } for the 36-layer Qwen3-VL backbone) and a 7-step training rollout per the EAGLE-3 paper recipe. For each (target, draft) pair we train two variants – 3D M-RoPE rotary in the draft (the natural baseline) and 1D arange rotary (ours) – with the same loss and hyperparameters. 
+
+Data. Alpamayo-R1: 11,655 training clips with cached target greedy CoC outputs (mean output length 17.4 tokens). Held-out splits: val (300), on-shelf test (200), off-shelf test (290 from a separate annotation source). 
+
+Metric. Mean accepted length L at K=16 verification, evaluated greedily at temperature 0. Higher is better. 
+
+5.1 Main result: FlatRoPE across architectures and targets 
+
+Table 2 reports mean accepted length L and theoretical speedup S for each (target, draft, rotary) cell on three splits: val, on-shelf test, and off-shelf test. Theoretical speedup is computed as S = L/ (1+ c)
+
+8Table 2: Mean accepted length L, theoretical speedup S at block size 16, and decoded throughput at the off-shelf split, on val / on-shelf test / off-shelf test. Theoretical speedup uses S = L/ (1 + c) with 
+
+c from the microbenchmark in §5. The throughput column is the AR baseline rate (34 tok/s, top row, measured on H100) multiplied by the off-shelf speedup of each row. Rows marked “–” are still in training. “Ours” denotes the FlatRoPE draft; “+ AARL” adds the action-aware RL post-training.                                                                       
+
+> Accepted length LTheoretical speedup S
+> Draft Rotary val on-shelf off-shelf val on-shelf off-shelf tok/s
+> Target only ———————34.0 EAGLE-3 3D M-RoPE (baseline) 7.22 6.93 7.35 4.15 ×3.98 ×4.23 ×143.8 EAGLE-3 FlatRoPE (ours) 7.33 6.99 7.41 4.30 ×4.11 ×4.36 ×148.2
+> EAGLE-3 FlatRoPE + AARL (ours) 7.35 6.95 7.30 4.32 ×4.08 ×4.29 ×145.9 Dflash 3D M-RoPE (baseline) 4.49 4.19 —3.79 ×3.54 ×——Dflash FlatRoPE (ours) 5.16 4.65 4.95 4.39 ×3.97 ×4.21 ×143.1 Dflash FlatRoPE + AARL (ours) 5.17 4.67 4.95 4.40 ×3.97 ×4.21 ×143.1
+
+Table 3: AARL ablations on Alpamayo + DFlash 1D. lr = 10 −6, N =3 contamination width, 
+
+wtraj = 1 .0, wtext = 0 .5, 2 epochs. Configuration best val L val ∆ best test L test ∆
+
+no RL 4.524 0 4.208 0RL, policy anchor 4.534 +0 .010 4.220 +0 .012 
+
+RL, static-ref anchor (ours) 4.544 +0 .020 4.225 +0 .017 
+
+K=5 (default) 4.544 +0 .020 4.225 +0 .017 
+
+K=10 4.548 +0 .024 4.214 +0 .006 
+
+K=15 4.543 +0 .019 4.220 +0 .012 
+
+where c = CD /C T is the per-iter draft-to-target cost ratio measured by microbenchmark on the same hardware ( c ≈ 0.18 for the block-diffusion draft, c ≈ K · 0.047 for the autoregressive chain draft with K = 15 ); see Section 5 for details. The single “—” entry corresponds to the off-shelf evaluation of the block-diffusion 3D-mirroring baseline, which we did not run because the 3D mirror has already been ruled out by the val and on-shelf cells. 
+
+(i) FlatRoPE consistently improves over 3D-mirroring across both draft families and all splits. 
+
+On Alpamayo + block-diffusion draft, FlatRoPE lifts L by +0 .66 on val ( 4.49 → 5.15 ) and +0 .43 
+
+on test ( 4.19 → 4.62 ) – a 14% / 10% relative improvement, translating to a theoretical speedup gain of +0 .59 × on val and +0 .39 × on on-shelf test. On Alpamayo + autoregressive draft, FlatRoPE achieves L = 7 .33 / 6.99 / 7.41 across the three splits, with theoretical speedups 4.30 × / 4.11 × /
+
+4.35 ×.
+
+(ii) AARL adds a further small but consistent gain on top of FlatRoPE. On Alpamayo + autore-gressive draft, AARL post-training (3 epochs, K=5 rollouts, static-reference anchor) lifts val L from 
+
+7.33 → 7.35 (+0 .02 ) and ties on-shelf at L = 6 .95 . On Alpamayo + block-diffusion draft, AARL lifts L slightly on every split. 
+
+5.2 AARL ablations 
+
+Table 3 shows the contribution of the static-reference anchor and the choice of K within AARL on Alpamayo + DFlash 1D. The static-reference anchor adds +0 .010 val and +0 .005 test over the policy-anchor variant under the same hyperparameters. Increasing K above 5 yields marginal val gains but loses test, the same val/test divergence we observed when raising the learning rate – both indicate over-fitting val sample-specific quirks. We adopt K=5 as the default. 96 Discussion, Limitations, & Conclusion 
+
+Our two training contributions act through different paths. FlatRoPE is pre-hoc: it forces the draft to specialize on trajectory history by removing the rotational symmetry that would otherwise let attention pool on the visual cluster. AARL with static-reference anchor is post-hoc helps the Draft model to produce reasoning that could match with the action output given the action model is frozen– a routine reasoner that handles the routine 80–85% of CoC tokens, leaving the deliberative reasoner (still attending to vision) for the residual 15–20% that genuinely require novel visual evidence. Although the work improves the efficiency significantly, the limiation lies in the number of tokens that the Alpamayo produces which is in range of 15 to 20 tokens. Future work will investigate whether this method can work on other reasoning tasks that have more than 500 tokens or not. We addressed the autoregressive-reasoning bottleneck in VLA driving planners by splitting the reasoning step into two specialized paths – a routine reasoner that attends to trajectory history and a deliberative reasoner (the unmodified VLA target) that retains its full visual attention – coordinated through the speculative decoding framework. Crucially, our routine reasoner is not a small replica of the target; the two are deliberately specialized to read different parts of the prompt. FlatRoPE 
+
+is the mechanism that produces this specialization and consistently raises acceptance length across two draft architectures and two open VLA targets. AARL post-training with a static-reference KL anchor adds further improvement. The combined system is the first VLA decoder we are aware of that delivers a 3.5× theoretical speedup on a 10B open AV target while keeping the deliberative reasoner available for the cases that genuinely require fresh visual evidence. 
+
+## Acknowledgments and Disclosure of Funding 
+
+This work is supported by the Air Force Office of Scientific Research under award number and ack first to FA2386-24-1-4031. 
+
+## References 
+
+[1] Joshua Ainslie et al. GQA: Training generalized multi-query transformer models from multi-head checkpoints. In EMNLP , 2023. [2] Jinze Bai et al. Qwen-VL: A versatile vision-language model, 2023. [3] Tianle Cai, Yuhong Li, Zhengyang Geng, Hongyi Peng, Tri Chen, Bo Zhao, and Tri Dao. Medusa: Simple LLM inference acceleration framework with multiple decoding heads, 2024. [4] Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste Lespiau, Laurent Sifre, and John Jumper. Accelerating large language model decoding with speculative sampling, 2023. [5] Yichao Fu et al. Break the sequential dependency of LLM inference using lookahead decoding. In ICML , 2024. [6] Jing Gu, Niccolò Cavagnero, and Gijs Dubbelman. Orion-Lite: Distilling LLM reasoning into efficient vision-only driving models, 2026. [7] Hossein Hassani, Soodeh Nikan, and Abdallah Shami. TinyDrive: Multiscale visual question answering with selective token routing for autonomous driving, 2025. [8] Anthony Hu et al. GAIA-1: A generative world model for autonomous driving, 2023. [9] Yihan Hu et al. Planning-oriented autonomous driving. In CVPR , 2023. [10] Zhijian Huang, Chengjian Feng, Feng Yan, Baihui Xiao, Zequn Jie, Yujie Zhong, Xiaodan Liang, and Lin Ma. RoboTron-Drive: All-in-one large multimodal model for autonomous driving, 2024. [11] Albert Hwang et al. EMMA: End-to-end multimodal model for autonomous driving, 2024. [12] Jongseok Kim et al. Speculative decoding via big little decoder (SpS), 2023. arXiv preprint. 10 [13] Sehoon Kim et al. Big little decoder (BiLD). In NeurIPS , 2023. [14] Yaniv Leviathan, Matan Kalman, and Yossi Matias. Fast inference from transformers via speculative decoding. In ICML , 2023. [15] Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. EAGLE: Speculative sampling requires rethinking feature uncertainty, 2024. [16] Yuhui Li et al. EAGLE-2: Faster inference of language models with dynamic draft trees, 2024. EMNLP. [17] Yuhui Li et al. EAGLE-3: Scaling up inference acceleration of LLMs via training-time test, 2025. [18] Tianyu Liu, Yuhao Shen, Xinyi Hu, Baolin Zhang, Hengxin Zhang, Jun Dai, Jun Zhang, Shuang Ge, Lei Chen, Yue Li, and MingCheng Wan. When hidden states drift: Can KV caches rescue long-range speculative decoding?, 2026. [19] Zixuan Liu et al. KV-cache sharing across speculative iterations, 2024. arXiv preprint. [20] Xupeng Miao et al. SpecInfer: Accelerating generative LLM serving with speculative inference and token tree verification, 2023. [21] Subham Sahoo et al. Block diffusion language models, 2024. arXiv preprint. [22] Subham Sahoo et al. Simple and effective masked diffusion language models, 2024. [23] Chonghao Sima et al. DriveLM: Driving with graph visual question answering, 2023. [24] Shihao Wang et al. OmniDrive: A holistic LLM-agent framework for autonomous driving, 2024. [25] Xiaoqiang Wang, Suyuchen Wang, Yun Zhu, and Bang Liu. System-1.5 reasoning: Traversal in language and latent spaces with dynamic shortcuts, 2025. [26] Xuezhi Wang et al. Self-consistency improves chain of thought reasoning in language models, 2022. [27] Yan Wang, Wenjie Luo, Junjie Bai, Yulong Cao, Tong Che, Ke Chen, Yuxiao Chen, Jenna Diamond, Yifan Ding, Wenhao Ding, Liang Feng, Greg Heinrich, Jack Huang, Peter Karkus, Boyi Li, Pinyi Li, Tsung-Yi Lin, Dongran Liu, Ming-Yu Liu, Langechuan Liu, Zhijian Liu, Jason Lu, Yunxiang Mao, Pavlo Molchanov, Lindsey Pavao, Zhenghao Peng, Mike Ranzinger, Ed Schmerling, Shida Shen, Yunfei Shi, Sarah Tariq, Ran Tian, Tilman Wekel, Xinshuo Weng, Tianjun Xiao, Eric Yang, Xiaodong Yang, Yurong You, Xiaohui Zeng, Wenyuan Zhang, Boris Ivanovic, and Marco Pavone. Alpamayo-r1: Bridging reasoning and action prediction for generalizable autonomous driving in the long tail, 2025. [28] Wayve. LINGO-1: Exploring natural language for autonomous driving. Technical report, Wayve, 2023. [29] Yilin Wu, Anqi Li, Tucker Hermans, Fabio Ramos, Andrea Bajcsy, and Claudia Pérez-D’Arpino. Do what you say: Steering vision-language-action models via runtime reasoning-action align-ment verification, 2025. [30] Shuo Xing, Chengyuan Qian, Yuping Wang, Hongyuan Hua, Kexin Tian, Yang Zhou, and Zhengzhong Tu. OpenEMMA: Open-source multimodal model for end-to-end autonomous driving, 2024. [31] Zhenhua Xu et al. DriveGPT4: Interpretable end-to-end autonomous driving via large language model. IEEE Robotics and Automation Letters , 2024. [32] Yang Yue, Yulin Wang, Bingyi Kang, Yizeng Han, Shenzhi Wang, Shiji Song, Jiashi Feng, and Gao Huang. DeeR-VLA: Dynamic inference of multimodal large language models for efficient robot execution, 2024. 11 [33] Yixiao Zeng, Jianlei Zheng, Chaoda Zheng, Shijia Chen, Mingdian Liu, Tongping Liu, Tengwei Luo, Yu Zhang, Boyang Wang, Linkun Xu, Siyuan Lu, Bo Tian, and Xianming Liu. X-Cache: Cross-chunk block caching for few-step autoregressive world models inference, 2026. [34] Enming Zhang, Xingyuan Dai, Min Huang, Yisheng Lv, and Qinghai Miao. MiniDrive: More efficient vision-language models with multi-level 2d features as text tokens for autonomous driving, 2024. [35] Zewei Zhou, Tianhui Cai, Seth Z. Zhao, Yun Zhang, Zhiyu Huang, Bolei Zhou, and Jiaqi Ma. AutoVLA: A vision-language-action model for end-to-end autonomous driving with adaptive reasoning and reinforcement fine-tuning, 2025. 12 A Implementation details 
+
+1D rotary in the draft. For each draft architecture we replace the rotary embedding module with a vanilla 1D rotary keyed on the absolute sequence position only. The rest of the architecture is unchanged. Position ids passed to the draft’s attention are simple torch.arange shapes; the target’s M-RoPE 3D positions are not touched. 
+
+Static-reference anchor: code-level diff. See Section 4.3. The single-line code-level diff is: 
+
+# policy anchor (prior art): anchor_mask = (pi_logits.argmax(-1) == r_star) # depends on live pi # static-reference anchor (ours): anchor_mask = (pi_ref_logits.argmax(-1) == r_star) # frozen ref only 
+
+Reward chunking for memory. For K ≥ 8, the per-step rollout batch through the target’s flow-matching head exceeds GPU memory. We chunk along the K dimension at k_chunk_size ,accumulate per-chunk action predictions, and concatenate before computing the reward. Each chunk uses an independent random seed for the diffusion sampler so within-group rollouts remain independent. 
+
+## B Routing diagnostic: when is the deliberative reasoner invoked? 
+
+For a typical 17-token CoC, the routine reasoner handles the first 4–5 tokens at ∼ 80% acceptance (setup tokens like “the car is”), drops to ∼ 50% around the verb / action tokens (“slowing”, “yielding”), and recovers near the trailing punctuation. Invocation of the deliberative reasoner is therefore concentrated in the middle of the chain where the action commitment is encoded, which matches the two-mode intuition: deliberation is needed exactly where the decision crystallizes. 13

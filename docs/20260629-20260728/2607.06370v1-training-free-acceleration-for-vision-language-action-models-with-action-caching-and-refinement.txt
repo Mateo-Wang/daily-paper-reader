@@ -1,0 +1,259 @@
+Title: Training-Free Acceleration for Vision-Language-Action Models with Action Caching and Refinement
+
+URL Source: https://arxiv.org/pdf/2607.06370v1
+
+Published Time: Wed, 08 Jul 2026 01:10:29 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Training-Free Acceleration for Vision-Language-Action Models with Action Caching and Refinement 
+
+Ryuji Oi ∗,† Hikari Otsuka ∗ Kosuke Matsushima ∗ Yuki Ichikawa Masato Motomura Tatsuya Kaneko Daichi Fujiki 
+
+Institute of Science Tokyo 
+
+> †
+
+oi.ryuji@artic.iir.isct.ac.jp 
+
+# Abstract 
+
+Vision-Language-Action (VLA) models have emerged as a promising approach for generalizable robotic manipulations. In particular, flow matching-based VLA mod-els have shown remarkable success due to their capability to generate precise and smooth action sequences and capture multimodal distributions. However, the itera-tive denoising process in the action head acts as a major computational bottleneck, posing a critical challenge for real-time deployment. To address this challenge, we propose ActionCache, a plug-and-play external cache that opportunistically reuses past intermediate actions to warm-start generations from the vicinity of target ac-tions, thereby drastically reducing the inference latency. Specifically, ActionCache stores the intermediate actions with compact multimodal keys, which enables re-trieval from similar past contexts across different episodes or even different tasks. Experimental results in simulation and real-world environments demonstrate that ActionCache maintains high task success rates in a low-latency regime, achieving inference acceleration of up to 11 .75 × and 34 .43 × for representative flow-based VLA models, π0.5 and GR00T-N1.6, respectively. 
+
+# 1 Introduction 
+
+Vision-Language-Action (VLA) models have emerged as a promising foundation for generalist robot policies that map visual observations and language instructions directly to low-level control [ 7, 12 ,15 , 16 , 20 , 24 , 35 ]. For robot manipulation, these policies must convert semantic task understanding into precise, smooth, and often multimodal action trajectories. This requirement has motivated recent VLAs to adopt diffusion- or flow-based action heads, which iteratively produce continuous action chunks rather than autoregressive sequences of discretized action tokens [ 3– 5, 26 ]. By operating directly in a continuous action space, it avoids action quantization artifacts, captures multimodal action distributions, and produces smooth short-horizon trajectories suitable for closed-loop control. Despite these advantages, iterative action generation introduces a practical bottleneck for real-time robot control. In diffusion-family VLA policies, the action head must repeatedly evaluate a generative model to transform noise into a structured action trajectory. These repeated evaluations can account for a substantial fraction of control-loop latency (e.g., over 65% for DreamVLA [ 34 ] and 36% for 
+
+π0 [5 ]), especially when the robot replans at high frequency. Reducing the complexity or the number of denoising steps is a natural way to accelerate inference, while affecting the quality and latency trade-off of the policy [ 31 ]. Simple tasks may remain solvable with very few refinement steps, whereas harder manipulation tasks often require sufficient refinement to maintain a high success rate. More recently, warm-start methods have exploited temporal continuity by initializing refinement from recent actions, predicted actions, or trajectory-level priors [ 9, 11 , 14 , 17 ]. These methods are 
+
+> ∗Equal contribution. Preprint. arXiv:2607.06370v1 [cs.RO] 7 Jul 2026
+
+typically framed as improving local temporal smoothness by breaking the Markov Decision Process of VLAs, where the model is conditioned solely on the current observation. As a byproduct, they can also shorten the effective distance traveled during refinement by starting closer to the target action trajectory, rather than forcing the model to synthesize an action chunk from noise. However, this effect has not been systematically studied as a general mechanism for output reuse beyond temporal continuity. Moreover, existing warm-start methods often depend on learned predictors or explicit temporal modeling rather than offering a plug-and-play solution for pretrained flow-based VLAs. This paper proposes ActionCache , a plug-and-play external cache that turns past action generation into reusable computation. Robot manipulation often involves recurring visual states, task phases, and language goals, which can induce similar conditional transport paths toward structured action chunks. ActionCache captures this redundancy by storing generated action chunks with compact multimodal keys and retrieving them when the current context is likely to induce a similar conditional generation path. This reframes warm-starting from a local temporal-continuity heuristic into an output-level retrieval problem. Rather than learning a predictor for the next action or relying solely on previous timesteps, ActionCache opportunistically reuses policy outputs that can initialize refinement closer to the current conditional flow than unstructured noise. In this way, ActionCache substantially reduces the number of required refinement steps in a completely training-free manner, i.e., without retraining the policy, modifying the action head, or adding a learned warm-start module. Our contributions are as follows: • We introduce ActionCache, a training-free and plug-and-play external cache that accelerates pretrained flow-based VLA models by reusing and refining past action generations. • We develop a model-agnostic cache design that stores intermediate action chunks with compact multimodal keys. It enables reusable computation across timesteps, episodes, and tasks while retaining the pretrained policy through a conservative fallback mechanism. • We validate ActionCache in simulation and real-world robot manipulation tasks, showing substantial improvements in the latency–success-rate trade-off with up to 11.75 × action-head acceleration for π0.5. We further provide detailed analyses that characterize the factors governing effective action reuse. 
+
+# 2 Background and Related Work 
+
+2.1 VLA Models 
+
+Vision-Language-Action (VLA) models [ 15 , 24 ] generate robotic actions based on visual and lin-guistic inputs. Most VLA models build on a Vision-Language Model (VLM) [ 32 ] backbone and attach an action head that predicts robot actions from the representation extracted by the VLM. Based on the action generation mechanism of their action heads, VLA models can be categorized into two classes: autoregressive [ 7, 12 , 16 , 20 , 35 ] and diffusion-based [ 3– 5 , 19 , 26 – 28 , 34 ] models. The former discretizes continuous actions into action tokens and predicts them sequentially, while the latter generates continuous action chunks through an iterative generative process, often using diffusion [ 13 , 30 ] or flow matching [ 21 ]. Many recent VLA models employ diffusion-based action heads, particularly flow matching-based ones, to model continuous actions more expressively. These 
+
+flow-based VLAs have achieved remarkable performance across diverse and complex robotic tasks, positioning them as a prominent class of recent VLA models. Motivated by this trend, this paper focuses on the flow-based VLA architecture family. At each control timestep t, a flow-based VLA passes a context representation ct from the VLM back-bone to the flow matching action head. We note that the exact form of ct is architecture-dependent; it may be obtained from the VLM’s final output embeddings [ 3] or from internal representations such as KV caches [ 4, 5 , 26 ]. Conditioned on ct, the action head generates a continuous action chunk by evolving Aτt := [ aτt , . . . , aτt+H−1] from τ = 0 to τ = 1 , where τ is the flow time, and H is the action horizon (the number of actions in the chunk). Starting from Gaussian noise A0 
+
+> t
+
+∼ N (0, I),the action head iteratively transforms the intermediate action chunk as 
+
+Aτ +∆ τt = Aτt + Vθ (Aτt , τ, ct)∆ τ. (1) Here, Vθ is the velocity field predicted by the action head, and ∆τ is the numerical integration step size. After integration to τ = 1 , the final action chunk is obtained as A1 
+
+> t
+
+= [ a1 
+
+> t
+
+, . . . , a1
+
+> t+H−1
+
+].22.2 Plug-and-Play Acceleration of Flow-based VLA Models 0 20 40 60 80 100 
+
+> Latency [ms]
+> GR00T-N1.6
+
+
+
+> Dream
+> VLA
+> Action Head
+> Obs Encoder
+> VLM
+
+Figure 1: Inference latency break-down for representative VLA models on NVIDIA RTX 4090 GPU. Action head accounts for 37-66% of the end-to-end latency. As shown in Equation (1), generating each action chunk in a flow-based VLA requires multi-step flow integration, where the action head repeatedly evaluates the velocity field Vθ . Thus, the number of flow matching steps directly determines the number of action head forward passes and is a major source of inference latency, though it is lower than that of diffusion-based policies. For instance, in the inference of representative flow-based VLAs, the action head accounts for more than 37% of the end-to-end latency as shown in Figure 1, making it a practical bottleneck for real-time robot control. To alleviate this bottleneck, prior works have explored plug-and-play acceleration methods that can be applied to pretrained VLAs without costly retraining. EfficientVLA [ 31 ] reduces redundant computation across the VLA pipeline by pruning less informative language layers, selecting a compact subset of visual tokens, and caching intermediate features in the diffusion-based action head. While effective, such methods primarily reduce the per-step computational cost or reuse features within the original sampler. They do not fundamentally eliminate the need for multi-step flow integration, and the action head must still be invoked repeatedly. This limitation motivates us to implement a training-free acceleration strategy that more directly reduces the iteration cost of action heads while preserving the behavior of the pretrained VLA. 
+
+2.3 Diffusion Caching on Image Generation 
+
+In image generation, prior work on efficient diffusion inference has shown that caching can reduce denoising costs by reusing previously computed outputs, latent states, or intermediate features. They retrieve intermediate latent states [ 1] or final images [ 29 ] of similar previous prompts stored in caches to serve as warm starts, skipping part of the denoising process. Intermediate features across adjacent denoising steps have also been reused to avoid redundant computation [ 23 ]. While these caching methods are training-free and effective for image generation, they cannot be applied directly to flow-based VLA inference, where cache retrieval must be conditioned on multimodal and embodied contexts, including visual observations, language instructions, robot states, and task progress. To the best of our knowledge, ActionCache is the first method that introduces the caching paradigm to flow-based VLA and optimizes both inference speed and accuracy. 
+
+2.4 Warm-Starting for VLAs 
+
+Existing warm-starting methods for diffusion-based robot policies [ 10 ] mainly exploit local tem-poral continuity within a rollout by reusing previous action predictions or temporally adjacent trajectories [ 14 , 17 ]. These methods often need training of predictors or explicit temporal model-ing. STEP [ 17 ] introduces a specialized predictor to generate a temporally and spatially consistent warm-start initialization from the temporally adjacent action trajectory. SDP [ 14 ] trains a diffusion policy to handle action chunks with mixed noise levels, enabling temporal streaming synthesis and accelerated inference. In contrast, ActionCache aims to reuse action generation across temporally distant but semantically and visually related contexts without training . It enables acceleration by caching action-relevant generation states that are shared across tasks and episodes, rather than relying solely on short-term continuity between consecutive control steps. 
+
+# 3 Method 
+
+To address the high inference latency of the iterative action refinement in the flow-based VLA action head, this section proposes ActionCache , a plug-and-play action memoization framework. 3Figure 2: Overview of ActionCache. ActionCache is an external cache that stores intermediate noisy actions from past generations. When a cache hit occurs, ActionCache initializes from retrieved past similar actions, thereby reducing the number of denoising steps. 
+
+3.1 Framework Overview 
+
+Figure 2 illustrates our framework. Given the current observation at an control timestep t, the VLM backbone produces a condition ct for the action head. Leveraging the VLM output embeddings generated as a byproduct of the condition, ActionCache constructs a cache key kt, a compact representation that extracts multimodal information from the backbone features in a training-free manner, and uses this key to query existing cache entries from past successful action generations. Each cache entry contains a cache key kt, an action chunk Aτt generated by the base policy, and optional metadata mt for cache management such as reference counts. Importantly, the cached value is the action chunk itself rather than internal states, KV cache, or visual token representation; thus, it is defined in the action space rather than tied to a particular backbone architecture. Because it leaves the backbone and action-head weights unchanged, ActionCache can be attached to a pretrained VLA policy without additional training. At inference time, the current key is used to retrieve a candidate cache entry together with a similarity score. ActionCache then branches according to a conservative hit/miss rule. If the similarity of the retrieved entry exceeds the hit threshold Thit , the lookup is treated as reliable, and the retrieved action chunk is used as an initialization for zero- or few-step action generation. Otherwise, the retrieved candidate is rejected, and the model falls back to the standard full-step generation process from pure Gaussian noise Aτ =0  
+
+> t
+
+∼ N (0, I ). This fallback strategy ensures that the VLA model retains its original robustness and generalization capabilities in unseen or complex situations where the cache is not sufficiently populated. 
+
+3.2 Cache Representation and Retrieval for Multimodal Contexts 
+
+A useful cache key should be expressive enough to capture action-relevant multimodal context while remaining inexpensive to compute and search for at every control step. We therefore construct keys from VLM output embeddings produced during the backbone forward pass. This choice does not require an additional VLM computation, and in architectures where some VLM output tokens are not directly consumed by the action head, it also reuses features that would otherwise be discarded. Moreover, these embeddings encode visual and linguistic context after backbone processing, making them a more action-relevant retrieval signal than raw image or language features alone. We empirically compare this design with alternative feature sources in Section 4.5. Let ht ∈ RD be the concatenated VLM output embeddings. Since D can be very large, using ht
+
+directly as a cache key would increase memory footprint and lookup cost. Therefore, we reduce its dimensionality by projecting it into a compact key kt ∈ Rd using a fixed sparse ternary random 4projection matrix [18]: 
+
+kt = Rh t, R = ( rij ) ∈ {− 1, 0, 1}d×D . (2) Here, each row of R contains pD/ 2 entries of 1, pD/ 2 entries of -1, and the remaining (1 − p)D
+
+entries of 0. The position of these values is chosen uniformly at random for each row. R is created once and kept fixed. This compression approach requires no fitting data, retraining, or online update. It therefore preserves the plug-and-play nature of ActionCache while reducing storage and similarity search costs. Given the current key kt, ActionCache retrieves the nearest cache entry Ai⋆ using cosine similarity: 
+
+i⋆ = arg max i cos _sim( kt, ki). The retrieved action is considered a hit only when the Top-1 similarity smax = cos _sim( kt, ki⋆) exceeds the threshold Thit . On a hit, the retrieved action chunk is either executed directly or used as the initial action for a small number of refinement steps under the current condition ct.
+
+3.3 Cache Population and Management 
+
+During a cache miss, we extract the intermediate noisy action at denoising step N − Nhit from its full generation trajectory. Here, N denotes the total number of function evaluations (NFE), and Nhit represents the NFE on a cache hit. This intermediate action Aτt at τ = ( N − Nhit )∆ τ ,paired with its corresponding key vector kt, is temporarily stored in a pending buffer. If the episode completes successfully, these pending pairs {kt, Aτt } are committed to the main cache for future reuse; otherwise, they are discarded. The cache is first warmed up with the hit threshold Thit = 1 until the cache reaches its maximum capacity, and then we lower the threshold to a predetermined value. Once the cache reaches its maximum capacity, an existing cache entry is evicted and replaced with a new one according to a cache replacement policy. This process allows ActionCaches to adapt to changing environments and new tasks. In many routine scenarios, tasks exhibit temporal locality, meaning that related actions are likely to occur again in the near future. This property makes Least Recently Used (LRU) a reasonable policy [ 1]. However, LRU can suffer from cache pollution, where a newly inserted but rarely reused entry evicts a more reusable one. This effect becomes more pronounced in a capacity-limited scenario, making Least-Frequently-Used (LFU) a better choice, as we show in the results shortly (Section 4.4). ActionCache can be viewed as a generalization of purely temporal warm starting. By modifying the buffering and replacement policy (e.g., to FIFO), it can supply the necessary inputs to a temporal continuity framework, although such work requires an additional learned module to complete warm-starting. ActionCache extends this perspective by introducing an indexed memory that can retrieve action chunks across timesteps, episodes, and tasks. This broader reuse requires cache quality assessment and filtering, but it also allows the policy to benefit from prior successful behavior beyond the immediately preceding control step in a plug-and-play manner. 
+
+# 4 Experiments 
+
+4.1 Evaluation Settings Implementation details. We evaluate two state-of-the-art flow-based VLA models: π0.5 [ 4] and GR00T-N1.6 [ 3 ]. For ActionCache, we set the dimension of a cache key to d = 500 with a non-zero value density of the sparse ternary random matrix p = 0 .01 . For GR00T-N1.6, instead of raw VLM output embeddings, which do not include robot-state features, we utilize a concatenation of encoded VLM output embeddings and encoded robot-state features as a source of a cache key. The default cache size is bounded to 3,000 entries, managed by an LRU replacement policy. The hit threshold 
+
+Thit is predetermined as Thit = 0 .85 for π0.5 and Thit = 0 .65 for GR00T-N1.6. For both models, we set the action execution horizon to 10 . Unless otherwise specified, we use these settings as the default configuration throughout our experiments. In both warm-up and post-warm-up phases, we simulate all the tasks in a round-robin manner until a specified number of episodes have been completed. π0.5
+
+is implemented with JAX [ 6 ], and GR00T-N1.6 is implemented with PyTorch [ 25 ]. For more details on the implementation, see Appendix A. 
+
+Simulation Evaluation. We conduct our simulation experiments on VLABench [ 33 ] and LIBERO [ 22 ] benchmarks. For VLABench, we evaluate the models on 10 primitive tasks with 5Table 1: Performance comparison on VLABench. We report the success rate and inference latency of the action head for the simple NFE reduction baseline, prior methods, and ActionCache. ActionCache outperforms the baselines and the prior methods, especially in the low-latency regime.                                                                                        
+
+> Model π0.5[4] GR00T-N1.6 [3] Method NFE Success Rate Diff Latency Speedup Success Rate Diff Latency Speedup (%,↑)(ms, ↓)(%,↑)(ms, ↓)Base model (Full) -38.8 (10) †-18.8 1.0 ×34.0 (4) †-24.1 1.0 ×
+> Base model 16.8 -32.0 2.5 7.52 ×24.6 -9.4 8.5 2.84 ×
+> EfficientVLA 528.1 -10.7 10.8 1.74 ×----EfficientVLA 26.9 -31.9 6.6 2.85 ×----EfficientVLA 12.3 -36.5 5.1 3.69 ×----
+> ActionCache 231.0 -7.8 5.4 3.48 ×35.7 +1.7 13.4 1.79 ×
+> ActionCache 132.4 -6.4 3.6 5.22 ×29.1 -4.9 7.6 3.17 ×
+> ActionCache 032.9 -5.9 1.6 11.75 ×22.3 -11.7 0.7 34.43 ×
+> †Default NFE for each baseline is shown in parentheses. (a) (b)
+
+Figure 3: Success rate and latency trade-off for ActionCache and baselines. (a): ActionCache achieves higher success rates throughout all NFEs compared to the baselines. (b): As the Nhit 
+
+decreases, the latency of the action head decreases proportionally with a negligible latency overhead. "Seen" object configurations. We measure wall-clock latencies for each model/method on a single NVIDIA RTX 5090 GPU with 32 GB of GPU memory. The results for the LIBERO benchmark are reported in Appendix B. 
+
+Real-World Evaluation. We deploy the π0.5 model on SO-101 [ 8 ], an open-source 6-DoF robotic arm. In this evaluation, we select a pick-and-place task, where the robotic arm grasp a cube and place it into a fixed box next to the arm. We fine-tune the model on 100 episodes of successful demonstration and 20 episodes of recovery from failure for 5,000 steps with a global batch size of 
+
+128 , using the LeRobot [ 8] framework with 4 H100 GPUs. We evaluate ActionCache and a full-step base model for 100 episodes, and measure the success rate and wall-clock inference latency per generation on an NVIDIA RTX 5090 GPU. A trial is deemed successful if the robot successfully places the cube into the box within a time limit. Specifically, We evaluate π0.5 with NFE on hit 
+
+Nhit = 1 and the cache size of 1,000 . Other hyperparameters are the same as the default setting for simulation evaluation. 
+
+4.2 Success Rate and Latency Evaluation Performance Comparison with Prior Acceleration Methods. Table 1 shows the success rate and inference latency of the action head for ActionCache and other methods. The latency of ActionCache 6includes the overhead introduced by key projection and cache lookup. Although the success rate of the base models drops severely at NFE = 1 , ActionCache mitigates the degradation at Nhit = 1 .This result demonstrates that by starting from the vicinity of the target action rather than from pure noise, ActionCache can generate a higher-fidelity action even with a minimal NFE. Compared to EfficientVLA, which is a prior plug-and-play acceleration method, ActionCache achieves a better trade-off between success rate and latency. This is because EfficientVLA’s acceleration is limited by its reliance on pure noise initialization and its inability to skip the entire execution of a denoising step. Furthermore, ActionCache maintains a high success rate even at NFE = 0 , especially on π0.5. By directly reusing past actions in similar contexts, ActionCache bypasses the entire denoising process and achieves a drastic speedup compared to the base models. This result indicates that past actions can be retrieved and reused without modification. 
+
+Trade-off between Success Rate and Average NFE. As shown in Figure 3a, the base models suffer from a monotonic drop in the success rate as the NFE decreases. On the other hand, ActionCache maintains a high success rate in the few-NFE regime by efficiently reusing and refining related actions. 
+
+NFE on Cache Hit and Latency Trade-off. Figure 3b shows that ActionCache proportionally reduces the average latency as Nhit decreases. Since the iterative denoising process in the action head is the primary computational bottleneck, reducing the required NFE directly translates into a proportional decrease in overall inference time. Notably, at Nhit = 0 , which means that the latency includes only the key projection, the cache lookup and other marginal overhead, ActionCache reduces the latency to less than 2 ms on π0.5 and 1 ms on GR00T-N1.6. This result shows that the key projection and cache lookup introduce only a negligible latency overhead to the inference pipeline. 
+
+4.3 Cross-Task Action Reuse 
+
+Table 2: Progress score (PS, %) and cache hit rate (HR, %) on the target tasks. The base model’s progress score is shown in parentheses. ActionCache maintains the base model’s progress score with a certain degree of cache hit rate.              
+
+> Target Task PS HR
+> select_painting 20.0 (21.0) 2.7
+> select_toy 51.7 (50.5) 8.1 025 50 75 100 125 150 175
+> Timestep
+> 0
+> 20
+> 40
+> 60
+> 80
+> Hit Rate [%]
+> select_painting
+> select_toy
+
+Figure 4: Cache hit rate across episode timesteps. Cache hit rate reaches over 80% at episode start stage. To investigate the potential for cross-task action reuse, we conduct a zero-shot cross-task experiment on VLABench with π0.5. In this experiment, we first populate the cache with the select_fruit task and then evaluate the model’s performance on other target tasks. For a more fine-grained analysis of action reuse across different tasks, we use a task progress score for evaluation, a metric that reflects the completion of intermediate sub-goals within a task, rather than a binary success rate. During the evaluation of the target task, we disabled cache updates to ensure that any hits represent cross-task action sharing. We set the hit threshold Thit to 0.925 during the target task evalution to maintain the progress score. 
+
+Progress Score and Cache Hit Rate. Table 2 and Fig-ure 4 show that ActionCache maintains the base model’s progress score while providing a meaningful cache hit rate at a certain phase of the rollout. These results demonstrate that the model can retrieve and reuse actions from different tasks to make meaningful progress in unseen tasks, while safely falling back to the original model when uncertain or unpopulated, demonstrating both cross-task effectivity and robustness. Notably, the hit rate reaches a maximum of over 80 % at the initial stage of episodes. This result suggests that the early stages of episodes, such as reaching motions toward a target object, share fundamental actions across multiple tasks, revealing the potential for action reuse beyond individual task boundaries. 
+
+4.4 Impact of Retrieval Quality on Success Rate Retrieval Quality and Success Rate. We investigate the relationship between the quality of retrieved actions and the task success rate with varying hyperparameters for ActionCache. The quality of retrieved actions is measured by the average Top-1 cosine similarity on cache hits, which we control by varying the cache size from 50 (164 KB) to 5,000 (16.4 MB). From Figure 5a, we can observe that when the average Top-1 similarity on cache hits is high enough, the model achieves high success 7(a) (b) (c) Figure 5: (a): Average Top-1 similarity vs success rate for various numbers of denoising steps. 
+
+As the Top-1 similarity increases, the success rates improve. (b): Average Top1 similarity vs hit thresholds for various cache size. As the hit threshold increases, average Top-1 similarity also increases. (c): Cache hit rate vs various hit thresholds for various cache size. A Larger cache yields a higher cache hit rate. rates comparable to that of the full-step generation, regardless of Nhit . This observation indicates that ActionCache requires either a sufficiently large Nhit or a high average Top-1 similarity to achieve a high task success rate. Since increasing Nhit negates the computational benefits of ActionCache, it is necessary to increase the Top-1 similarity on a retrieval for a good trade-off between the success rate and the latency. The hit threshold Thit serves as a key parameter to control the success rate. Figure 5b shows the relationship between the average Top-1 similarity and Thit , where higher Thit leads to a higher average Top-1 similarity. With a sufficiently large cache, the average Top-1 similarity saturates at lower thresholds because the nearest-neighbor similarity distribution is already concentrated above them, making the hit criterion non-selective. Since Thit enforces a lower bound on the similarity of accepted retrievals, it provides a practical control knob for the quality of retrieved actions and, consequently, the expected success rate. This allows us to tune the trade-off of cache capacity and latency benefit as below with a target success rate. Finally, Figure 5c shows the cache hit rate with varying Thit and cache sizes. We observe that increasing the cache size monotonically improves the cache hit rate, which is directly translated into lower latency. These results indicate that ActionCache provides highly flexible knobs to adjust accuracy-efficiency-capacity trade-offs, depending on the task difficulty, success rate, target latency, and allocated memory. 0.80 0.85 0.90 0.95 1.00  
+
+> Hit Threshold Thit
+> 0
+> 20
+> 40
+> 60
+> 80
+> 100
+> Cache Hit Rate [%]  Policy
+> Random
+> FIFO
+> LRU
+> LFU
+> Oracle
+
+Figure 6: Hit rate comparison for cache replacement policies un-der a restricted cache size of 100. 
+
+LFU policy demonstrates the high-est hit rate across hit thresholds. 
+
+Comparison of Cache Replacement Policies under Re-stricted Capacity. As established in Section 4.4, the quality of retrieved actions is important to achieve a high success rate in ActionCache. With a large cache size, we can retrieve suffi-ciently high-quality actions from the cache with a higher cache hit rate, whereas in a restricted cache size, the replacement policy is crucial for a higher cache hit rate under a specific hit threshold Thit . To this end, we investigate the impact of different cache replacement policies on the cache hit rate. We compare four replacement policies: Random, Least Re-cently Used (LRU), Least Frequently Used (LFU), First In First Out (FIFO), and an oracle algorithm [ 2], which assumes future knowledge of queries and serves as the ideal replacement policy. In a typical caching mechanism, the LRU policy is likely to achieve a high hit rate due to its ability to exploit temporal locality. However, in ActionCache with limited capacity, the LFU policy demonstrates the highest cache hit rate among the other policies, as shown in Figure 6. While LRU is susceptible to cache pollution by one-hit wonder actions, such as highly 8Table 4: Success rate and latency breakdown of π0.5 in the real-world environment. Speedup factors are shown in parentheses. ActionCache maintains comparable success rate to the full-step base model while reducing action head latency with a negligible overhead.                        
+
+> Method NFE SR (%) Hit Rate (%) Latency (ms) Emb. VLM Key proj. Cache lookup Action head Total Base Model 10 72 -24.22 22.23 --60.38 (1.00 ×) 106.83 (1.00 ×)
+> ActionCache 170 84.6 24.24 22.26 0.18 0.18 14.90 ( 4.05 ×)61.76 ( 1.73 ×)Hit Rate=0.98
+> Approaching Grasping Placing
+> Hit Rate=0.78 Hit Rate=0.88
+
+Figure 7: Real-world trajectories and corresponding cache hit rates. The cache hit rate is high on average during the approaching and placing phases, while it drops during the grasping phase. The video can be found in the supplementary material. specific and difficult grasps, LFU prioritizes robust and highly reusable actions that are shared across tasks or episodes. Although LFU captures temporal locality less effectively than LRU, retaining task- or episode-agnostic highly reusable actions in the cache contributes greatly to the hit rate in those settings. Notably, the FIFO policy, which implicitly measures the probability of encountering a good starting point (specified by Thit ) of traditional warm-starting methods for temporal continuity, is no better than random replacement in a plug-and-play setting, suggesting a missed opportunity for caching. 
+
+4.5 Success Rate Comparison for Cache Key Source Table 3: Success rate (SR) com-parison for cache key source on VLABench. Using VLM output em-beddings as a cache key source out-performs the VLM input embeddings across various cache hit rates (HR).                       
+
+> Key Source HR (%) SR (%) 99.9 7.3±0.8
+> VLM-in 83.0 8.1±1.9
+> 30.0 19 .7±1.7
+> 99.8 34 .7±3.9
+> VLM-out 83.7 37 .2±3.2
+> 17.9 39 .7±3.1
+
+ActionCache utilizes output embeddings of a VLM as an action-relevant cache key source. To validate this design choice, we investigate how the source of cache keys impacts the overall success rate. As shown in Table 3, utilizing the VLM output embeddings significantly outperforms the VLM input counterpart by up to 29 .1% under roughly the same cache hit rate. This performance gap indicates that VLM outputs more effectively encode action-relevant multimodal context than VLM inputs. 
+
+4.6 Evaluation on Real-World 
+
+To validate the efficacy of ActionCache in real-world envi-ronment, we evaluate π0.5 on a pick-and-place task. 
+
+Success Rate and Inference Latency. The real-world trajectories are shown in Figure 7, and their statistical results are summarized in Table 4. ActionCache achieves a success rate comparable to the base model while speeding up the latency of the action head, improving the overall latency, and demonstrating the real-world efficacy of ActionCache. Table 4 also shows that ActionCache can be introduced with only a negligible overhead. Figure 7 illustrates that ActionCache maintains a high cache hit rate during the approaching and placing phases, whereas the hit rate remains low during grasping. This demonstrates that ActionCache effectively reuses common trajectories while allocating higher computational cost to more challenging phases like grasping the cube to ensure precise motion. 95 Conclusion 
+
+In this paper, we propose ActionCache, a plug-and-play external cache that accelerates action heads, a major bottleneck in flow-based VLA inference. ActionCache enables few- or even zero-step action generation by reusing past intermediate actions as an initialization of the iterative denoising process. Moreover, unlike prior warm-starting methods, ActionCache can exploit action reusability beyond the boundary of episodes and tasks, reframing warm starting from a local temporal-continuity heuristic into an output-level retrieval problem. Through experiments on VLABench and a real-world environment, we demonstrate that ActionCache can drastically improve the trade-off between success rate and latency compared to the base model and prior acceleration methods. 
+
+# References 
+
+[1] Shubham Agarwal, Subrata Mitra, Sarthak Chakraborty, Srikrishna Karanam, Koyel Mukherjee, and Shiv Kumar Saini. Approximate caching for efficiently serving text-to-image diffusion models. In USENIX Symposium on Networked Systems Design and Implementation . 2024. [2] L. A. Belady. A study of replacement algorithms for a virtual-storage computer. IBM Systems Journal . 1966. [3] Johan Bjorck, Fernando Castañeda, Nikita Cherniadev, Xingye Da, Runyu Ding, Linxi, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer Huang, Joel Jang, Zhenyu Jiang, Jan Kautz, Kaushil Kundalia, Lawrence Lao, Zhiqi Li, Zongyu Lin, Kevin Lin, Guilin Liu, Edith LLontop, Loic Magne, Ajay Mandlekar, Avnish Narayan, Soroush Nasiriany, Scott Reed, You Liang Tan, Guanzhi Wang, Zu Wang, Jing Wang, Qi Wang, Jiannan Xiang, Yuqi Xie, Yinzhen Xu, Zhenjia Xu, Seonghyeon Ye, Zhiding Yu, Ao Zhang, Hao Zhang, Yizhou Zhao, Ruijie Zheng, and Yuke Zhu. GR00T N1: An open foundation model for generalist humanoid robots. arXiv preprint arXiv:2503.14734 . 2025. [4] Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Hausman, brian ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky. 
+
+π0.5: A vision-language-action model with open-world generalization. In Conference on Robot Learning . 2025. [5] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. π0: A Vision-Language-Action Flow Model for General Robot Control. arXiv preprint arXiv:2410.24164 .2026. [6] James Bradbury, Roy Frostig, Peter Hawkins, Matthew James Johnson, Yash Katariya, Chris Leary, Dougal Maclaurin, George Necula, Adam Paszke, Jake VanderPlas, Skye Wanderman-Milne, and Qiao Zhang. JAX: composable transformations of Python+NumPy programs. 2018. [7] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman, Alexander Herzog, Jasmine Hsu, Julian Ibarz, Brian Ichter, Alex Irpan, Tomas Jackson, Sally Jesmonth, Nikhil J. Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Kuang-Huei Lee, Sergey Levine, Yao Lu, Utsav Malla, Deeksha Manjunath, Igor Mordatch, Ofir Nachum, Carolina Parada, Jodilyn Peralta, Emily Perez, Karl Pertsch, Jornell Quiambao, Kanishka Rao, Michael S. Ryoo, Grecia Salazar, Pannag R. Sanketi, Kevin Sayed, Jaspiar Singh, Sumedh Sontakke, Austin Stone, Clayton Tan, Huong T. Tran, Vincent Vanhoucke, Steve Vega, Quan Vuong, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe Yu, and Brianna Zitkovich. RT-1: Robotics transformer for real-world control at scale. In Robotics: Science and Systems . 2023. [8] Remi Cadene, Simon Alibert, Francesco Capuano, Michel Aractingi, Adil Zouitine, Pepijn Kooijmans, Jade Choghari, Martino Russi, Caroline Pascal, Steven Palma, Dana Aubakirova, Mustafa Shukor, Jess Moss, Alexander Soare, Quentin Lhoest, Quentin Gallouédec, and Thomas 10 Wolf. LeRobot: An open-source library for end-to-end robot learning. In International Conference on Learning Representations . 2026. [9] Haojun Chen, Minghao Liu, Chengdong Ma, Xiaojian Ma, Zailin Ma, Huimin Wu, Yuanpei Chen, Yifan Zhong, Mingzhi Wang, Qing Li, and Yaodong Yang. Falcon: Fast visuomotor policies via partial denoising. In International Conference on Machine Learning . 2025. [10] Cheng Chi, Siyuan Feng, Yilun Du, Zhenjia Xu, Eric Cousineau, Benjamin Burchfiel, and Shuran Song. Diffusion policy: Visuomotor policy learning via action diffusion. In Robotics: Science and Systems . 2023. [11] Yufei Duan, Hang Yin, and Danica Kragic. Real-time iteration scheme for diffusion policy. In 
+
+International Conference on Intelligent Robots and Systems . 2025. [12] Ankit Goyal, Hugo Hadfield, Xuning Yang, Valts Blukis, and Fabio Ramos. VLA-0: Building state-of-the-art vlas with zero modification. arXiv preprint arXiv:2510.13054 . 2025. [13] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. Advances in Neural Information Processing Systems . 2020. [14] Sigmund H Høeg, Yilun Du, and Olav Egeland. Fast Policy Synthesis with Variable Noise Diffusion Models. In International Conference on Robotics and Automation . 2025. [15] Kento Kawaharazuka, Jihoon Oh, Jun Yamada, Ingmar Posner, and Yuke Zhu. Vision-language-action models for robotics: A review towards real-world applications. IEEE Access . 2025. [16] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan P Foster, Pannag R Sanketi, Quan Vuong, Thomas Kollar, Ben-jamin Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey Levine, Percy Liang, and Chelsea Finn. OpenVLA: An open-source vision-language-action model. In Conference on Robot Learning .2024. [17] Jinhao Li, Yuxuan Cong, Yingqiao Wang, Hao Xia, Shan Huang, Yijia Zhang, Ningyi Xu, and Guohao Dai. STEP: Warm-started visuomotor policies with spatiotemporal consistency prediction. arXiv preprint arXiv:2602.08245 . 2026. [18] Ping Li, Trevor J. Hastie, and Kenneth W. Church. Very sparse random projections. In SIGKDD Conference on Knowledge Discovery and Data Mining . 2006. [19] Qixiu Li, Yaobo Liang, Zeyu Wang, Lin Luo, Xi Chen, Mozheng Liao, Fangyun Wei, Yu Deng, Sicheng Xu, Yizhong Zhang, Xiaofan Wang, Bei Liu, Jianlong Fu, Jianmin Bao, Dong Chen, Yuanchun Shi, Jiaolong Yang, and Baining Guo. CogACT: A foundational vision-language-action model for synergizing cognition and action in robotic manipulation. arXiv preprint arXiv:2411.19650 . 2024. [20] Xinghang Li, Minghuan Liu, Hanbo Zhang, Cunjun Yu, Jie Xu, Hongtao Wu, Chilam Cheang, Ya Jing, Weinan Zhang, Huaping Liu, Hang Li, and Tao Kong. Vision-language foundation models as effective robot imitators. In International Conference on Learning Representations .2024. [21] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matthew Le. Flow matching for generative modeling. In International Conference on Learning Representations .2023. [22] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, qiang liu, Yuke Zhu, and Peter Stone. LIBERO: Benchmarking knowledge transfer for lifelong robot learning. In Neural Information Processing Systems Datasets and Benchmarks Track . 2023. [23] Xinyin Ma, Gongfan Fang, and Xinchao Wang. DeepCache: Accelerating diffusion models for free. In Computer Vision and Pattern Recognition . 2024. [24] Yueen Ma, Zixing Song, Yuzheng Zhuang, Jianye Hao, and Irwin King. A survey on vision– language–action models for embodied AI. IEEE Transactions on Neural Networks and Learning Systems . 2026. [25] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, Alban Desmaison, Andreas Köpf, Edward Yang, Zach DeVito, Martin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. PyTorch: an imperative style, high-performance deep learning library. Advances in Neural Information Processing Systems. 2019. 11 [26] Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooijmans, Steven Palma, Adil Zouitine, Michel Aractingi, Caroline Pascal, Martino Russi, Andres Marafioti, Simon Alibert, Matthieu Cord, Thomas Wolf, and Remi Cadene. SmolVLA: A vision-language-action model for affordable and efficient robotics. arXiv preprint arXiv:2506.01844 . 2025. [27] Junjie Wen, Yichen Zhu, Jinming Li, Zhibin Tang, Chaomin Shen, and Feifei Feng. DexVLA: Vision-language model with plug-in diffusion expert for general robot control. arXiv preprint arXiv:2502.05855 . 2025. [28] Junjie Wen, Yichen Zhu, Jinming Li, Minjie Zhu, Zhibin Tang, Kun Wu, Zhiyuan Xu, Ning Liu, Ran Cheng, Chaomin Shen, Yaxin Peng, Feifei Feng, and Jian Tang. TinyVLA: Toward fast, data-efficient vision-language-action models for robotic manipulation. IEEE Robotics and Automation Letters . 2025. [29] Yuchen Xia, Divyam Sharma, Yichao Yuan, Souvik Kundu, and Nishil Talati. MoDM: Efficient serving for image generation via mixture-of-diffusion models. In International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 1 . 2025. [30] Ling Yang, Zhilong Zhang, Yang Song, Shenda Hong, Runsheng Xu, Yue Zhao, Wentao Zhang, Bin Cui, and Ming-Hsuan Yang. Diffusion models: A comprehensive survey of methods and applications. ACM Computing Surveys . 2023. [31] Yantai Yang, Yuhao Wang, Zichen Wen, Luo Zhongwei, Chang Zou, Zhipeng Zhang, Chuan Wen, and Linfeng Zhang. EfficientVLA: Training-free acceleration and compression for vision-language-action models. In Advances in Neural Information Processing Systems . 2025. [32] Jingyi Zhang, Jiaxing Huang, Sheng Jin, and Shijian Lu. Vision-language models for vision tasks: A survey. IEEE Transactions on Pattern Analysis and Machine Intelligence . 2024. [33] Shiduo Zhang, Zhe Xu, Peiju Liu, Xiaopeng Yu, Yuan Li, Qinghui Gao, Zhaoye Fei, Zhangyue Yin, Zuxuan Wu, Yu-Gang Jiang, and Xipeng Qiu. VLABench: A large-scale benchmark for language-conditioned robotics manipulation with long-horizon reasoning tasks. arXiv preprint arXiv:2412.18194 . 2024. [34] Wenyao Zhang, Hongsi Liu, Zekun Qi, Yunnan Wang, XinQiang Yu, Jiazhao Zhang, Runpei Dong, Jiawei He, He Wang, Zhizheng Zhang, Li Yi, Wenjun Zeng, and Xin Jin. DreamVLA: A vision-language-action model dreamed with comprehensive world knowledge. In Advances in Neural Information Processing Systems . 2025. [35] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin Wu, Paul Wohlhart, Stefan Welker, Ayzaan Wahid, Quan Vuong, Vincent Vanhoucke, Huong Tran, Radu Soricut, Anikait Singh, Jaspiar Singh, Pierre Sermanet, Pannag R Sanketi, Grecia Salazar, Michael S Ryoo, Krista Reymann, Kanishka Rao, Karl Pertsch, Igor Mordatch, Henryk Michalewski, Yao Lu, Sergey Levine, Lisa Lee, Tsang-Wei Edward Lee, Isabel Leal, Yuheng Kuang, Dmitry Kalashnikov, Ryan Julian, Nikhil J Joshi, Alex Irpan, brian ichter, Jasmine Hsu, Alexander Herzog, Karol Hausman, Keerthana Gopalakrishnan, Chuyuan Fu, Pete Florence, Chelsea Finn, Kumar Avinava Dubey, Danny Driess, Tianli Ding, Krzysztof Marcin Choromanski, Xi Chen, Yevgen Chebotar, Justice Carbajal, Noah Brown, Anthony Brohan, Montserrat Gonzalez Arenas, and Kehang Han. RT-2: Vision-language-action models transfer web knowledge to robotic control. In Conference on Robot Learning . 2023. 12 A Implementation Details 
+
+We utilized some publicly available model checkpoints for our experiments. We used 
+
+VLABench/pi05-primitive-10task 2 and lerobot/pi05_libero_finetuned_v044 3 for fine-tuned checkpoints. We directly applied them to the simulation experiments. We finetuned 
+
+nvidia/GR00T-N1.6-3B 4 on VLABench for the simulation experiments, using a dataset of 
+
+VLABench/vlabench_primitive_ft_lerobot 5. We finetuned this model for 100,000 training steps with global batch size of 640, using 8 H100 GPUs. We also finetuned lerobot/pi05_base 6
+
+for the real-world experiment. 
+
+Real-world training and evaluation settings. As depicted in Figure 8, we use an overhead and a wrist-mounted camera with a resolution of 480 ×640, resized to 224 ×224 before inputting them to the model. To construct the fine-tuning dataset, we systematically divide the predefined workspace into 100 distinct spatial regions, recording one successful demonstration per region to ensure compre-hensive spatial coverage. To further enhance the model’s robustness, we supplement this dataset with 20 additional episodes consisting of recovery trajectories from near-failure states. For the evaluation phase, we establish five predefined starting locations for the cube. In each testing episode, one of these locations is randomly selected, and slight spatial perturbations are applied to the initial placement to assess the model’s generalization capabilities. A trial is deemed successful if the robot successfully places the cube into the box within a strictly defined time limit. Along with the success rate, we measure the inference wall-clock time to accurately evaluate the latency-performance trade-off in a real-world setting. We implemented our evaluation code with PyTorch [25]. 
+
+Figure 8: Real-world experimental environment. We use 6-DoF SO-101 robotic arm with an overhead and wrist-mounted camera, a box and a white cube. 
+
+# B Results for LIBERO benchmark 
+
+LIBERO consists of four task suites (Spatial, Object, Goal and Long) which contain 10 tasks each. We evaluate the base π0.5 model on LIBERO benchmark and report success rates for each task suites at NFE = 1 and 10 . We evaluate on a total 200 episodes (50 episodes for each task suites) for each NFE settings. We set the action execution horizon to 50. As shown in Table 5, the baseline maintains a high success rate even at NFE = 1 . This result shows that simple tasks can be solved with very few denoising steps with flow-based VLA models. 
+
+# C Limitations 
+
+This paper has the following limitations: 1) The proposed framework is designed to reduce the inference latency of the action head in flow-based VLAs and achieves plug-and-play acceleration. However, improving the inference speed of the entire architecture remains for future work. Since our 
+
+> 2https://huggingface.co/VLABench/pi05-primitive-10task
+> 3https://huggingface.co/lerobot/pi05_libero_finetuned_v044
+> 4https://huggingface.co/nvidia/GR00T-N1.6-3B
+> 5https://huggingface.co/datasets/VLABench/vlabench_primitive_ft_lerobot
+> 6https://huggingface.co/lerobot/pi05_base
+
+13 Table 5: Success rate comparison of π0.5 baseline and ActionCache on LIBERO. Success rate of the baseline at NFE = 1 is comparable to that at NFE = 10 .                                  
+
+> Method NFE Success Rate (%) Latency Spatial Object Goal Libero-10 Avg. (ms) Base Model 10 96 94 90 80 90.0 61.5 192 90 92 82 89.0 6.7
+> ActionCache 194 96 96 66 88.0 12.1 088 98 96 54 84.0 10.4
+
+framework does not modify the VLM backbone, it could be combined with existing training-free acceleration techniques for VLMs, which may further reduce the end-to-end inference latency of the model. 2) This paper evaluates representative cache replacement policies, including LRU, LFU, and FIFO. However, further optimization of the replacement policy itself may lead to behavior closer to that of an oracle policy. We leave the design of more effective replacement policies for future work. 3) Our framework introduces several hyperparameters, and further optimization of these hyperparameters may improve the trade-off between accuracy and acceleration. We leave the design of effective hyperparameter optimization strategies for future work. 
+
+# D Impact Statements 
+
+This paper presents work aimed at advancing the field of Vision-Language-Action (VLA) models. A primary positive societal impact of this work is its potential to reduce the computational cost of VLA model inference, lowering energy consumption and improving the sustainability of deploying such models. However, improving the efficiency of VLA models may also accelerate their deployment in real-world environments, where unintended actions or failures could pose safety risks; thus, we emphasize that our approach should be deployed with careful evaluation. 14
