@@ -44,14 +44,14 @@
       <span class="dpr-home-dashboard-kicker">2026-06-29 ~ 2026-07-28</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 74 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 82 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>0</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>74</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>39</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>43</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-07-28 16:31:09 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-07-28 17:14:18 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -62,9 +62,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日74篇速读论文聚焦自动驾驶与视觉语言导航，三篇高分文章探索世界模型与动作规划。</p>
-<p>最值得关注世界模型在自动驾驶规划与视觉语言导航中的统一应用，以及密集具身思维链监督训练。</p>
-<p>后续可重点关注世界模型与具身推理结合方向，高分工作常引领趋势。</p>
+<p>今日共收录82篇论文，精读39篇，速读43篇，整体聚焦于世界模型与具身智能前沿。最值得关注的两大方向是：自动驾驶中世界模型引导的视觉-语言规划（LWDrive, 9.0分），以及机器人环境可迁移的位姿记忆与高频动作生成（OpenSPM, 9.0分）。建议优先精读这两篇高分论文，并配合速读《FutureNav》和《Self-Evolving World Models》，以系统理解世界模型在导航与智能体规划中的核心作用。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -73,12 +71,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">0 篇</strong>
+    <strong class="dpr-home-dashboard-count">39 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p class="dpr-home-dashboard-empty">今日暂无推荐。</p>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LWDrive: Layer-Wise World-Model-Guided Vision-Language Model Planning for Autonomous Driving">LWDrive: Layer-Wise World-Model-Guided Vision-Language Model Planning for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="OpenSPM: An Environment-Transferable Robotic Key Spatial Pose Memory and Closed-Loop High-Frequency Flow-Matching Action Generation Model">OpenSPM: An Environment-Transferable Robotic Key Spatial Pose Memory and Closed-Loop High-Frequency Flow-Matching Action Generation Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="OWMDrive: Causality-Aware End-to-End Autonomous Driving via 4D Occupancy World Model">OWMDrive: Causality-Aware End-to-End Autonomous Driving via 4D Occupancy World Model</span></li></ul>
   </div>
-
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ar <strong>39</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -86,12 +84,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">74 篇</strong>
+    <strong class="dpr-home-dashboard-count">43 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LWDrive: Layer-Wise World-Model-Guided Vision-Language Model Planning for Autonomous Driving">LWDrive: Layer-Wise World-Model-Guided Vision-Language Model Planning for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="FutureNav: Unified World-Action Modeling for Vision-and-Language Navigation">FutureNav: Unified World-Action Modeling for Vision-and-Language Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Training Vision-Language-Action Models with Dense Embodied Chain-of-Thought Supervision">Training Vision-Language-Action Models with Dense Embodied Chain-of-Thought Supervision</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="FutureNav: Unified World-Action Modeling for Vision-and-Language Navigation">FutureNav: Unified World-Action Modeling for Vision-and-Language Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Self-Evolving World Models for LLM Agent Planning">Self-Evolving World Models for LLM Agent Planning</span></li><li><span class="dpr-home-dashboard-paper-title" title="From World Models to World Action Models: A Concise Tutorial for Robotics">From World Models to World Action Models: A Concise Tutorial for Robotics</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ar <strong>74</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">ar <strong>43</strong></span></div>
 </section>
 </div>
 
