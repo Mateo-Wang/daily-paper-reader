@@ -1,0 +1,290 @@
+Title: Learning Adaptive Safety Margins for Visual Navigation
+
+URL Source: https://arxiv.org/pdf/2607.18200v1
+
+Published Time: Tue, 21 Jul 2026 02:13:55 GMT
+
+Number of Pages: 6
+
+Markdown Content:
+# Learning Adaptive Safety Margins for Visual Navigation 
+
+Junyi Hu 1,†, Shuaihang Yuan 1,†,‡, Geeta Chandra Raju Bethala 1, Anthony Tzes 1 and Yi Fang 1,∗
+
+Abstract — Robots in cluttered indoor spaces often fail not because they cannot generate collision-free paths, but because a fixed safety margin is mis-calibrated: conservative margins cause detours and timeouts, while permissive margins lead to near-boundary shortcuts under perception bias. Diffusion-based planners propose diverse trajectory candidates from egocentric RGB-D, yet reliable selection remains the bottleneck. We propose a context-conditioned safety critic that learns an adaptive clearance preference for ranking diffusion proposals, decomposed into three complementary terms: (i) a safety term with a clearance-budget penalty and a control-barrier-function residual for waypoint- and transition-wise safety, (ii) an effi-ciency term combining a smoothness penalty with a safety-gated detour-ratio penalty that avoids detours without incentivizing risky shortcuts, and (iii) a distance-constraint matching term that anchors the learned budget to realized ESDF clearances to prevent margin collapse. We train the critic with privileged ESDF geometry in simulation and distill it into a perception-only selector via a two-stage teacher–student procedure. On PointGoal navigation in HM3D and MP3D, including cross-dataset transfer, our method achieves the highest success rate (SR) and success weighted by path length (SPL) among strong diffusion, optimization, and RL baselines. Trained purely in simulation, it transfers to a Unitree G1 humanoid and navigates cluttered indoor scenes without task-specific tuning. 
+
+I. I NTRODUCTION 
+
+Mobile robots are increasingly deployed in human-centric indoor environments such as homes, hospitals, and labs, where success depends not only on geometric feasibility but on maintaining sufficient clearance while executing a trajectory. Crucially, the required clearance is context depen-dent: local clutter, maneuvering demands (e.g., sharp turns in narrow passages), and momentary perception reliability can make the same measured distance safe in one situation and risky in another. This is amplified in vision-based navigation, where depth and egomotion estimates vary with viewpoint, motion, and sensing artifacts, so minimum measured clear-ance is a noisy proxy for executability. As a result, hard selection rules with a globally fixed clearance threshold oscillate between two failure modes: overly conservative behavior in open areas (detours and timeouts) and brittle behavior in dense clutter (risky shortcuts under perception bias). Diffusion-based policies model multi-modal trajectory dis-tributions conditioned on observations, enabling diverse, fea-sible proposals and a practical generate–select paradigm [1]. However, the selector is often the bottleneck: many diffu-sion navigation pipelines still rank candidates using analytic critics with hand-tuned, globally fixed safety margins [2],     
+
+> 1New York University Abu Dhabi, UAE. †Equal contribution. ‡Project lead. ∗Corresponding author:
+
+yfang@nyu.edu  
+
+> Project page:
+
+junyi2005.github.io/safety-critic  
+
+> Fig. 1. Comparison between a fixed-margin critic and our adaptive safety critic. Fixed margins often lead to conservative detours or brittle near-boundary choices, while our critic learns a trajectory-dependent clearance budget for robust navigation in clutter.
+
+[3], which cannot be simultaneously conservative enough for tight clutter and permissive enough to avoid detours in open space. This motivates a selector whose notion of “safe distance” is learned and adapts its safety–efficiency trade-off to the current scene. In this work, we propose a context-conditioned safety critic for diffusion-based visual navigation that replaces fixed-margin ranking with a learnable clearance preference, structured into three complementary terms: (i) Safety : penal-izes clearance-budget violations and incorporates a control-barrier-function residual for transition-wise regularization; (ii) Efficiency : combines a smoothness penalty with a safety-gated detour-ratio penalty that discourages detours primarily when clearance is available; and (iii) Balance : a distance-constraint matching term that aligns the learned budget with realized clearances, preventing degenerate calibration. We train a teacher critic using ESDF-derived clearance super-vision and hard non-expert trajectories under matched start– goal conditions, then distill it into a student selector that predicts critic scores from egocentric RGB-D observations, enabling deployment without privileged geometry. We evaluate PointGoal navigation on HM3D and MP3D, arXiv:2607.18200v1 [cs.RO] 20 Jul 2026 in-domain and under cross-dataset transfer, where our method achieves the highest SR and SPL among strong dif-fusion, optimization-based, and reinforcement-learning base-lines. We further demonstrate sim-to-real transfer on a Uni-tree G1 humanoid in cluttered indoor scenes without task-specific tuning, and our ablations isolate the contribution of each critic component. II. R ELATED WORK 
+
+End-to-end visual navigation closes the perception–action loop by mapping egocentric observations to low-level actions or short-horizon motion segments, reducing latency and error propagation across perception, mapping, and planning. Large-scale simulators such as Habitat provide standardized embodied tasks, where deep RL agents (e.g., DD-PPO) set strong PointGoal baselines [4], and hybrid systems such as Active Neural SLAM add explicit spatial memory via learned mapping and hierarchical policies over a top-down map [5]. Recent generative decision-making models multi-modal distributions over action or trajectory sequences, providing a principled way to sample diverse candidates under condi-tioning [1], [6]. Beyond learned generators, iPlanner couples perception with a differentiable cost map and bi-level opti-mization to produce collision-free paths from a single depth measurement [7], and VLFM scores candidate frontiers with a pre-trained vision-language model for zero-shot navigation [8]. On the model-based side, geometry-driven local planning remains competitive when paired with high-quality distance fields such as Voxblox [9], while EGO-Planner performs real-time gradient-based replanning without explicit ESDF construction [10]. Despite their differences, these systems ultimately depend on a hand-crafted scoring rule—often a fixed clearance margin—to arbitrate among candidates, which can yield unsafe shortcuts under perception bias or overly conservative detours in clutter. III. M ETHODOLOGY 
+
+Task Formulation: Given RGB-D observations, the robot’s current pose pRt = ( x0, z 0, θ 0) ∈ R3, a goal pose pGt , and an obstacle set Qo, the objective is to compute a finite-horizon trajectory τt = {pj }Tj=0 that starts at p0 = pRt ,reaches pGt , and is collision-free. Let π(p) = (x, z ) be the 2D planar projection. We parameterize the trajectory by ego-motion offsets uj = (∆ xj , ∆zj , ∆θj ) for j = 1 , . . . , T 
+
+(lateral/longitudinal displacements and heading offset) in the initial egocentric frame anchored at pRt , and reconstruct poses by pj = p0 ⊕ uj . The task is to find {uj }Tj=1 such that each segment from pj−1 to pj avoids Qo while driving the robot from pRt to pGt .
+
+System Overview: Our policy follows a generate–select pipeline (Fig. 2): a diffusion generator produces diverse candidates from RGB-D observations and an optional goal token, and a learnable safety critic with context-dependent margins selects among them. The selector is trained with a two-stage teacher–student scheme (Sec. III-C), where ESDF is used only offline to supervise the teacher. 
+
+A. Diffusion Trajectory Generator 
+
+We follow the diffusion trajectory generation setup used in NavDP [2] and T-diff [3]. A shared transformer encoder consumes the RGB-D observations and an optional goal token to produce a compact context, and a diffusion head generates K trajectories ( K = 16 by default) without priv-ileged geometric inputs; diversity is obtained by sampling different noise seeds under the same denoiser and scheduler. During training, we optimize a conditional U-Net denoiser to predict injected Gaussian noise at randomly sampled diffusion steps under a DDPM scheduler [11] with a squared-cosine noise schedule, fusing normalized last-step action deltas with timestep, goal, and RGB-D embeddings under a causal target mask. Let βt ∈ (0 , 1) be the per-step noise rate, αt = 1 − βt, and ¯αt = Qts=1 αs with ¯α0 = 1 . We use stabilized SNR weighting computed from ¯αt,
+
+SNR( t) = ¯αt
+
+1 − ¯αt
+
+, wSNR (t) = min  SNR( t), τ SNR 
+
+,
+
+(1) where τSNR > 0 avoids over-weighting very early steps. The diffusion loss is 
+
+Ldiff = Et, x0,ϵ 
+
+h
+
+wSNR (t) ˆϵθ (xt, t | cond ) − ϵ 22
+
+i
+
+, (2) optimized with AdamW, cosine annealing, automatic mixed precision, and gradient norm clipping; ESDF is not used in training or inference of the generator. At inference, since the offsets (∆ xj , ∆zj , ∆θj ) are ex-pressed in the initial egocentric frame, a single rotation R(θ0)
+
+reconstructs world-frame waypoints, 
+
+θj = θ0 + ∆ θj ,
+
+xj
+
+zj
+
+
+
+=
+
+x0
+
+z0
+
+
+
++ R(θ0)
+
+∆xj
+
+∆zj
+
+
+
+. (3) Control commands are obtained from finite differences rj =(xj+1 − xj , z j+1 − zj , θ j+1 − θj ), wrapping the heading increment into (−π, π ] and computing speed and angular velocity from rj .
+
+B. Learnable Safety Critic 
+
+We use the collected trajectories in waypoint form 
+
+{(xj , z j , θ j )}Tj=0 to train the safety-critic value function, with the planar position π(pj ) = ( xj , z j ) queried in the ESDF as the key variable for scoring. Our safety critic is decomposed into three components in (10): a safety term 
+
+Vsafe , an efficiency term Vefficient , and a balancing term 
+
+Vbalance , detailed below. Rather than treating dmin ,j as a globally shared parameter, we use a context-conditioned margin head qη to predict a time-varying safety budget, 
+
+dmin ,j = dsafe + softplus  qη (fj ), (4) where dsafe = 0 .1 m is a fixed physical safety floor, and 
+
+fj is a lightweight context feature (local clearance dj , a finite-difference ESDF gradient magnitude, and normalized step index j/T ) fed to a 2-layer MLP qη . This guarantees 
+
+dmin ,j ≥ dsafe and makes the clearance budget trajectory-and geometry-dependent during teacher training. Fig. 2. Architecture of our system. During inference, the diffusion policy samples candidate trajectories from RGB-D observations and the goal. ESDF is used only offline to supervise the teacher during training, while the deployed selector runs without map building. We first train a learnable safety critic with ESDF-based supervision, then distill it into a selector with RGB-D observations and candidate trajectories input via teacher–student training. 
+
+Let dj = ESDF( π(pj )) be the distance between the j-th waypoint and the obstacle in ESDF, and let ∆2π(pj ) = 
+
+π(pj+1 ) − 2π(pj ) + π(pj−1) denote the discrete second difference used for the smoothness term. We define the safe set C = {p | h(p) ≥ 0} with barrier function h(p) = 
+
+d(p) − dsafe . For a discrete trajectory, the Control Barrier Function (CBF) residual is rcbf  
+
+> j
+
+= (1 −ρ)h(pj )−h(pj+1 ) for 
+
+j = 0 , . . . , T − 1, where ρ = 0 .1 controls conservativeness, and the CBF critic loss is 
+
+Lcbf (τ ) =  
+
+> T−1
+
+X
+
+> j=0
+
+rcbf 
+
+> j
+
+
+
+> +
+
+. (5) 
+
+Vsafe (τ ) = −
+
+> T
+
+X
+
+> j=0
+
+I dj < d min ,j 
+
+ − λcbf Lcbf (τ ). (6) The safety term Vsafe (τ ) encodes two complementary mech-anisms: the unsafe-count component penalizes violations of the learned budget dmin ,j at each waypoint, while the CBF critic loss enforces transition-wise safety-set invariance with respect to the fixed floor dsafe , so the critic prefers candidates that remain within a physically meaningful safety set while the budget adapts across contexts. The gated detour-ratio loss encourages efficiency without requiring explicit start-to-goal or geodesic shortest-path su-pervision. Let Lpath (τ ) = PTj=1 ∥π(pj )−π(pj−1)∥2 be the accumulated path length and Dchord (τ ) = ∥π(pT )−π(p0)∥2
+
+the start-to-endpoint chord length. We define the detour-ratio loss as a hinge on the relative redundancy of the candidate path length, 
+
+Ldetour (τ ) = 
+
+ Lpath (τ )
+
+Dchord (τ ) + ε − 1
+
+
+
+> +
+
+, (7) where ε > 0 is a small constant for numerical stability. To prevent the efficiency objective from incentivizing risky shortcuts in near-contact regions, we couple the detour-ratio penalty with a safety gate derived from ESDF clearance and the learnable budget, using the per-step gate weight wj =
+
+σ(κ (dj − dmin ,j )) , where σ(·) is the sigmoid and κ > 0
+
+controls sharpness. Aggregating these into a trajectory-level gate ¯w(τ ) = 1 
+
+> T+1
+
+PTj=0 wj gives the gated detour-ratio loss 
+
+Lgate detour (τ ) = ¯ w(τ ) Ldetour (τ ).
+
+Vefficient (τ ) = −β 
+
+> T−1
+
+X
+
+> j=1
+
+∆2π(pj ) 2 − μ Lgate detour (τ ). (8) The efficiency term Vefficient (τ ) combines a curvature-based smoothness penalty with the gated detour-ratio penalty, where ¯w(τ ) emphasizes the penalty when clearance stays above the budget and weakens it near the safety boundary. 
+
+Vbalance (τ ) = −ψ
+
+> T
+
+X
+
+> j=0
+
+(dj − dmin ,j )2 . (9) The balancing term Vbalance (τ ) couples the learned budget to the realized clearance and stabilizes the trade-off: dmin ,j is pulled toward the lower bound in tight corridors so feasible candidates are not rejected and increases in open areas, while reducing dmin ,j without increasing clearance lowers the score, preventing margin collapse. Overall, we define our safety-critic as: 
+
+Vours (τ ) = Vsafe (τ ) + Vefficient (τ ) + Vbalance (τ ). (10) We learn the unconstrained weight variables ˜w =[ ˜β, ˜λcbf , ˜μ, ˜ψ]⊤ and the margin head qη (·), enforcing non-negative penalty weights via the reparameterization w =softplus( ˜ w) with w = [ β, λ cbf , μ, ψ ]⊤. Since the data are collected in simulation with safe kinematic settings, velocity and acceleration already lie within safe ranges, so we add no CBF constraints on them. 
+
+C. Selector Training 
+
+The selector is trained in two stages: the first trains the safety critic as a teacher (learnable penalty weights and margin head) using ESDF-based supervision; the second trains the selector as a student to imitate the teacher for scoring and selection from RGB-D observations and can-didate trajectories, enabling deployment without privileged geometry. We collect a dataset of smooth paths and paired RGB-D observations from 3D scenes by sampling random endpoints, planning via A*, and applying cubic spline interpolation. Each trajectory contains over 80 waypoints; we extract five overlapping sliding windows per trajectory and resample each to T = 24 waypoints, and compute a high-resolution ESDF of the navigable space from the scene voxel map. Dur-ing teacher training, we also construct non-expert trajectories directly in the global ESDF space under matched start–goal configurations, providing continually refreshed challenging negatives without handcrafted disturbance rules. We denote the trajectory score in (10) by Vϕ(τ ). Since 
+
+Vϕ(τ ) is a sum of penalty-style terms and is non-positive by design, we introduce a nonnegative cost Cϕ(τ ) = −Vϕ(τ ) ≥
+
+0. To train the teacher in an adversarial classification form, we use an affine-calibrated discriminator head 
+
+Dϕ(τ ) = σ −a C ϕ(τ ) + b, (11) where σ(·) is the sigmoid, a = softplus(ˆ a) > 0 is a scale, and b is a calibration bias, equivalently Dϕ(τ ) =
+
+σ aV ϕ(τ ) + b. Let Dexp denote expert sub-trajectories ob-tained from A* planning and spline smoothing. For each, we generate ESDF-conditioned non-expert candidates from a proposal distribution q(τ | pRt , pGt , ESDF) that depends only on global geometry: we repeatedly run A* with randomized edge costs between the same start and goal, reject any path violating d < dsafe , and apply the same resampling to obtain length-T sequences. The adaptive margin sequence 
+
+{dmin ,j }Tj=0 is obtained by a single forward pass of qη ,without per-trajectory online optimization. The teacher is trained to assign larger discriminator probabilities to expert trajectories and smaller ones to non-expert trajectories using the logistic adversarial loss: 
+
+Lscr = −Eτ ∼D exp [log Dϕ(τ )] 
+
+− Eτ ∼q(· | pRt ,pGt ,ESDF) 
+
+log  1 − Dϕ(τ ) . (12) Instead of a hard-margin ranking loss, this learns a de-cision boundary between expert- and non-expert-like tra-jectories under matched start–goal contexts in the same ESDF, with gradients backpropagated to ϕ and calibration parameters a, b .After the first stage, we train the student selector to imitate the teacher. Each candidate is encoded as a token from its ego-motion offsets uj ; goal tokens are omitted, as the teacher’s efficiency term relies solely on trajectory geometry. Together with RGB-D observations, the selector predicts a score trained to regress the teacher scores by minimizing 
+
+Lsel = Eτ ∼D mix 
+
+h
+
+P (τ ) − stopgrad  Vϕ(τ ) 22
+
+i
+
+, (13) where P (·) is the selector prediction and Dmix mixes expert sub-trajectories from Dexp and diffusion-generated candidates sampled under the same RGB-D observations used at inference. At inference, the selector scores diffusion candidates from RGB-D observations and trajectory tokens without ESDF reconstruction and selects the most suitable trajectory. IV. E XPERIMENTS 
+
+A. Simulation Experiments 
+
+We benchmark PointGoal navigation on HM3D [12] and MP3D [13]. All methods use the same start–goal pair per episode with a 500-step timeout, and succeed once the agent reaches the goal within the standard PointGoal radius. We compare four baselines: NavDP [2] (diffusion generator with a fixed-constraint selector), iPlanner [7] (differentiable trajectory optimizer), ViPlanner [14] (learned visual mod-ule with a classical backbone), and PointNav [4] (end-to-end RL), matching action frequency, observation format, kinematic constraints, and termination rules. PointNav is trained in Habitat-Sim; NavDP and iPlanner are retrained on HM3D-converted data using official code. We evaluate HM3D →HM3D, MP3D →MP3D, and HM3D →MP3D with 300 episodes per policy and identical episode sets, reporting SR and SPL. The results are in Table I. On HM3D, our method achieves the best SR 0.783 (+7.3 
+
+over NavDP, +23.6 over PointNav) and the best SPL 0.611 ,indicating the learnable critic both avoids risky choices and favors efficient routes. On MP3D it again ranks first with SR 0.680 (+5.3 over NavDP) and SPL 0.523 ; SPL drops for all methods due to MP3D’s longer corridors and denser clutter, yet our learnable dmin adapts to these shifts while retaining the top SR. Under dataset transfer, our method remains strongest with SR 0.597 and SPL 0.465 (+7.4 /+11.6 
+
+over NavDP), preserving safer and more efficient navigation under domain shift. 
+
+B. Sensitivity to ESDF Construction and Inference Cost 
+
+At inference, our generator–selector policy runs purely on RGB-D observations and goal information, without ESDF reconstruction or map building; ESDFs are used only offline to supervise the teacher. We report (i) sensitivity to ESDF construction hyperparameters and (ii) per-step inference cost of the generator and selector versus candidate set size K,on HM3D following Sec. IV-A. Our default ESDF uses a 
+
+5.0 cm voxel size and 0.4 m truncation band; for each setting we retrain teacher and student. We time forward passes on a laptop GPU (NVIDIA RTX 4060), excluding environment stepping and rendering, averaging over 200 iterations after 50 warm-ups with torch.cuda.synchronize() around each timed region. Results are in Table II. TABLE I RESULTS FOR THREE SIMULATION TESTS .HM3D results MP3D results Cross-dataset transfer Method Successes SR ↑ SPL ↑ Successes SR ↑ SPL ↑ Successes SR ↑ SPL ↑                                                                                                              
+
+> NavDP 213/300 0.710 0.529 188/300 0.627 0.431 157/300 0.523 0.349 iPlanner 196/300 0.653 0.573 181/300 0.603 0.492 171/300 0.570 0.436 PointNav 164/300 0.547 0.406 117/300 0.390 0.251 102/300 0.340 0.216 ViPlanner 205/300 0.683 0.508 173/300 0.577 0.407 166/300 0.553 0.413
+> Ours 235/300 0.783 0.611 204/300 0.680 0.523 179/300 0.597 0.465
+> TABLE II ESDF SENSITIVITY (P ANEL A) AND PER -STEP INFERENCE EFFICIENCY WITH DIFFERENT K(P ANEL B) ON HM3D. Panel A: ESDF Sensitivity (Default in First Line). Voxel (cm) Trunc (m) SR( ↑)SPL( ↑)
+> 5.0 0.4 0.783 0.611 2.5 0.4 0.807 0.612 7.5 0.4 0.747 0.607 5.0 0.2 0.740 0.598 5.0 0.6 0.753 0.626 Panel B: Per-step Inference Cost (Default K=16 ).
+> KSR( ↑)SPL( ↑)Gen(ms/step) (↓)Sel(ms/step) (↓)
+> 80.717 0.601 38 ( ±2)16 ( ±2)16 0.783 0.611 56 ( ±2)21 ( ±2)32 0.790 0.620 94 ( ±2)28 ( ±2)TABLE III REAL -WORLD POINT GOAL RESULTS WITH 10 EPISODES PER SCENE .Method Corridor (easy) Apartment (medium) Lab (hard) NavDP 10/10 (1.0) 9/10 (0.9) 6/10 (0.6) ViPlanner 9/10 (0.9) 6/10 (0.6) 4/10 (0.4) PointNav 5/10 (0.5) 5/10 (0.5) 0/10 (0.0) EGO-Planner 5/10 (0.5) 4/10 (0.4) 1/10 (0.1)
+> Ours 10/10 (1.0) 10/10 (1.0) 8/10 (0.8)
+
+C. Real-World Experiments 
+
+We deploy our policy on a Unitree G1 humanoid with an Intel RealSense D435i RGB-D camera, without task-specific tuning, across three settings of increasing difficulty: an easy corridor with wide aisles, a medium apartment with tight doorways, and a hard cluttered laboratory with narrow passages and irregular obstacles. In each we run 10 episodes with targets sampled in reachable free space, counting success within the standard radius under a fixed timeout. We compare the same baselines, replacing iPlanner with EGO-Planner [10], deployable without training. Results are in Table III. Across these scenes the policy reliably reaches targets while respecting local kinematics. For qualitative inspection, we back-project the highest- and lowest-scored trajectories onto the current image with a blue-to-red colorbar for low-to-high critic score (Fig. 3). In all three environments, including the cluttered laboratory, our policy maintains stable progress and consistent safety margins, showing the learned critic generalizes across scene difficulty.  
+
+> Fig. 3. Real world test result visualization. We project two trajectories with the highest score and the lowest score to the robot first-person perspective. The color from blue to red represents the score from low to high, which also means from dangerous to safe.
+
+To probe adaptability of the learned constraint, we use the Degree of Narrowness DoN = wrobot /w min , where wrobot is the minimum safe width a robot can pass through and wmin 
+
+is the minimum passable space width; a larger DoN (closer to 
+
+1) indicates a narrower, harder condition. We construct two test points A and B where detours are impossible, so the only feasible outputs are short left/right shaking or stopping (Fig. 4). At DoN=0 .60 both methods pass. At DoN=0 .75 
+
+our policy still passes by tightening its learned constraint while keeping clearance above the budget, whereas NavDP with a fixed dmin =0 .5 m judges the corridor non-passable and stalls. At DoN=0 .90 neither passes: clearance falls below a safe envelope and our critic refuses to further relax 
+
+dmin , showing the learned margin balances adaptability with safety rather than shrinking below a physically meaningful floor. 
+
+D. Ablation: Safety-Critic Structure 
+
+We conduct four ablation tests on HM3D with 300 episodes and the same start–goal pairs across all runs, so behavior changes reflect the safety-critic structure rather than noise. All models share the same generator; only the critic differs. We remove one component from (10): Model A —remove the safety term (6); Model B —remove the efficiency term (8); Model C —remove the balancing term (9). Since all tests share the same 300 pairs, beyond Successes, SR, and SPL we report a success-set overlap metric quan-tifying how much one variant’s success set covers another (Table V): Overlap (X → Y ) = {episodes solved by both X and Y }{episodes solved by Y } .Fig. 4. A real world test with check points A and B, both of which have the DoN close to 0.75. NavDP’s policy failed in both check points while our policy successfully passes the cluttered obstacles. The left four photos are NavDP’s failed cases with the third-person perspectives and visualization of trajectories, and the right four are our success cases with the third-person perspectives and visualization of trajectories. TABLE IV ABLATION TESTS ON HM3D WITH 300 EPISODES .Model Successes SR ↑ SPL ↑
+
+removing Vsafe (A) 207/300 0.690 0.572 removing Vefficient (B) 212/300 0.707 0.468 removing Vbalance (C) 190/300 0.633 0.585 
+
+Ours 235/300 0.783 0.611 
+
+Removing Vefficient raises SR over removing Vsafe (0.690 to 0.707) but drops SPL to 0.468, as without an explicit efficiency objective the selector over-selects conservative detours and times out. Removing Vbalance shows the opposite trend (SR 0.633, SPL 0.585): more direct but more failure-prone selections in narrow areas, since the budget–clearance anchor is lost and miscalibration distorts the gate and re-maining penalties. Removing Vsafe (SR 0.690, SPL 0.572) retains the gate and coupling but lacks explicit pointwise and transition-wise safety regularization, making it vulnerable in tight near-contact regimes. The full model achieves the best SR 0.783 and SPL 0.611: 
+
+Vsafe filters risky proposals, Vefficient reduces detour-driven timeouts under a safety-aware gate, and Vbalance stabilizes the budget so higher scores reflect real clearance gains. The overlap confirms ours covers 197 of A’s 207 successes and adds 38 new ones, while C’s lower overlap marks a distinct, efficiency-seeking subset that is less reliable under clutter. All three terms are thus required for a well-calibrated selector. V. C ONCLUSION 
+
+We introduced a generate–select framework that replaces fixed margins with a learnable, context-conditioned safety critic fusing safety and efficiency in balance. Across sim-ulation and real-world tests it achieves the highest SR and SPL, and transfers from pure simulation to a real humanoid in cluttered indoor scenes without task-specific tuning. Ab-lations confirm each critic term contributes to a favorable safety–efficiency trade-off and consistent gains over fixed-threshold baselines. 
+
+TABLE V SUCCESS -SET OVERLAP .OVERLAP (X → Y ) = {EPISODES SOLVED BY BOTH X AND Y }{EPISODES SOLVED BY Y } .
+
+Model Overlap w/ A ↑ Overlap w/ Ours ↑
+
+removing Vsafe (A) — 197 /235 = 0 .838 
+
+removing Vefficient (B) 167 /207 = 0 .821 180 /235 = 0 .766 
+
+removing Vbalance (C) 147 /207 = 0 .720 161 /235 = 0 .685 
+
+Ours 197 /207 = 0 .952 —
+
+ACKNOWLEDGMENT Authors appreciate the support provided by the NYUAD Center for Artificial Intelligence and Robotics (CAIR), funded by Tamkeen under the NYUAD Research Institute Award CG010. REFERENCES [1] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song, “Diffusion policy: Visuomotor policy learning via action diffusion,” in Proceedings of Robotics: Science and Systems (RSS) ,2023. [2] W. Cai, J. Peng, Y. Yang, Y. Zhang, M. Wei, H. Wang, Y. Chen, T. Wang, and J. Pang, “Navdp: Learning sim-to-real navigation dif-fusion policy with privileged information guidance,” arXiv preprint arXiv:2505.08712 , 2025. [3] S. Jiang, X. Qin, X. Song, X. Yu, and S. Zhang, “Trajectory diffu-sion for objectgoal navigation,” in Advances in Neural Information Processing Systems (NeurIPS) , 2024. [4] E. Wijmans, A. Kadian, A. Morcos, S. Lee, I. Essa, D. Parikh, M. Savva, and D. Batra, “Dd-ppo: Learning near-perfect pointgoal navigators from 2.5 billion frames,” in International Conference on Learning Representations (ICLR) , 2020. [5] D. S. Chaplot, D. Gandhi, S. Gupta, A. Gupta, and R. Salakhutdinov, “Learning to explore using active neural slam,” in International Conference on Learning Representations (ICLR) , 2020. [6] S. Huang, Z. Wang, P. Li, B. Jia, T. Liu, Y. Zhu, W. Liang, and S.-C. Zhu, “Diffusion-based generation, optimization, and planning in 3d scenes,” in Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2023. [7] F. Yang, C. Wang, C. Cadena, and M. Hutter, “iplanner: Imperative path planning,” in Robotics: Science and Systems (RSS) , 2023. [8] N. Yokoyama, S. Ha, D. Batra, J. Wang, and B. Bucher, “Vlfm: Vision-language frontier maps for zero-shot semantic navigation,” in 2024 IEEE International Conference on Robotics and Automation (ICRA) .IEEE, 2024, pp. 42–48. [9] H. Oleynikova, Z. Taylor, M. Fehr, R. Siegwart, and J. Nieto, “Voxblox: Incremental 3d euclidean signed distance fields for on-board MAV planning,” in IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2017. [10] X. Zhou, Z. Wang, H. Ye, C. Xu, and F. Gao, “Ego-planner: An esdf-free gradient-based local planner for quadrotors,” IEEE Robotics and Automation Letters , vol. 6, no. 2, pp. 478–485, 2021. [11] J. Ho, A. Jain, and P. Abbeel, “Denoising diffusion probabilistic models,” in Advances in Neural Information Processing Systems (NeurIPS) , vol. 33, 2020, pp. 6840–6851. [12] S. K. Ramakrishnan, A. Gokaslan, E. Wijmans, O. Maksymets, A. Clegg, J. M. Turner, E. Undersander, W. Galuba, A. Westbury, A. X. Chang, M. Savva, Y. Zhao, and D. Batra, “Habitat-matterport 3d dataset (HM3d): 1000 large-scale 3d environments for embodied AI,” in Thirty-fifth Conference on Neural Information Processing Systems Datasets and Benchmarks Track , 2021. [13] A. Chang, A. Dai, T. Funkhouser, M. Halber, M. Niessner, M. Savva, S. Song, A. Zeng, and Y. Zhang, “Matterport3d: Learning from RGB-D data in indoor environments,” in 2017 International Conference on 3D Vision (3DV) , 2017, pp. 667–676. [14] P. Roth, J. Nubert, F. Yang, M. Mittal, and M. Hutter, “Viplanner: Visual semantic imperative learning for local navigation,” in 2024 IEEE International Conference on Robotics and Automation (ICRA) .IEEE, 2024, pp. 5243–5249.
