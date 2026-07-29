@@ -340,10 +340,43 @@ window.PrivateDiscussionChat = (function () {
             <div style="text-align:center; color:#999">暂无讨论，输入你的想法开始对话（仅保存在本机）</div>
         </div>
         <div class="input-area">
+          <button
+            id="chat-copy-context-btn"
+            class="chat-copy-context-btn"
+            type="button"
+            title="复制网页解读、原论文抽取全文和本论文已有问答"
+          >复制上下文</button>
           <textarea id="user-input" rows="3" placeholder="针对这篇论文提问，仅自己可见..."></textarea>
           <div class="chat-input-actions">
-            <button id="chat-questions-toggle-btn" class="chat-questions-toggle-btn" type="button" title="最近提问">🕘</button>
-            <button id="send-btn">发送</button>
+            <div id="chat-model-picker" class="chat-model-picker">
+              <button
+                id="chat-model-picker-btn"
+                class="chat-model-picker-btn"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                <span class="chat-model-picker-kicker">Model</span>
+                <span id="chat-model-picker-label" class="chat-model-picker-label">选择模型</span>
+                <span class="chat-model-picker-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <div
+                id="chat-model-picker-menu"
+                class="chat-model-picker-menu"
+                role="listbox"
+                aria-label="选择 Chat 模型"
+              ></div>
+              <select
+                id="chat-llm-model-select"
+                class="chat-model-select"
+                aria-hidden="true"
+                tabindex="-1"
+              ></select>
+            </div>
+            <div class="chat-input-submit-actions">
+              <button id="chat-questions-toggle-btn" class="chat-questions-toggle-btn" type="button" title="最近提问">🕘</button>
+              <button id="send-btn">发送</button>
+            </div>
           </div>
         </div>
         <div id="chat-questions-panel" class="chat-questions-panel" style="display:none"></div>
@@ -378,37 +411,6 @@ window.PrivateDiscussionChat = (function () {
                 <div id="chat-quick-run-conference-msg" class="chat-quick-run-msg"></div>
               </div>
             </div>
-          </div>
-          <button
-            id="chat-copy-context-btn"
-            class="chat-copy-context-btn"
-            type="button"
-            title="复制网页解读、原论文抽取全文和本论文已有问答"
-          >复制上下文</button>
-          <div id="chat-model-picker" class="chat-model-picker">
-            <button
-              id="chat-model-picker-btn"
-              class="chat-model-picker-btn"
-              type="button"
-              aria-haspopup="listbox"
-              aria-expanded="false"
-            >
-              <span class="chat-model-picker-kicker">Model</span>
-              <span id="chat-model-picker-label" class="chat-model-picker-label">选择模型</span>
-              <span class="chat-model-picker-chevron" aria-hidden="true">⌄</span>
-            </button>
-            <div
-              id="chat-model-picker-menu"
-              class="chat-model-picker-menu"
-              role="listbox"
-              aria-label="选择 Chat 模型"
-            ></div>
-            <select
-              id="chat-llm-model-select"
-              class="chat-model-select"
-              aria-hidden="true"
-              tabindex="-1"
-            ></select>
           </div>
           <span id="chat-status" class="chat-status"></span>
         </div>

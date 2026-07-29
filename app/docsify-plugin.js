@@ -3365,10 +3365,10 @@ window.$docsify = {
         lines.push(`<span aria-hidden="true">·</span><span>${escapeHtml(dateText)}</span></div>`);
         lines.push('<div class="paper-title-row paper-hero-title-row">');
         if (titleZh || titleEn) {
-          lines.push(`<h1 class="paper-title-zh${titleZh ? '' : ' paper-title-only'}">${escapeHtml(titleZh || titleEn)}</h1>`);
+          lines.push(`<h1 class="paper-title-en paper-title-primary${titleEn ? '' : ' paper-title-only'}">${escapeHtml(titleEn || titleZh)}</h1>`);
         }
         if (titleZh && titleEn) {
-          lines.push(`<p class="paper-title-en">${escapeHtml(titleEn)}</p>`);
+          lines.push(`<p class="paper-title-zh paper-title-subtitle">${escapeHtml(titleZh)}</p>`);
         }
         lines.push('</div>');
         lines.push('<div class="paper-hero-actions">');
@@ -3399,9 +3399,6 @@ window.$docsify = {
         if (meta.evidence) {
           lines.push(`<p><strong>推荐理由</strong>: ${escapeHtml(meta.evidence)}</p>`);
         }
-        if (meta.tldr) {
-          lines.push(`<p><strong>概述</strong>: ${escapeHtml(meta.tldr)}</p>`);
-        }
         lines.push('</div>');
 
         // 右侧：基本信息
@@ -3425,6 +3422,12 @@ window.$docsify = {
         if (meta.motivation || meta.method || meta.result || meta.conclusion) {
           lines.push('<div class="paper-glance-section">');
           lines.push('<div class="paper-section-heading"><span>Quick Read</span><h2>速览</h2></div>');
+          if (meta.tldr) {
+            lines.push('<div class="paper-glance-summary">');
+            lines.push('<div class="paper-glance-summary-label">全文概括</div>');
+            lines.push(`<div class="paper-glance-summary-content">${escapeHtml(meta.tldr)}</div>`);
+            lines.push('</div>');
+          }
           lines.push('<div class="paper-glance-row">');
 
           lines.push('<div class="paper-glance-col">');
