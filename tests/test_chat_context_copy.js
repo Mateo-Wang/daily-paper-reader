@@ -16,8 +16,9 @@ assert.match(css, /\.chat-copy-context-btn\s*\{[\s\S]*pointer-events:\s*auto/i, 
 const chatUi = chat.slice(chat.indexOf('const renderChatUI ='), chat.indexOf('const QUICK_RUN_CONFERENCES ='));
 assert.ok(chatUi.indexOf('id="chat-copy-context-btn"') < chatUi.indexOf('id="user-input"'), 'copy button should be rendered in the input box before the textarea');
 assert.ok(chatUi.indexOf('id="chat-model-picker"') < chatUi.indexOf('id="chat-questions-toggle-btn"'), 'model picker should be placed before the lower-right send controls');
-assert.match(css, /#paper-chat-container \.input-area \.chat-copy-context-btn\s*\{[\s\S]*position:\s*absolute[\s\S]*top:\s*12px[\s\S]*right:\s*16px/i, 'copy button should sit at the input box upper-right corner');
-assert.match(css, /#paper-chat-container \.chat-input-actions\s*\{[\s\S]*justify-content:\s*space-between/i, 'model picker and send controls should occupy opposite sides of the input footer');
+assert.match(css, /#paper-chat-container \.input-area > \.chat-copy-context-btn\s*\{[\s\S]*position:\s*absolute[\s\S]*top:\s*16px[\s\S]*right:\s*20px/i, 'copy button should sit at the input box upper-right corner');
+assert.match(css, /#paper-chat-container \.input-area \.chat-model-picker\s*\{[\s\S]*position:\s*absolute[\s\S]*left:\s*0[\s\S]*bottom:\s*0/i, 'model picker should sit at the input box lower-left corner');
+assert.match(css, /#paper-chat-container \.chat-input-submit-actions\s*\{[\s\S]*position:\s*absolute[\s\S]*right:\s*0[\s\S]*bottom:\s*0/i, 'send controls should remain anchored at the lower-right corner');
 assert.match(css, /#paper-chat-container #send-btn\s*\{[\s\S]*flex:\s*0 0 auto[\s\S]*white-space:\s*nowrap/i, 'send button should never collapse in the compact mobile input footer');
 
 console.log('chat context copy tests passed');

@@ -106,8 +106,8 @@ async function testProjectAssetsPreferLocalOnCdnHosts() {
   ]);
   const hrefs = appended.map((el) => el.href || el.src || '');
 
-  assert.ok(hrefs.includes('app/app.css'));
-  assert.ok(hrefs.includes('app/dpr-sidebar.js'));
+  assert.ok(hrefs.some((href) => href.startsWith('app/app.css?v=')));
+  assert.ok(hrefs.some((href) => href.startsWith('app/dpr-sidebar.js?v=')));
   assert.ok(hrefs.includes('https://cdn.zwwen.online/app/vendor/docsify/4/lib/themes/vue.css'));
   assert.ok(hrefs.includes('https://cdn.zwwen.online/app/vendor/docsify/4/lib/docsify.min.js'));
 }
@@ -119,7 +119,7 @@ async function testExplicitCdnBaseStillUsesVendorCdnOnly() {
   ], { DPR_CDN_BASE: 'https://assets.example.test' });
   const srcs = appended.map((el) => el.href || el.src || '');
 
-  assert.ok(srcs.includes('app/dpr-sidebar.js'));
+  assert.ok(srcs.some((src) => src.startsWith('app/dpr-sidebar.js?v=')));
   assert.ok(srcs.includes('https://assets.example.test/app/vendor/docsify/4/lib/docsify.min.js'));
 }
 
@@ -143,8 +143,8 @@ async function testLatestIsRejectedAsAppAssetVersion() {
   ], { DPR_APP_ASSET_VERSION: 'latest' });
   const urls = appended.map((el) => el.href || el.src || '');
 
-  assert.ok(urls.includes('app/app.css'));
-  assert.ok(urls.includes('app/dpr-sidebar.js'));
+  assert.ok(urls.some((url) => url.startsWith('app/app.css?v=')));
+  assert.ok(urls.some((url) => url.startsWith('app/dpr-sidebar.js?v=')));
 }
 
 async function testJsonAssetsArePrefetchedWithAssetBatch() {
@@ -155,7 +155,7 @@ async function testJsonAssetsArePrefetchedWithAssetBatch() {
   const urls = appended.map((el) => el.href || el.src || '');
 
   assert.ok(!urls.includes('app/conference-stats.json'));
-  assert.deepEqual(appended.fetches.map((item) => item.url), ['app/conference-stats.json']);
+  assert.deepEqual(appended.fetches.map((item) => item.url), ['app/conference-stats.json?v=20260730-paper-layout-2']);
   assert.equal(appended.fetches[0].options.cache, 'force-cache');
   assert.ok(appended.jsonPromises['app/conference-stats.json']);
 }

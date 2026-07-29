@@ -14,7 +14,9 @@ assert.ok(plugin.includes('data-obsidian-connect'), 'Obsidian folder picker must
 assert.ok(plugin.includes('data-obsidian-import'), 'Obsidian import must remain available');
 assert.ok(plugin.includes('class="paper-section-heading"><span>Quick Read</span><h2>速览</h2>'), 'quick read should have an explicit first section heading');
 assert.ok(plugin.includes('class="paper-glance-summary-label">全文概括'), 'TLDR should render as the full-width quick-read summary card');
-assert.ok(!plugin.includes('<strong>概述</strong>'), 'the old duplicate overview row should be removed from metadata');
+assert.ok(plugin.includes('<strong>概述</strong>'), 'the metadata overview row should remain available');
+assert.ok(plugin.includes('extractQuickReadTldr'), 'full summary should use the detailed TLDR from the source quick-read section');
+assert.ok(plugin.includes('stripLegacyQuickReadSection'), 'legacy Markdown quick-read content should be removed after rendering the new cards');
 assert.ok(plugin.includes("if (root.querySelector('.paper-hero'))"), 'hero pages should skip the legacy duplicate title bar');
 
 assert.match(css, /body\.dpr-paper-page \.paper-glance-row\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/, 'desktop quick read should use a roomy 2×2 grid');

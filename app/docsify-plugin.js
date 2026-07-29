@@ -280,6 +280,43 @@ window.$docsify = {
         };
       };
 
+      // 正文中的「速览」有比 front matter 更完整的 TLDR。新版页面把它放进
+      // 「全文概括」卡片中，因此无需再渲染一份旧版 Markdown 速览。
+      const extractQuickReadTldr = (rawContent) => {
+        const section = splitRawSectionByTitle(String(rawContent || ''), (title) => {
+          const text = normalizeTextForMeta(title)
+            .replace(/^\s*#{1,6}\s*/, '')
+            .trim()
+            .toLowerCase();
+          return text === '速览' || text === 'quick read';
+        });
+        if (!section) return '';
+        const match = section.match(
+          /(?:^|\n)\s*(?:[-*]\s*)?\*\*(?:tl;?dr)\*\*\s*[：:]\s*([\s\S]*?)(?=\n\s*(?:\\\s*)?(?:\n\s*)?(?:[-*]\s*)?\*\*(?:motivation|method|result|conclusion)\*\*\s*[：:]|$)/i,
+        );
+        return match
+          ? normalizeTextForMeta(match[1]).replace(/\\\s*$/gm, '').trim()
+          : '';
+      };
+
+      const stripLegacyQuickReadSection = (body) => {
+        const lines = String(body || '').split('\n');
+        const start = lines.findIndex((line) =>
+          /^\s*#{1,6}\s*(?:速览|quick\s+read)\s*#*\s*$/i.test(line),
+        );
+        if (start === -1) return body;
+        let end = lines.length;
+        for (let index = start + 1; index < lines.length; index += 1) {
+          if (/^\s*(?:#{1,6}\s+|---\s*$)/.test(lines[index])) {
+            end = index;
+            break;
+          }
+        }
+        return [...lines.slice(0, start), ...lines.slice(end)]
+          .join('\n')
+          .replace(/\n{3,}/g, '\n\n');
+      };
+
       const collectPaperBodySections = (sectionEl) => {
         if (!sectionEl || !sectionEl.children) return [];
 
@@ -3399,6 +3436,9 @@ window.$docsify = {
         if (meta.evidence) {
           lines.push(`<p><strong>推荐理由</strong>: ${escapeHtml(meta.evidence)}</p>`);
         }
+        if (meta.tldr) {
+          lines.push(`<p><strong>概述</strong>: ${escapeHtml(meta.tldr)}</p>`);
+        }
         lines.push('</div>');
 
         // 右侧：基本信息
@@ -3425,7 +3465,7 @@ window.$docsify = {
           if (meta.tldr) {
             lines.push('<div class="paper-glance-summary">');
             lines.push('<div class="paper-glance-summary-label">全文概括</div>');
-            lines.push(`<div class="paper-glance-summary-content">${escapeHtml(meta.tldr)}</div>`);
+            lines.push(`<div class="paper-glance-summary-content">${escapeHtml(meta.full_tldr || meta.tldr)}</div>`);
             lines.push('</div>');
           }
           lines.push('<div class="paper-glance-row">');
@@ -3487,8 +3527,12 @@ window.$docsify = {
 
         // 生成论文页面 HTML + 正文
         // ★ 保护正文中的 LaTeX 公式不被 marked 破坏
-        const paperHtml = renderPaperFromMeta(meta);
-        return paperHtml + protectLatex(body);
+        const fullTldr = extractQuickReadTldr(content);
+        const paperHtml = renderPaperFromMeta({
+          ...meta,
+          full_tldr: fullTldr || meta.tldr,
+        });
+        return paperHtml + protectLatex(stripLegacyQuickReadSection(body));
       });
 
       const refreshDeferredPageEnhancements = () => {
