@@ -3290,6 +3290,8 @@ window.$docsify = {
                 const result = await writeObsidianNoteWithoutOverwrite(directory, note);
                 if (result.status === 'exists') {
                   setObsidianStatus(root, `笔记已存在：${note.folderName}/${result.fileName}（未覆盖）`, 'neutral');
+                } else if (result.status === 'updated') {
+                  setObsidianStatus(root, `已追加 ${result.addedBlocks} 个新分节：${note.folderName}/${result.fileName}`, 'success');
                 } else {
                   setObsidianStatus(root, `已保存：${note.folderName}/${result.fileName}`, 'success');
                 }

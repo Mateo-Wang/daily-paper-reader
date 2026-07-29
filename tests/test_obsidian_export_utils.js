@@ -56,7 +56,7 @@ function testMatchedTagAndDrivingFallbackChooseExpectedFolder() {
   );
 }
 
-function testNoteContainsMetadataAndOnlyAbstractSections() {
+function testNoteContainsMetadataAndAllPaperSections() {
   const note = buildObsidianNote({
     paperId: '202607/28/2607.12345v1-example',
     pageMd: samplePageMarkdown,
@@ -73,7 +73,8 @@ function testNoteContainsMetadataAndOnlyAbstractSections() {
   assert.match(note.markdown, /## 概述\n\n这是一个简短概述。/);
   assert.match(note.markdown, /## 摘要\n\n中文摘要。/);
   assert.match(note.markdown, /## Abstract\n\nEnglish abstract。?/);
-  assert.ok(!note.markdown.includes('不应被当作摘要导出。'));
+  assert.match(note.markdown, /## 论文详细总结\n\n不应被当作摘要导出。/);
+  assert.ok(note.markdown.includes('<!-- dpr-source-block:'));
 }
 
 function testCollisionFileKeepsTitleAndAddsStablePaperId() {
@@ -104,10 +105,18 @@ const createMemoryDirectory = (initialFiles = {}) => {
             async text() { return content; },
           };
         },
-        async createWritable() {
-          let next = '';
+        async createWritable(options = {}) {
+          let next = options.keepExistingData ? files.get(name) || '' : '';
           return {
-            async write(content) { next = String(content); },
+            async write(content) {
+              if (content && typeof content === 'object' && content.type === 'write') {
+                const position = Number(content.position) || 0;
+                const data = String(content.data || '');
+                next = next.slice(0, position) + data + next.slice(position + data.length);
+                return;
+              }
+              next = String(content);
+            },
             async close() { files.set(name, next); },
           };
         },
@@ -140,11 +149,38 @@ async function testWriterNeverOverwritesAndUsesStableCollisionName() {
   assert.equal(directory.files.get('Same Paper.md'), samePaper);
 }
 
+async function testWriterAppendsOnlyNewDetailedSections() {
+  const initial = buildObsidianNote({
+    paperId: 'paper-with-detail',
+    pageMd: `${samplePageMarkdown}\n## 技术细节\n\n第一版技术细节。`,
+    pageUrl: 'https://example.test/paper',
+    generatedAt: '2026-07-29T00:00:00.000Z',
+  });
+  const directory = createMemoryDirectory({ 'Detailed Paper.md': initial.markdown });
+  const refreshed = buildObsidianNote({
+    paperId: 'paper-with-detail',
+    pageMd: `${samplePageMarkdown}\n## 技术细节\n\n第一版技术细节。\n\n## 新实验\n\n新增实验结果。`,
+    pageUrl: 'https://example.test/paper',
+    generatedAt: '2026-07-30T00:00:00.000Z',
+  });
+  refreshed.fileName = 'Detailed Paper.md';
+  const updated = await writeNoteWithoutOverwrite(directory, refreshed);
+  const afterFirstUpdate = directory.files.get('Detailed Paper.md');
+  assert.deepEqual(updated, { status: 'updated', fileName: 'Detailed Paper.md', addedBlocks: 1 });
+  assert.match(afterFirstUpdate, /## 新实验\n\n新增实验结果。/);
+  assert.equal((afterFirstUpdate.match(/## 新实验/g) || []).length, 1);
+
+  const unchanged = await writeNoteWithoutOverwrite(directory, refreshed);
+  assert.deepEqual(unchanged, { status: 'exists', fileName: 'Detailed Paper.md' });
+  assert.equal(directory.files.get('Detailed Paper.md'), afterFirstUpdate);
+}
+
 testFilenameIsCrossPlatformSafe();
 testMatchedTagAndDrivingFallbackChooseExpectedFolder();
-testNoteContainsMetadataAndOnlyAbstractSections();
+testNoteContainsMetadataAndAllPaperSections();
 testCollisionFileKeepsTitleAndAddsStablePaperId();
 testWriterNeverOverwritesAndUsesStableCollisionName()
+  .then(testWriterAppendsOnlyNewDetailedSections)
   .then(() => console.log('obsidian export utility tests passed'))
   .catch((error) => {
     console.error(error);

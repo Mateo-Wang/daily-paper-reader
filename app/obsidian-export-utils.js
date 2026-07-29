@@ -142,6 +142,65 @@
     return match ? match[1].replace(/\.pdf$/i, '') : '';
   };
 
+  const normalizeMarkdownForComparison = (value) => normalizeText(value)
+    .replace(/<!--\s*dpr-source-(?:block|update):[^>]*-->/g, '')
+    .replace(/^\s*---\s*$/gm, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const hashText = (value) => {
+    let hash = 0x811c9dc5;
+    const text = String(value || '');
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  };
+
+  // Keep complete sections together: a later newly-added section can be appended without
+  // replacing existing notes. H4+ subsections stay with their closest H1/H2/H3 parent.
+  const splitSourceBlocks = (body) => {
+    const lines = normalizeText(body).split('\n');
+    const blocks = [];
+    let current = [];
+    const flush = () => {
+      const markdown = normalizeText(current.join('\n'))
+        .replace(/^\s*---\s*$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      if (markdown) {
+        const comparable = normalizeMarkdownForComparison(markdown);
+        blocks.push({
+          id: hashText(comparable),
+          markdown,
+          comparable,
+        });
+      }
+      current = [];
+    };
+    lines.forEach((line) => {
+      const heading = line.match(/^(#{1,3})\s+\S/);
+      if (heading && current.length) flush();
+      current.push(line);
+    });
+    flush();
+    return blocks;
+  };
+
+  const sourceBlockMarker = (block) => `<!-- dpr-source-block:${block.id} -->`;
+
+  const renderSourceBlocks = (blocks) => blocks
+    .map((block) => `${sourceBlockMarker(block)}\n${block.markdown}`)
+    .join('\n\n');
+
+  const isSourceBlockAlreadyInNote = (noteText, block) => {
+    const text = String(noteText || '');
+    return text.includes(sourceBlockMarker(block))
+      || normalizeMarkdownForComparison(text).includes(block.comparable);
+  };
+
   const buildObsidianNote = ({ paperId, pageMd, pageUrl, generatedAt }) => {
     const parsed = stripFrontMatter(pageMd || '');
     const meta = parsed.meta || {};
@@ -149,8 +208,7 @@
     const titleZh = normalizeText(meta.title_zh);
     const tags = asStringArray(meta.tags);
     const folder = resolveFolder(meta);
-    const abstract = extractSection(parsed.body, ['abstract']) || normalizeText(meta.abstract_en);
-    const chineseAbstract = extractSection(parsed.body, ['摘要']);
+    const sourceBlocks = splitSourceBlocks(parsed.body);
     const generated = normalizeText(generatedAt) || new Date().toISOString();
     const fileName = `${sanitizeFileName(title, paperId)}.md`;
     const obsidianTags = ['paper', 'daily-paper-reader', folder.name]
@@ -179,8 +237,7 @@
     if (titleZh && titleZh !== title) lines.push('', `> ${titleZh}`);
     lines.push('', '## 推荐理由', '', markdownValue(meta.evidence) || '—');
     lines.push('', '## 概述', '', markdownValue(meta.tldr) || '—');
-    if (chineseAbstract) lines.push('', '## 摘要', '', chineseAbstract);
-    if (abstract) lines.push('', '## Abstract', '', abstract);
+    if (sourceBlocks.length) lines.push('', renderSourceBlocks(sourceBlocks));
     lines.push('', '## 链接', '');
     if (meta.pdf) lines.push(`- [PDF](${normalizeText(meta.pdf)})`);
     if (pageUrl) lines.push(`- [Daily Paper Reader](${normalizeText(pageUrl)})`);
@@ -192,6 +249,7 @@
       sourceTag: folder.sourceTag,
       fileName,
       paperId: normalizeText(paperId),
+      sourceBlocks,
       markdown: lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n',
     };
   };
@@ -222,6 +280,25 @@
     return String(text || '').includes(marker);
   };
 
+  const buildAppendMarkdown = (existingText, note) => {
+    const sourceBlocks = Array.isArray(note && note.sourceBlocks) ? note.sourceBlocks : [];
+    const newBlocks = sourceBlocks.filter((block) => !isSourceBlockAlreadyInNote(existingText, block));
+    if (!newBlocks.length) return { markdown: '', addedBlocks: 0 };
+    return {
+      markdown: `\n\n<!-- dpr-source-update:${new Date().toISOString()} -->\n\n${renderSourceBlocks(newBlocks)}\n`,
+      addedBlocks: newBlocks.length,
+    };
+  };
+
+  const appendToExistingFile = async (fileHandle, file, markdown) => {
+    const writable = await fileHandle.createWritable({ keepExistingData: true });
+    try {
+      await writable.write({ type: 'write', position: file.size, data: markdown });
+    } finally {
+      await writable.close();
+    }
+  };
+
   // Create a note only when no existing note uses that file name. Existing notes are never
   // replaced: the same paper reports `exists`, while another paper gets a stable suffix.
   const writeNoteWithoutOverwrite = async (directory, note) => {
@@ -230,6 +307,11 @@
       const existing = await readExistingFile(directory, candidate);
       if (existing) {
         if (belongsToPaper(existing.text, note.paperId)) {
+          const append = buildAppendMarkdown(existing.text, note);
+          if (append.markdown) {
+            await appendToExistingFile(existing.handle, await existing.handle.getFile(), append.markdown);
+            return { status: 'updated', fileName: candidate, addedBlocks: append.addedBlocks };
+          }
           return { status: 'exists', fileName: candidate };
         }
         const collisionBase = makeCollisionFileName(note.fileName, note.paperId);
@@ -267,6 +349,7 @@
     resolveFolder,
     sanitizeFileName,
     extractSection,
+    splitSourceBlocks,
     buildObsidianNote,
     makeCollisionFileName,
     writeNoteWithoutOverwrite,

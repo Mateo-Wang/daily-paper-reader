@@ -58,6 +58,9 @@ function testObsidianExportRowUsesExplicitDirectoryPermissionAndSafeWrite() {
   assert.ok(js.includes("getDirectoryHandle(note.folderName, { create: true })"), 'the paper tag folder should be created inside the selected root');
   assert.ok(js.includes('writeObsidianNoteWithoutOverwrite'), 'exports should use the non-overwriting writer');
   assert.ok(obsidianUtils.includes('dpr_paper_id:'), 'existing notes should be identified by a stable paper id');
+  assert.ok(obsidianUtils.includes('splitSourceBlocks'), 'full paper sections should be preserved for Obsidian export');
+  assert.ok(obsidianUtils.includes("status: 'updated'"), 're-import should append newly added source sections');
+  assert.ok(js.includes('已追加 ${result.addedBlocks} 个新分节'), 'the UI should confirm incremental note updates');
   assert.ok(/\.paper-meta-obsidian-row\s*{[^}]*align-items:\s*center/i.test(css), 'Obsidian action row should align its controls');
   assert.ok(/\.dpr-obsidian-status\s*{[^}]*overflow-wrap:\s*anywhere/i.test(css), 'long export paths should remain readable on narrow screens');
 }
