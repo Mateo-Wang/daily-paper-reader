@@ -217,6 +217,122 @@ window.PrivateDiscussionChat = (function () {
     }
   };
 
+  const fetchPaperContextFile = async (paperId, extension) => {
+    if (!paperId || !extension) return '';
+    try {
+      const response = await fetch(`docs/${paperId}.${extension}`);
+      if (!response.ok) return '';
+      return (await response.text()).trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const getFallbackPageContext = () => {
+    const section = document.querySelector('.markdown-section');
+    if (!section) return '';
+    const clone = section.cloneNode(true);
+    clone.querySelector('#paper-chat-container')?.remove();
+    return (clone.innerText || '').trim();
+  };
+
+  // 与聊天请求一致：优先使用从 PDF 抽取出的全文；文件缺失时才回退到页面正文。
+  const loadPaperTextContext = async (paperId) => {
+    const paperText = await fetchPaperContextFile(paperId, 'txt');
+    return paperText || getFallbackPageContext();
+  };
+
+  const formatChatHistoryForContext = (history) => {
+    const messages = Array.isArray(history) ? history : [];
+    return messages
+      .filter((message) => message && (message.role === 'user' || message.role === 'ai'))
+      .map((message) => {
+        const speaker = message.role === 'ai' ? '助手' : '我';
+        return `### ${speaker}${message.time ? `（${message.time}）` : ''}\n${message.content || ''}`;
+      })
+      .join('\n\n');
+  };
+
+  const buildPaperClipboardContext = async (paperId) => {
+    const [pageMarkdown, paperText, history] = await Promise.all([
+      fetchPaperContextFile(paperId, 'md'),
+      loadPaperTextContext(paperId),
+      loadChatHistory(paperId),
+    ]);
+    const blocks = [
+      '# 论文讨论上下文',
+      `- 页面链接：${window.location.href}`,
+      `- 论文标识：${paperId || '未知'}`,
+      '',
+      '请基于以下材料回答我随后提出的问题。若原论文抽取文本与网页解读存在差异，请优先以原论文抽取文本为依据；无法确认时请明确说明。',
+    ];
+
+    if (pageMarkdown) {
+      blocks.push('## Daily Paper Reader 网页解读（含推荐理由、概述与精读内容）', pageMarkdown);
+    }
+    if (paperText) {
+      blocks.push('## 原论文抽取全文（由 PDF 转为纯文本，可能含公式、图表或排版噪声）', paperText);
+    }
+
+    const formattedHistory = formatChatHistoryForContext(history);
+    if (formattedHistory) {
+      blocks.push('## 本论文已有问答记录', formattedHistory);
+    }
+
+    blocks.push('## 我接下来想追问的问题', '（请在这里填写你的问题）');
+    return blocks.join('\n\n').trim();
+  };
+
+  const writeClipboardText = async (text) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+    if (!copied) throw new Error('浏览器拒绝访问剪贴板');
+  };
+
+  const copyPaperContext = async (paperId) => {
+    const button = document.getElementById('chat-copy-context-btn');
+    const statusEl = document.getElementById('chat-status');
+    if (button) {
+      button.disabled = true;
+      button.textContent = '正在整理…';
+    }
+    if (statusEl) {
+      statusEl.textContent = '正在整理论文上下文…';
+      statusEl.style.color = '#666';
+    }
+
+    try {
+      const context = await buildPaperClipboardContext(paperId);
+      if (!context) throw new Error('未找到可复制的论文上下文');
+      await writeClipboardText(context);
+      if (statusEl) {
+        statusEl.textContent = `已复制完整上下文（${Math.ceil(context.length / 1000)}k 字符），可直接粘贴到 GPT。`;
+        statusEl.style.color = '#2f855a';
+      }
+    } catch (error) {
+      if (statusEl) {
+        statusEl.textContent = `复制失败：${error?.message || '请检查浏览器剪贴板权限后重试。'}`;
+        statusEl.style.color = '#c00';
+      }
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = '复制上下文';
+      }
+    }
+  };
+
   const renderChatUI = () => {
     return `
       <div id="paper-chat-container">
@@ -263,6 +379,12 @@ window.PrivateDiscussionChat = (function () {
               </div>
             </div>
           </div>
+          <button
+            id="chat-copy-context-btn"
+            class="chat-copy-context-btn"
+            type="button"
+            title="复制网页解读、原论文抽取全文和本论文已有问答"
+          >复制上下文</button>
           <div id="chat-model-picker" class="chat-model-picker">
             <button
               id="chat-model-picker-btn"
@@ -842,42 +964,7 @@ window.PrivateDiscussionChat = (function () {
       return;
     }
 
-    // 优先使用与后端一致的 .txt 抽取全文作为上下文（不截断）
-    if (paperId) {
-      try {
-        const txtUrl = `docs/${paperId}.txt`;
-        const resp = await fetch(txtUrl);
-        if (resp.ok) {
-          const txt = await resp.text();
-          if (txt && txt.trim()) {
-            paperContent = txt;
-            const snippet = txt.slice(0, 50).replace(/\s+/g, ' ');
-            console.log(
-              `[DPR DEBUG] paper_txt_content (${paperId}): '${snippet}'`,
-            );
-          } else {
-            console.log(
-              `[DPR DEBUG] paper_txt_content (${paperId}): <empty or whitespace>`,
-            );
-          }
-        } else {
-          console.log(
-            `[DPR DEBUG] paper_txt_content (${paperId}): <http ${resp.status}>`,
-          );
-        }
-      } catch {
-        console.log(
-          `[DPR DEBUG] paper_txt_content (${paperId}): <fetch failed>`,
-        );
-      }
-    }
-
-    // 回退策略：如果 .txt 不存在，就用页面正文纯文本
-    if (!paperContent) {
-      paperContent =
-        (document.querySelector('.markdown-section') || {}).innerText ||
-        '';
-    }
+    paperContent = await loadPaperTextContext(paperId);
 
     if (!question) return;
 
@@ -1557,6 +1644,7 @@ window.PrivateDiscussionChat = (function () {
     bindQuestionsPanelEventsOnce();
 
     const sendBtnEl = document.getElementById('send-btn');
+    const copyContextBtn = document.getElementById('chat-copy-context-btn');
     const inputEl = document.getElementById('user-input');
     const statusEl = document.getElementById('chat-status');
     const modelSelect = document.getElementById('chat-llm-model-select');
@@ -1582,6 +1670,13 @@ window.PrivateDiscussionChat = (function () {
     }
     fillQuickRunOptions(chatQuickRunYearSelect, chatQuickRunConferenceSelect);
     bindChatModelPickerOnce();
+
+    if (copyContextBtn && !copyContextBtn._boundCopyContext) {
+      copyContextBtn._boundCopyContext = true;
+      copyContextBtn.addEventListener('click', () => {
+        copyPaperContext(paperId);
+      });
+    }
 
     const inGuestMode =
       window.DPR_ACCESS_MODE === 'guest' || window.DPR_ACCESS_MODE === 'locked';
