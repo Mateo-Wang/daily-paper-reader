@@ -3239,7 +3239,8 @@ window.$docsify = {
               setObsidianControlsBusy(root, true);
               try {
                 const handle = await window.showDirectoryPicker({
-                  id: 'daily-paper-reader-obsidian-paper',
+                  // Chrome/Edge restrict this stable picker id to 32 characters.
+                  id: 'dpr-obsidian-paper',
                   mode: 'readwrite',
                   startIn: 'documents',
                 });

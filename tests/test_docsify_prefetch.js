@@ -54,7 +54,7 @@ function testObsidianExportRowUsesExplicitDirectoryPermissionAndSafeWrite() {
   assert.ok(js.includes('data-obsidian-connect'), 'the export row should let users choose a folder');
   assert.ok(js.includes('data-obsidian-import'), 'the export row should expose the import action');
   assert.ok(js.includes("mode: 'readwrite'"), 'directory selection should request read/write access');
-  assert.ok(js.includes("id: 'daily-paper-reader-obsidian-paper'"), 'directory permissions should use a stable browser picker id');
+  assert.ok(js.includes("id: 'dpr-obsidian-paper'"), 'directory permissions should use a stable browser picker id');
   assert.ok(js.includes("getDirectoryHandle(note.folderName, { create: true })"), 'the paper tag folder should be created inside the selected root');
   assert.ok(js.includes('writeObsidianNoteWithoutOverwrite'), 'exports should use the non-overwriting writer');
   assert.ok(obsidianUtils.includes('dpr_paper_id:'), 'existing notes should be identified by a stable paper id');
