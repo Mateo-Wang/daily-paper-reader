@@ -33,6 +33,7 @@ from daily_report_state import (
     merge_daily_state,
     save_daily_state,
 )
+from frontier_site import replace_frontier_home_module, upsert_frontier_sidebar
 
 try:
     from paper_figures import ensure_paper_media
@@ -2252,6 +2253,9 @@ def build_home_readme_content(
 ) -> str:
     notice_path, promo_path = ensure_home_module_files(docs_dir, home_template_dir)
     notice_md = _read_module_markdown(notice_path)
+    # The weekly frontier module is data-driven.  Keeping this replacement here
+    # means a later daily run cannot overwrite the AI-frontier card.
+    notice_md = replace_frontier_home_module(notice_md, docs_dir)
     promo_md = _read_module_markdown(promo_path)
     latest_report_md = build_latest_report_section(
         date_str=date_str,
@@ -3079,10 +3083,14 @@ def main() -> None:
             date_label=effective_label,
             replace_existing=True,
         )
+        # update_sidebar writes the daily section from scratch; re-inject the
+        # independent frontier section after it so both navigations survive.
+        upsert_frontier_sidebar(docs_dir)
         log_substep("6.5", "更新侧边栏", "END")
     else:
         log_substep("6.5", "更新侧边栏", "SKIP")
         log("[INFO] 本次无推荐论文，不写入 Sidebar 日期目录。")
+        upsert_frontier_sidebar(docs_dir)
 
     log_substep("6.6", "生成可下载元数据索引（JSON）", "START")
     try:

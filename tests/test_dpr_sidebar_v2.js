@@ -140,6 +140,13 @@ const sampleSidebar = `
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/202606/23/paper-d" data-sidebar-item="{&quot;title&quot;:&quot;Paper D&quot;,&quot;score&quot;:&quot;9.0&quot;,&quot;tags&quot;:[{&quot;kind&quot;:&quot;query&quot;,&quot;label&quot;:&quot;rl&quot;}]}">Fallback D</a>
 `;
 
+const frontierSidebar = sampleSidebar + `
+
+* AI 前沿
+  * 2026 第 31 周 <!--dpr-frontier:2026-W31-->
+    * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/frontier/2026-W31/frontier-a" data-sidebar-item="{&quot;title&quot;:&quot;Frontier A&quot;,&quot;score&quot;:&quot;9.5&quot;,&quot;evidence&quot;:&quot;跨领域影响&quot;,&quot;tags&quot;:[{&quot;kind&quot;:&quot;query&quot;,&quot;label&quot;:&quot;frontier&quot;}]}">Fallback Frontier</a>
+`;
+
 const unorderedSidebar = `
 * <a class="dpr-sidebar-root-link" href="#/">首页</a>
 
@@ -1631,6 +1638,25 @@ function testExpandedAxisSectionSetSerializesCorrectly() {
   assert.ok(!js.includes('Array.prototype.slice.call(state.expandedAxisSections)'));
 }
 
+function testFrontierIsParsedSearchableAndCollapsedByDefault() {
+  const sidebar = loadSidebarForTest('#/frontier/2026-W31/frontier-a');
+  const tools = sidebar.__test;
+  const model = tools.parseSidebar(frontierSidebar);
+  assert.equal(model.frontier.length, 1);
+  assert.equal(model.frontier[0].key, '2026-W31');
+  assert.equal(model.frontier[0].papers[0].title, 'Frontier A');
+  const view = tools.buildFrontierView(model, { keyword: '跨领域', readMap: {} });
+  assert.equal(view.groups.length, 1);
+  assert.equal(view.groups[0].papers[0].title, 'Frontier A');
+  const html = tools.renderBodyHtml(model, {
+    search: '', filter: 'all', readMap: {},
+    expandedGroups: { daily: true, conference: true, frontier: false },
+    expandedAxisSections: new Set(),
+  });
+  assert.match(html, /AI 前沿/);
+  assert.match(html, /data-panel="frontier"/);
+}
+
 function testReadStatusNormalization() {
   const sidebar = loadSidebarForTest('#/202606/24/paper-a');
   const tools = sidebar.__test;
@@ -1646,6 +1672,7 @@ function testReadStatusNormalization() {
 }
 
 testSidebarNavigationContract();
+testFrontierIsParsedSearchableAndCollapsedByDefault();
 testAxisViewsForDailyAndConference();
 testHyphenatedConferenceMarkerParsing();
 testAxisTabsRenderUnreadCounts();

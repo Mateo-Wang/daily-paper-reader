@@ -233,6 +233,11 @@
         });
       });
     });
+    (m.frontier || []).forEach(function (week) {
+      (week.papers || []).forEach(function (paper) {
+        if (paper && paper.href) out.push(normalizeRouteHref(paper.href));
+      });
+    });
     return out.filter(Boolean);
   }
   function collectReportHrefsFromModel(model) {
@@ -482,6 +487,7 @@
   //   - 行 "  * <YYYY-MM-DD>  <!--dpr-date:YYYYMMDD-->" 是日期标题
   //   - 行 "    * 精读区 / 速读区" 是 section
   //   - 行 "      * <a class=dpr-sidebar-item-link href=#/.. data-sidebar-item={...}>..." 是论文
+  //   - 行 "* AI 前沿" 进入按周归档的跨领域精选分组
   //   - 行 "* Conference Papers" 进入会议分组
   //   - 行 "  * <CONF YYYY...>  <!--dpr-conference:xxx-->" 是会议块
   //   - 行 "    * <topic-label>  <!--dpr-conference-topic:...-->" 是 topic
@@ -493,6 +499,7 @@
       tutorial: null,
       daily: [],
       conferences: [],
+      frontier: [],
     };
 
     var i = 0;
@@ -625,6 +632,35 @@
         continue;
       }
 
+      if (/^\*\s*AI 前沿/.test(trimmed)) {
+        i += 1;
+        while (i < lines.length && !/^\*\s/.test(lines[i])) {
+          var weekLine = lines[i];
+          var frontierMarker = weekLine.match(/<!--dpr-frontier:([^>]+?)-->/);
+          if (/^\s{2}\*\s/.test(weekLine) && !/^\s{4}/.test(weekLine)) {
+            var weekLabel = weekLine.replace(/^\s{2}\*\s+/, '').replace(/<!--.*?-->/g, '').trim();
+            var week = { key: frontierMarker ? frontierMarker[1] : weekLabel, label: weekLabel || '历史精选', papers: [] };
+            i += 1;
+            while (i < lines.length) {
+              var frontierInner = lines[i];
+              if (/^\*\s/.test(frontierInner) || /^\s{0,3}\*\s/.test(frontierInner)) break;
+              if (/^\s{4}\*\s+<a/.test(frontierInner)) {
+                var frontierPaper = parsePaperLine(frontierInner);
+                if (frontierPaper) {
+                  frontierPaper.section = 'frontier';
+                  week.papers.push(frontierPaper);
+                }
+              }
+              i += 1;
+            }
+            if (week.papers.length) model.frontier.push(week);
+            continue;
+          }
+          i += 1;
+        }
+        continue;
+      }
+
       if (/^\*\s*Conference Papers/.test(trimmed)) {
         i += 1;
         while (i < lines.length && !/^\*\s/.test(lines[i])) {
@@ -702,6 +738,9 @@
       });
     });
     model.conferences = sortByTimestampDesc(model.conferences, conferenceSortTimestamp);
+    model.frontier.forEach(function (week) {
+      week.papers = sortPapersByTimeDesc(week.papers || [], week.key);
+    });
     // 日报按日期倒序；区间日报按结束日期归位，保证最近的区间报告不会从日历里“消失”。
     model.daily.sort(function (a, b) {
       var at = timestampFromDateLike(a && a.dateKey);
@@ -768,6 +807,16 @@
     return records;
   }
 
+  function flattenFrontierPapers(model) {
+    var records = [];
+    (model && model.frontier || []).forEach(function (week) {
+      (week.papers || []).forEach(function (paper) {
+        records.push({ weekKey: week.key, weekLabel: week.label || week.key || '历史精选', paper: paper });
+      });
+    });
+    return records;
+  }
+
   function paperSearchText(paper) {
     return [
       paper && paper.title || '',
@@ -797,6 +846,10 @@
       if (id && !paperReadStatus(record.paper, readMap || {})) ids.add(id);
     });
     flattenConferencePapers(model).forEach(function (record) {
+      var id = paperIdentity(record.paper);
+      if (id && !paperReadStatus(record.paper, readMap || {})) ids.add(id);
+    });
+    flattenFrontierPapers(model).forEach(function (record) {
       var id = paperIdentity(record.paper);
       if (id && !paperReadStatus(record.paper, readMap || {})) ids.add(id);
     });
@@ -833,13 +886,14 @@
 
   function filterModelForPaperResults(model, options) {
     var opts = resolveResultOptions(options);
-    if (!opts.keyword && !opts.unreadOnly) return model || { home: null, tutorial: null, daily: [], conferences: [] };
+    if (!opts.keyword && !opts.unreadOnly) return model || { home: null, tutorial: null, daily: [], conferences: [], frontier: [] };
     var source = model || {};
     var filtered = {
       home: source.home || null,
       tutorial: source.tutorial || null,
       daily: [],
       conferences: [],
+      frontier: [],
     };
     (source.daily || []).forEach(function (day) {
       var papers = (day.papers || []).filter(function (paper) {
@@ -874,6 +928,16 @@
       });
       nextConf.topics = topics;
       filtered.conferences.push(nextConf);
+    });
+    (source.frontier || []).forEach(function (week) {
+      var papers = (week.papers || []).filter(function (paper) {
+        return paperMatchesResult(paper, opts);
+      });
+      if (!papers.length) return;
+      var nextWeek = {};
+      Object.keys(week || {}).forEach(function (key) { nextWeek[key] = week[key]; });
+      nextWeek.papers = papers;
+      filtered.frontier.push(nextWeek);
     });
     return filtered;
   }
@@ -955,6 +1019,19 @@
     return buildResultView(groups, opts);
   }
 
+  function buildFrontierView(model, options) {
+    var opts = resolveResultOptions(options);
+    var groups = [];
+    (model && model.frontier || []).forEach(function (week) {
+      var papers = (week.papers || []).filter(function (paper) {
+        return paperMatchesResult(paper, opts);
+      });
+      if (!papers.length) return;
+      groups.push({ key: week.key, label: week.label || week.key || '历史精选', papers: papers });
+    });
+    return buildResultView(groups, opts);
+  }
+
   function countUnreadPapers(papers, readMap) {
     var unread = 0;
     (papers || []).forEach(function (paper) {
@@ -982,7 +1059,8 @@
   function computeModelReadSummary(model, readMap) {
     var dailyPapers = flattenDailyPapers(model).map(function (record) { return record.paper; });
     var conferencePapers = flattenConferencePapers(model).map(function (record) { return record.paper; });
-    var allPapers = dailyPapers.concat(conferencePapers);
+    var frontierPapers = flattenFrontierPapers(model).map(function (record) { return record.paper; });
+    var allPapers = dailyPapers.concat(conferencePapers, frontierPapers);
     var map = readMap || {};
     return {
       total: {
@@ -996,6 +1074,10 @@
       conference: {
         papers: conferencePapers.length,
         unread: countUnreadPapers(conferencePapers, map),
+      },
+      frontier: {
+        papers: frontierPapers.length,
+        unread: countUnreadPapers(frontierPapers, map),
       },
     };
   }
@@ -1012,6 +1094,15 @@
   function findConferenceRecordByHref(model, href) {
     var target = normalizeRouteHref(href);
     var records = flattenConferencePapers(model);
+    for (var i = 0; i < records.length; i++) {
+      if (normalizeRouteHref(records[i].paper && records[i].paper.href) === target) return records[i];
+    }
+    return null;
+  }
+
+  function findFrontierRecordByHref(model, href) {
+    var target = normalizeRouteHref(href);
+    var records = flattenFrontierPapers(model);
     for (var i = 0; i < records.length; i++) {
       if (normalizeRouteHref(records[i].paper && records[i].paper.href) === target) return records[i];
     }
@@ -1037,6 +1128,11 @@
       var confTags = paperTagLabels(conf.paper);
       if (confTags.indexOf(state.activeConferenceTag) === -1) state.activeConferenceTag = confTags[0] || '';
       return 'conference';
+    }
+    var frontier = findFrontierRecordByHref(state.model, href);
+    if (frontier) {
+      state.expandedGroups.frontier = true;
+      return 'frontier';
     }
     return '';
   }
@@ -1332,13 +1428,14 @@
     return new Set();
   }
   function defaultExpandedGroups() {
-    return { conference: true, daily: true };
+    return { conference: true, daily: true, frontier: false };
   }
   function normalizeExpandedGroups(groups) {
     if (!groups || typeof groups !== 'object') return defaultExpandedGroups();
     return {
       conference: groups.conference !== false,
       daily: groups.daily !== false,
+      frontier: groups.frontier === true,
     };
   }
   function collapseAxisSectionsForGroup(group) {
@@ -1351,7 +1448,7 @@
 
   // ---------- 状态 ----------
   var state = {
-    model: { home: null, tutorial: null, daily: [], conferences: [] },
+    model: { home: null, tutorial: null, daily: [], conferences: [], frontier: [] },
     rootEl: null,
     bodyEl: null,
     searchInput: null,
@@ -1623,6 +1720,7 @@
         ? buildConferenceTagView(viewModel, vs.activeConferenceTag, map)
         : buildConferenceConfView(viewModel, vs.activeConference, map);
     }
+    if (group === 'frontier') return buildFrontierView(viewModel, resultOptions);
     if (resultMode) return buildDailyResultView(model, resultOptions);
     return buildDailyCalendarTagView(viewModel, vs.activeDailyDate, vs.activeDailyTag, map, vs.activeDailyMonth);
   }
@@ -1644,6 +1742,20 @@
     };
     var viewModel = normalUnreadFilterMode ? filterModelForPaperResults(model, resultOptions) : model;
     var renderedGroups = 0;
+    if (viewModel && viewModel.frontier && viewModel.frontier.length) {
+      var frontierView = buildFrontierView(resultMode ? model : viewModel, resultOptions);
+      var frontierTotal = countPapersInView(frontierView);
+      if (!resultMode || frontierTotal > 0) {
+        renderedGroups += 1;
+        html.push(renderFrontierGroup({
+          expanded: vs.expandedGroups.frontier === true,
+          view: frontierView,
+          expandedAxisSections: vs.expandedAxisSections,
+          readMap: vs.readMap,
+          currentPaperId: resultOptions.currentPaperId,
+        }));
+      }
+    }
     if (viewModel && viewModel.conferences && viewModel.conferences.length) {
       var conferenceView = resultMode
         ? buildConferenceResultView(model, resultOptions)
@@ -1885,6 +1997,24 @@
       html.push(renderAxisTabs(opts.group, opts.mode, opts.view, opts.toggleLabel));
     }
     html.push(renderAxisContent(opts.group, axisMode, opts.view, opts.expandedAxisSections, opts.readMap, opts.currentPaperId));
+    html.push('  </div>');
+    html.push('</section>');
+    return html.join('');
+  }
+
+  function renderFrontierGroup(opts) {
+    var html = [];
+    var total = countPapersInView(opts.view);
+    var unread = countUnreadInView(opts.view, opts.readMap);
+    var expandedClass = opts.expanded ? ' is-expanded' : '';
+    html.push('<section class="dpr-sidebar-group dpr-sidebar-panel dpr-sidebar-group-frontier' + expandedClass + '" data-panel="frontier">');
+    html.push('  <button type="button" class="dpr-sidebar-panel-header" data-panel-toggle="frontier" aria-expanded="' + (opts.expanded ? 'true' : 'false') + '">');
+    html.push('    <span class="dpr-sidebar-day-arrow" aria-hidden="true">▸</span>');
+    html.push('    <span class="dpr-sidebar-panel-title">🧭 AI 前沿</span>');
+    html.push('    <span class="dpr-sidebar-day-counts"><span class="dpr-sidebar-day-unread">' + unread + '</span>/<span class="dpr-sidebar-day-total">' + total + '</span></span>');
+    html.push('  </button>');
+    html.push('  <div class="dpr-sidebar-panel-content">');
+    html.push(renderAxisContent('frontier', 'week', opts.view, opts.expandedAxisSections, opts.readMap, opts.currentPaperId));
     html.push('  </div>');
     html.push('</section>');
     return html.join('');
@@ -2601,6 +2731,8 @@
         buildConferenceConfView: buildConferenceConfView,
         buildConferenceTagView: buildConferenceTagView,
         buildConferenceResultView: buildConferenceResultView,
+        buildFrontierView: buildFrontierView,
+        flattenFrontierPapers: flattenFrontierPapers,
         buildAxisViewForMode: buildAxisViewForMode,
         computeModelReadSummary: computeModelReadSummary,
         axisSectionStateKey: axisSectionStateKey,
