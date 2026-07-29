@@ -4,6 +4,7 @@ const vm = require('vm');
 
 const js = fs.readFileSync('app/docsify-plugin.js', 'utf8');
 const css = fs.readFileSync('app/app.css', 'utf8');
+const obsidianUtils = fs.readFileSync('app/obsidian-export-utils.js', 'utf8');
 
 function extractConstFunction(name) {
   const start = js.indexOf(`const ${name} =`);
@@ -47,6 +48,21 @@ function testPaperPdfRowUsesPreviewAndDownloadActions() {
   assert.ok(/\.dpr-pdf-preview-page canvas\s*{[^}]*background:\s*#fff/i.test(css), 'PDF pages should render as visible canvas sheets');
   assert.ok(/\.markdown-section \.paper-meta-row \.dpr-pdf-download-link[\s\S]*?text-decoration:\s*none/i.test(css), 'download link should be styled as a compact action button');
 }
+
+function testObsidianExportRowUsesExplicitDirectoryPermissionAndSafeWrite() {
+  assert.ok(js.includes('data-obsidian-export-row'), 'paper pages should render an Obsidian export row');
+  assert.ok(js.includes('data-obsidian-connect'), 'the export row should let users choose a folder');
+  assert.ok(js.includes('data-obsidian-import'), 'the export row should expose the import action');
+  assert.ok(js.includes("mode: 'readwrite'"), 'directory selection should request read/write access');
+  assert.ok(js.includes("id: 'daily-paper-reader-obsidian-paper'"), 'directory permissions should use a stable browser picker id');
+  assert.ok(js.includes("getDirectoryHandle(note.folderName, { create: true })"), 'the paper tag folder should be created inside the selected root');
+  assert.ok(js.includes('writeObsidianNoteWithoutOverwrite'), 'exports should use the non-overwriting writer');
+  assert.ok(obsidianUtils.includes('dpr_paper_id:'), 'existing notes should be identified by a stable paper id');
+  assert.ok(/\.paper-meta-obsidian-row\s*{[^}]*align-items:\s*center/i.test(css), 'Obsidian action row should align its controls');
+  assert.ok(/\.dpr-obsidian-status\s*{[^}]*overflow-wrap:\s*anywhere/i.test(css), 'long export paths should remain readable on narrow screens');
+}
+
+testObsidianExportRowUsesExplicitDirectoryPermissionAndSafeWrite();
 
 testPaperPdfRowUsesPreviewAndDownloadActions();
 

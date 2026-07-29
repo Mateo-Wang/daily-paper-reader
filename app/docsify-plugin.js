@@ -1371,8 +1371,8 @@ window.$docsify = {
         if (safeMeta.date) parts.push(`- **Date**: ${String(safeMeta.date).trim()}`);
         if (safeMeta.pdf) parts.push(`- **PDF**: ${String(safeMeta.pdf).trim()}`);
         if (tags.length) parts.push(`- **Tags**: ${tags.join(', ')}`);
-        if (safeMeta.evidence) parts.push(`- **Evidence**: ${String(safeMeta.evidence).trim()}`);
-        if (safeMeta.tldr) parts.push(`- **TLDR**: ${String(safeMeta.tldr).trim()}`);
+        if (safeMeta.evidence) parts.push(`- **推荐理由**: ${String(safeMeta.evidence).trim()}`);
+        if (safeMeta.tldr) parts.push(`- **概述**: ${String(safeMeta.tldr).trim()}`);
         parts.push(`- **原始页面**: ${pageUrl}`);
         parts.push(`- **生成时间**: ${new Date().toISOString()}`);
         parts.push('');
@@ -3063,6 +3063,247 @@ window.$docsify = {
         });
       };
 
+      // ---------- Export paper notes to a user-authorized Obsidian folder ----------
+      // The File System Access API never receives a path from the site. The user selects
+      // the root folder in Chrome/Edge, and only that directory handle is persisted locally.
+      const OBSIDIAN_DB_NAME = 'dpr_obsidian_export_v1';
+      const OBSIDIAN_DB_STORE = 'settings';
+      const OBSIDIAN_ROOT_KEY = 'root-directory';
+      let obsidianRootHandle = null;
+      let obsidianRootLoadPromise = null;
+
+      const supportsObsidianDirectoryExport = () =>
+        typeof window.showDirectoryPicker === 'function' && typeof indexedDB !== 'undefined';
+
+      const openObsidianDb = () => new Promise((resolve) => {
+        try {
+          const request = indexedDB.open(OBSIDIAN_DB_NAME, 1);
+          request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains(OBSIDIAN_DB_STORE)) {
+              db.createObjectStore(OBSIDIAN_DB_STORE);
+            }
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => resolve(null);
+        } catch {
+          resolve(null);
+        }
+      });
+
+      const loadSavedObsidianRoot = async () => {
+        if (obsidianRootHandle) return obsidianRootHandle;
+        if (obsidianRootLoadPromise) return obsidianRootLoadPromise;
+        obsidianRootLoadPromise = (async () => {
+          const db = await openObsidianDb();
+          if (!db) return null;
+          try {
+            const handle = await new Promise((resolve) => {
+              const tx = db.transaction(OBSIDIAN_DB_STORE, 'readonly');
+              const request = tx.objectStore(OBSIDIAN_DB_STORE).get(OBSIDIAN_ROOT_KEY);
+              request.onsuccess = () => resolve(request.result || null);
+              request.onerror = () => resolve(null);
+            });
+            if (handle && typeof handle.getDirectoryHandle === 'function') {
+              obsidianRootHandle = handle;
+            }
+            return obsidianRootHandle;
+          } catch {
+            return null;
+          } finally {
+            try { db.close(); } catch { /* ignore */ }
+          }
+        })();
+        try {
+          return await obsidianRootLoadPromise;
+        } finally {
+          obsidianRootLoadPromise = null;
+        }
+      };
+
+      const saveObsidianRoot = async (handle) => {
+        const db = await openObsidianDb();
+        if (!db) return false;
+        try {
+          return await new Promise((resolve) => {
+            const tx = db.transaction(OBSIDIAN_DB_STORE, 'readwrite');
+            tx.objectStore(OBSIDIAN_DB_STORE).put(handle, OBSIDIAN_ROOT_KEY);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+            tx.onabort = () => resolve(false);
+          });
+        } catch {
+          return false;
+        } finally {
+          try { db.close(); } catch { /* ignore */ }
+        }
+      };
+
+      const getObsidianWritePermission = async (handle, requestPermission) => {
+        if (!handle || typeof handle.queryPermission !== 'function') return false;
+        try {
+          let state = await handle.queryPermission({ mode: 'readwrite' });
+          if (state !== 'granted' && requestPermission && typeof handle.requestPermission === 'function') {
+            state = await handle.requestPermission({ mode: 'readwrite' });
+          }
+          return state === 'granted';
+        } catch {
+          return false;
+        }
+      };
+
+      const setObsidianStatus = (root, message, tone) => {
+        const status = root && root.querySelector ? root.querySelector('[data-obsidian-status]') : null;
+        if (!status) return;
+        status.textContent = message || '';
+        status.dataset.tone = tone || 'neutral';
+      };
+
+      const setObsidianControlsBusy = (root, busy) => {
+        if (!root || !root.querySelectorAll) return;
+        root.querySelectorAll('[data-obsidian-connect], [data-obsidian-import]').forEach((button) => {
+          if (busy) {
+            button.dataset.dprDisabledBefore = button.disabled ? '1' : '0';
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
+            return;
+          }
+          button.disabled = button.dataset.dprDisabledBefore === '1';
+          delete button.dataset.dprDisabledBefore;
+          button.setAttribute('aria-busy', 'false');
+        });
+      };
+
+      const noteForCurrentPaper = () => {
+        const builder = window.DPRObsidianExportUtils
+          && typeof window.DPRObsidianExportUtils.buildObsidianNote === 'function'
+          ? window.DPRObsidianExportUtils.buildObsidianNote
+          : null;
+        if (!builder || !latestPaperRawMarkdown) return null;
+        return builder({
+          paperId: getPaperId(),
+          pageMd: latestPaperRawMarkdown,
+          pageUrl: window.location.href,
+          generatedAt: new Date().toISOString(),
+        });
+      };
+
+      const writeObsidianNoteWithoutOverwrite = async (directory, note) => {
+        const utils = window.DPRObsidianExportUtils || {};
+        if (typeof utils.writeNoteWithoutOverwrite !== 'function') {
+          throw new Error('Obsidian 导出模块未加载。');
+        }
+        return await utils.writeNoteWithoutOverwrite(directory, note);
+      };
+
+      const refreshObsidianExportState = async (root) => {
+        if (!root || !root.isConnected) return;
+        const connectButton = root.querySelector('[data-obsidian-connect]');
+        const importButton = root.querySelector('[data-obsidian-import]');
+        if (!supportsObsidianDirectoryExport()) {
+          if (connectButton) connectButton.hidden = true;
+          if (importButton) importButton.hidden = true;
+          setObsidianStatus(root, '当前浏览器不支持目录写入。', 'error');
+          return;
+        }
+        const handle = await loadSavedObsidianRoot();
+        if (!root.isConnected) return;
+        if (!handle) {
+          if (importButton) importButton.disabled = true;
+          setObsidianStatus(root, '先选择 Obsidian 的 Paper 根目录。', 'neutral');
+          return;
+        }
+        const granted = await getObsidianWritePermission(handle, false);
+        if (!root.isConnected) return;
+        if (connectButton) connectButton.textContent = '更换文件夹';
+        if (importButton) importButton.disabled = false;
+        setObsidianStatus(
+          root,
+          granted ? `已连接：${handle.name}` : `已选择：${handle.name}（导入时需要授权）`,
+          granted ? 'success' : 'neutral',
+        );
+      };
+
+      const bindObsidianExport = () => {
+        document.querySelectorAll('[data-obsidian-export-row]').forEach((root) => {
+          if (root.dataset.bound === '1') return;
+          root.dataset.bound = '1';
+          const connectButton = root.querySelector('[data-obsidian-connect]');
+          const importButton = root.querySelector('[data-obsidian-import]');
+          if (connectButton) {
+            connectButton.addEventListener('click', async () => {
+              if (!supportsObsidianDirectoryExport()) {
+                setObsidianStatus(root, '请使用最新版 Chrome 或 Edge。', 'error');
+                return;
+              }
+              setObsidianControlsBusy(root, true);
+              try {
+                const handle = await window.showDirectoryPicker({
+                  id: 'daily-paper-reader-obsidian-paper',
+                  mode: 'readwrite',
+                  startIn: 'documents',
+                });
+                obsidianRootHandle = handle;
+                const persisted = await saveObsidianRoot(handle);
+                const granted = await getObsidianWritePermission(handle, false);
+                setObsidianStatus(
+                  root,
+                  persisted
+                    ? `已连接：${handle.name}`
+                    : `已连接：${handle.name}（本次浏览有效）`,
+                  granted ? 'success' : 'neutral',
+                );
+                if (connectButton) connectButton.textContent = '更换文件夹';
+                if (importButton) importButton.disabled = false;
+              } catch (error) {
+                if (error && error.name === 'AbortError') {
+                  setObsidianStatus(root, '未选择文件夹。', 'neutral');
+                } else {
+                  setObsidianStatus(root, '无法连接该文件夹，请重新选择。', 'error');
+                  console.warn('[DPR] Obsidian folder selection failed:', error);
+                }
+              } finally {
+                setObsidianControlsBusy(root, false);
+              }
+            });
+          }
+          if (importButton) {
+            importButton.addEventListener('click', async () => {
+              const note = noteForCurrentPaper();
+              if (!note) {
+                setObsidianStatus(root, '当前页面不是可导出的论文。', 'error');
+                return;
+              }
+              const handle = obsidianRootHandle || await loadSavedObsidianRoot();
+              if (!handle) {
+                setObsidianStatus(root, '请先选择 Obsidian 的 Paper 根目录。', 'error');
+                return;
+              }
+              setObsidianControlsBusy(root, true);
+              try {
+                if (!await getObsidianWritePermission(handle, true)) {
+                  setObsidianStatus(root, '未获得文件夹写入授权。', 'error');
+                  return;
+                }
+                const directory = await handle.getDirectoryHandle(note.folderName, { create: true });
+                const result = await writeObsidianNoteWithoutOverwrite(directory, note);
+                if (result.status === 'exists') {
+                  setObsidianStatus(root, `笔记已存在：${note.folderName}/${result.fileName}（未覆盖）`, 'neutral');
+                } else {
+                  setObsidianStatus(root, `已保存：${note.folderName}/${result.fileName}`, 'success');
+                }
+              } catch (error) {
+                setObsidianStatus(root, '导入失败，未覆盖已有笔记。请重新授权后再试。', 'error');
+                console.warn('[DPR] Obsidian export failed:', error);
+              } finally {
+                setObsidianControlsBusy(root, false);
+              }
+            });
+          }
+          refreshObsidianExportState(root);
+        });
+      };
+
       // 根据 front matter 生成论文页面 HTML
       const renderPaperFromMeta = (meta) => {
         if (!meta) return '';
@@ -3117,13 +3358,13 @@ window.$docsify = {
         // 中间区域
         lines.push('<div class="paper-meta-row">');
 
-        // 左侧：Evidence 和 TLDR
+        // 左侧：推荐理由和概述
         lines.push('<div class="paper-meta-left">');
         if (meta.evidence) {
-          lines.push(`<p><strong>Evidence</strong>: ${escapeHtml(meta.evidence)}</p>`);
+          lines.push(`<p><strong>推荐理由</strong>: ${escapeHtml(meta.evidence)}</p>`);
         }
         if (meta.tldr) {
-          lines.push(`<p><strong>TLDR</strong>: ${escapeHtml(meta.tldr)}</p>`);
+          lines.push(`<p><strong>概述</strong>: ${escapeHtml(meta.tldr)}</p>`);
         }
         lines.push('</div>');
 
@@ -3142,6 +3383,13 @@ window.$docsify = {
             `<a class="dpr-pdf-download-link" href="${safePdf}" target="_blank" rel="noopener" download>下载 PDF</a></p>`
           );
         }
+        lines.push(
+          '<p class="paper-meta-link-row paper-meta-obsidian-row" data-obsidian-export-row>' +
+          '<span class="paper-meta-link-label"><strong>Obsidian</strong>:</span> ' +
+          '<button type="button" class="dpr-obsidian-action dpr-obsidian-connect" data-obsidian-connect>选择 Paper 文件夹</button>' +
+          '<button type="button" class="dpr-obsidian-action dpr-obsidian-import" data-obsidian-import disabled>导入笔记</button>' +
+          '<span class="dpr-obsidian-status" data-obsidian-status aria-live="polite"></span></p>',
+        );
         if (meta.tags && meta.tags.length) {
           lines.push(`<p><strong>Tags</strong>: ${renderTags(meta.tags)}</p>`);
         }
@@ -3349,6 +3597,7 @@ window.$docsify = {
         // 论文页标题条排版（只对 docs/YYYYMM/DD/*.md 生效）
         applyPaperTitleBar();
         bindPdfPreviewToggle();
+        bindObsidianExport();
 
         // 论文页左右切换：更新导航列表并绑定事件（只绑定一次）
         updateNavState();

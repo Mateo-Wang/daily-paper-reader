@@ -110,8 +110,8 @@
     if (safeMeta.date) lines.push(`- **Date**: ${String(safeMeta.date).trim()}`);
     if (safeMeta.pdf) lines.push(`- **PDF**: ${String(safeMeta.pdf).trim()}`);
     if (tags.length) lines.push(`- **Tags**: ${tags.join(', ')}`);
-    if (safeMeta.evidence) lines.push(`- **Evidence**: ${String(safeMeta.evidence).trim()}`);
-    if (safeMeta.tldr) lines.push(`- **TLDR**: ${String(safeMeta.tldr).trim()}`);
+    if (safeMeta.evidence) lines.push(`- **推荐理由**: ${String(safeMeta.evidence).trim()}`);
+    if (safeMeta.tldr) lines.push(`- **概述**: ${String(safeMeta.tldr).trim()}`);
     if (pageUrl) lines.push(`- **原始页面**: ${pageUrl}`);
     if (generatedAt) lines.push(`- **生成时间**: ${generatedAt}`);
     return lines.join('\n').trim();
