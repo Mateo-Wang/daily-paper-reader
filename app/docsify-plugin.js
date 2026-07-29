@@ -1628,6 +1628,12 @@ window.$docsify = {
         const h1s = Array.from(root.querySelectorAll('h1'));
         if (!h1s.length) return;
 
+        // 新版论文页由 front matter 生成完整 Hero；保留其中的原生标题，
+        // 避免旧版双栏标题条再次插入并占用首屏空间。
+        if (root.querySelector('.paper-hero')) {
+          return;
+        }
+
         // 优先从带有 paper-title-zh / paper-title-en 类名的 h1 中获取标题（frontmatter 渲染）
         const paperTitleZh = root.querySelector('h1.paper-title-zh');
         const paperTitleEn = root.querySelector('h1.paper-title-en');
@@ -3347,18 +3353,45 @@ window.$docsify = {
 
         const lines = [];
 
-        // 标题区域
-        lines.push('<div class="paper-title-row">');
-        if (meta.title_zh) {
-          lines.push(`<h1 class="paper-title-zh">${escapeHtml(meta.title_zh)}</h1>`);
+        const sourceText = String(meta.source || 'Unknown').trim();
+        const dateText = String(meta.date || 'Unknown').trim();
+        const titleZh = String(meta.title_zh || '').trim();
+        const titleEn = String(meta.title || '').trim();
+
+        // Hero：保留既有元数据、标签和 PDF 操作，只重组它们的视觉层级。
+        lines.push('<header class="paper-hero">');
+        lines.push('<div class="paper-hero-eyebrow"><span>论文解读</span><span aria-hidden="true">·</span>');
+        lines.push(`<span>${renderSourceChips(sourceText)}</span>`);
+        lines.push(`<span aria-hidden="true">·</span><span>${escapeHtml(dateText)}</span></div>`);
+        lines.push('<div class="paper-title-row paper-hero-title-row">');
+        if (titleZh || titleEn) {
+          lines.push(`<h1 class="paper-title-zh${titleZh ? '' : ' paper-title-only'}">${escapeHtml(titleZh || titleEn)}</h1>`);
         }
-        if (meta.title) {
-          lines.push(`<h1 class="paper-title-en">${escapeHtml(meta.title)}</h1>`);
+        if (titleZh && titleEn) {
+          lines.push(`<p class="paper-title-en">${escapeHtml(titleEn)}</p>`);
         }
         lines.push('</div>');
+        lines.push('<div class="paper-hero-actions">');
+        lines.push('<div class="paper-hero-signals">');
+        if (meta.tags && meta.tags.length) {
+          lines.push(`<span class="paper-hero-tags">${renderTags(meta.tags)}</span>`);
+        }
+        if (meta.score !== undefined && meta.score !== null) {
+          lines.push(`<span class="paper-hero-score">Score <strong>${escapeHtml(String(meta.score))}</strong></span>`);
+        }
+        lines.push('</div>');
+        if (meta.pdf) {
+          const safePdf = escapeHtml(meta.pdf);
+          lines.push('<div class="paper-hero-pdf-actions">');
+          lines.push(`<button type="button" class="dpr-pdf-preview-toggle paper-meta-pdf-preview" data-pdf-preview-toggle data-pdf-url="${safePdf}" aria-expanded="false">预览 PDF</button>`);
+          lines.push(`<a class="dpr-pdf-download-link" href="${safePdf}" target="_blank" rel="noopener" download>下载 PDF</a>`);
+          lines.push('</div>');
+        }
+        lines.push('</div>');
+        lines.push('</header>');
         lines.push('');
 
-        // 中间区域
+        // 推荐理由、概述和基础信息
         lines.push('<div class="paper-meta-row">');
 
         // 左侧：推荐理由和概述
@@ -3373,19 +3406,9 @@ window.$docsify = {
 
         // 右侧：基本信息
         lines.push('<div class="paper-meta-right">');
-        lines.push(`<p><strong>Authors</strong>: ${escapeHtml(meta.authors || 'Unknown')}</p>`);
-        if (meta.source) {
-          lines.push(`<p><strong>Source</strong>: ${renderSourceChips(meta.source)}</p>`);
-        }
-        lines.push(`<p><strong>Date</strong>: ${escapeHtml(meta.date || 'Unknown')}</p>`);
-        if (meta.pdf) {
-          const safePdf = escapeHtml(meta.pdf);
-          lines.push(
-            `<p class="paper-meta-link-row paper-meta-pdf-row"><span class="paper-meta-link-label"><strong>PDF</strong>:</span> ` +
-            `<button type="button" class="dpr-pdf-preview-toggle paper-meta-pdf-preview" data-pdf-preview-toggle data-pdf-url="${safePdf}" aria-expanded="false">预览 PDF</button>` +
-            `<a class="dpr-pdf-download-link" href="${safePdf}" target="_blank" rel="noopener" download>下载 PDF</a></p>`
-          );
-        }
+        lines.push(`<p><strong>作者</strong>: ${escapeHtml(meta.authors || 'Unknown')}</p>`);
+        lines.push(`<p><strong>来源</strong>: ${renderSourceChips(sourceText)}</p>`);
+        lines.push(`<p><strong>日期</strong>: ${escapeHtml(dateText)}</p>`);
         lines.push(
           '<p class="paper-meta-link-row paper-meta-obsidian-row" data-obsidian-export-row>' +
           '<span class="paper-meta-link-label"><strong>Obsidian</strong>:</span> ' +
@@ -3393,12 +3416,6 @@ window.$docsify = {
           '<button type="button" class="dpr-obsidian-action dpr-obsidian-import" data-obsidian-import disabled>导入笔记</button>' +
           '<span class="dpr-obsidian-status" data-obsidian-status aria-live="polite"></span></p>',
         );
-        if (meta.tags && meta.tags.length) {
-          lines.push(`<p><strong>Tags</strong>: ${renderTags(meta.tags)}</p>`);
-        }
-        if (meta.score !== undefined && meta.score !== null) {
-          lines.push(`<p><strong>Score</strong>: ${escapeHtml(String(meta.score))}</p>`);
-        }
         lines.push('</div>');
 
         lines.push('</div>');
@@ -3407,6 +3424,7 @@ window.$docsify = {
         // 速览区域
         if (meta.motivation || meta.method || meta.result || meta.conclusion) {
           lines.push('<div class="paper-glance-section">');
+          lines.push('<div class="paper-section-heading"><span>Quick Read</span><h2>速览</h2></div>');
           lines.push('<div class="paper-glance-row">');
 
           lines.push('<div class="paper-glance-col">');
