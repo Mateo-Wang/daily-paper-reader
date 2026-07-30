@@ -1,11 +1,13 @@
-<div class="dpr-home-promo-card dpr-home-panel">
+<section class="dpr-home-hotwords-card dpr-home-panel" data-dpr-home-hotwords aria-label="近两周研究热点">
   <div class="dpr-home-panel-header">
-    <h3 class="dpr-home-promo-title">社区与支持</h3>
+    <div>
+      <h3 class="dpr-home-hotwords-title">近两周研究热点</h3>
+      <p class="dpr-home-hotwords-range">正在汇总最新论文与 AI 前沿…</p>
+    </div>
+    <span class="dpr-home-hotwords-live" aria-label="数据会随论文更新">LIVE</span>
   </div>
-  <p class="dpr-home-promo-copy">欢迎通过 Star、Fork、Issue 或 PR 一起完善 Daily Paper Reader。</p>
-  <div class="dpr-home-promo-meta">
-    <span>QQ群 <strong>583867967</strong></span>
-    <span class="dpr-home-promo-separator" aria-hidden="true">·</span>
-    <span>已有 <strong>1,491</strong> 人参与交流</span>
+  <div class="dpr-home-hotwords-cloud is-loading" aria-busy="true">
+    <span></span><span></span><span></span><span></span><span></span>
   </div>
-</div>
+  <p class="dpr-home-hotwords-hint">点击关键词，可在左侧论文库中继续检索</p>
+</section>

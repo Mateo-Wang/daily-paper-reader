@@ -29,14 +29,15 @@ def test_home_frontier_module_replaces_notice_and_keeps_archive_entry():
         assert "公告与更新" not in content, path
 
 
-def test_home_promo_uses_the_shared_panel_structure():
+def test_home_hot_words_replaces_community_promo_with_a_stable_panel_target():
     for path in PROMO_FILES:
         content = path.read_text(encoding="utf-8")
-        assert 'class="dpr-home-promo-card dpr-home-panel"' in content, path
+        assert 'class="dpr-home-hotwords-card dpr-home-panel"' in content, path
+        assert "data-dpr-home-hotwords" in content, path
         assert 'class="dpr-home-panel-header"' in content, path
-        assert 'class="dpr-home-promo-copy"' in content, path
-        assert 'class="dpr-home-promo-meta"' in content, path
-        assert "QQ群" in content and "583867967" in content, path
+        assert "近两周研究热点" in content, path
+        assert "AI 前沿" in content, path
+        assert "QQ群" not in content and "社区与支持" not in content, path
 
 
 def test_home_panel_modules_are_embedded_in_the_init_homepage():
@@ -50,7 +51,8 @@ def test_home_panel_modules_are_embedded_in_the_init_homepage():
 def test_site_stats_script_remains_loaded_for_other_pages_without_home_target():
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     assert "app/site-stats.js" in html
-    assert "[DPR] 首页统计加载失败" in html
+    assert "app/home-hot-words.js" in html
+    assert "[DPR] 首页增强加载失败" in html
 
 
 def test_home_frontier_css_has_desktop_and_mobile_layouts():
@@ -69,7 +71,8 @@ def test_home_panels_share_a_quiet_visual_language():
     shared_selector = (
         ".markdown-section .dpr-home-notice-card,\n"
         ".markdown-section .dpr-home-frontier-card,\n"
-        ".markdown-section .dpr-home-promo-card"
+        ".markdown-section .dpr-home-promo-card,\n"
+        ".markdown-section .dpr-home-hotwords-card"
     )
     assert shared_selector in css
 
@@ -83,10 +86,12 @@ def test_home_panels_share_a_quiet_visual_language():
 
     assert ".dpr-home-panel-header" in css
     assert ".dpr-home-frontier-week" in css
-    assert ".dpr-home-promo-meta" in css
+    assert ".dpr-home-hotwords-cloud" in css
+    assert ".dpr-hot-word" in css
 
     panel_section = css.split("/* 首页信息面板", 1)[1].split("/* 侧边栏字体放大", 1)[0]
-    assert "gradient" not in panel_section
+    # 信息面板本体保持克制；词云的加载占位允许使用局部 shimmer 动效。
+    assert "gradient" not in shared_rule
     assert "::before" not in panel_section
     assert "::after" not in panel_section
 

@@ -3061,6 +3061,18 @@
     setCollapsed: function (collapsed) { return applySidebarCollapsed(collapsed); },
     syncResponsiveSidebarMode: syncResponsiveSidebarMode,
     openSettingsPanel: openSettingsPanel,
+    searchPapers: function (keyword) {
+      state.search = String(keyword || '').trim();
+      var filterChanged = state.filter !== 'all';
+      state.filter = 'all';
+      if (filterChanged && state.rootEl) {
+        renderShell(state.rootEl);
+        rebindSearchInput();
+      }
+      if (state.searchInput) state.searchInput.value = state.search;
+      rerenderSidebarBody({ syncActive: false, preserveScroll: true, dispatchUpdated: false });
+      if (state.searchInput && typeof state.searchInput.focus === 'function') state.searchInput.focus();
+    },
   };
 
   // 让正文页（评分按钮）和 docsify 插件能消费侧栏状态。
