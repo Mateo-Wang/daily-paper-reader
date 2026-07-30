@@ -155,7 +155,7 @@ async function testJsonAssetsArePrefetchedWithAssetBatch() {
   const urls = appended.map((el) => el.href || el.src || '');
 
   assert.ok(!urls.includes('app/conference-stats.json'));
-  assert.deepEqual(appended.fetches.map((item) => item.url), ['app/conference-stats.json?v=20260731-home-hotwords-1']);
+  assert.deepEqual(appended.fetches.map((item) => item.url), ['app/conference-stats.json?v=20260731-ai-curated-topics-1']);
   assert.equal(appended.fetches[0].options.cache, 'force-cache');
   assert.ok(appended.jsonPromises['app/conference-stats.json']);
 }

@@ -1,66 +1,39 @@
 const assert = require('node:assert/strict');
 const hotWords = require('../app/home-hot-words.js');
 
-function testSidebarDateFoldersAreDeduplicated() {
-  const folders = hotWords.dateFoldersFromSidebar(`
-    * <a href="#/202607/29/paper-a">A</a>
-    * <a href="#/202607/29/paper-b">B</a>
-    * <a href="#/202607/18/paper-c">C</a>
-  `);
-  assert.deepEqual(folders, ['202607/29', '202607/18']);
+function testCuratedPayloadKeepsOnlyConciseUniqueTopics() {
+  const data = hotWords.validPayload({
+    record_count: 42,
+    window: { start: '2026-07-16', end: '2026-07-29' },
+    topics: [
+      { phrase_en: 'future-frame supervision', summary_zh: '用未来状态约束表征学习' },
+      { phrase_en: 'contact-rich tactile modeling', summary_zh: '面向复杂接触的多模态建模' },
+      { phrase_en: 'world-model-guided planning', summary_zh: '预测动态辅助候选轨迹筛选' },
+      { phrase_en: 'latent action pretraining', summary_zh: '从视频中学习可迁移的潜在动作' },
+      { phrase_en: ' FUTURE-frame supervision ', summary_zh: '重复项应被过滤' },
+    ],
+  });
+  assert.ok(data);
+  assert.equal(data.recordCount, 42);
+  assert.equal(data.topics.length, 4);
+  assert.deepEqual(data.topics.map((topic) => topic.phrase_en), [
+    'future-frame supervision',
+    'contact-rich tactile modeling',
+    'world-model-guided planning',
+    'latent action pretraining',
+  ]);
 }
 
-function testRecentFoldersSupportDailyAndRangeReports() {
-  const recent = hotWords.recentFolders([
-    '202607/29',
-    '202607/12',
-    '20260629-20260728',
-  ], 3);
-  assert.deepEqual(recent, ['202607/29', '20260629-20260728']);
+function testPayloadRejectsNoisyOrInsufficientData() {
+  assert.equal(hotWords.validTopic({ phrase_en: 'single', summary_zh: '词数不足' }), null);
+  assert.equal(hotWords.validTopic({ phrase_en: 'one two three four five six seven eight', summary_zh: '过长' }), null);
+  assert.equal(hotWords.validPayload({ topics: [
+    { phrase_en: 'future-frame supervision', summary_zh: 'a' },
+    { phrase_en: 'contact-rich tactile modeling', summary_zh: 'b' },
+    { phrase_en: 'world-model-guided planning', summary_zh: 'c' },
+  ] }), null);
 }
 
-function testTwoWeekWindowUsesLatestAvailableDataRatherThanWallClock() {
-  const windowed = hotWords.selectWindow([
-    { paper_id: 'inside', date: '2026-07-29', title_en: 'Inside' },
-    { paper_id: 'edge', date: '2026-07-16', title_en: 'Edge' },
-    { paper_id: 'outside', date: '2026-07-15', title_en: 'Outside' },
-  ], 14);
-  assert.equal(windowed.start, hotWords.dateStamp('2026-07-16'));
-  assert.deepEqual(windowed.records.map((item) => item.key).sort(), ['edge', 'inside']);
-}
-
-function testCloudPrefersUsefulPhrasesAndCapsRepeatedTextPerPaper() {
-  const cloud = hotWords.buildWordCloud([
-    {
-      key: 'one',
-      title: 'Vision-Language-Action Models for Autonomous Driving',
-      abstract: 'Vision language action is useful. Vision language action is useful.',
-    },
-    {
-      key: 'two',
-      title: 'World Models for Robot Manipulation',
-      abstract: 'Autonomous driving needs a world model.',
-    },
-  ], 20);
-  const byWord = Object.fromEntries(cloud.map((item) => [item.word, item]));
-  assert.ok(byWord['vision language action']);
-  assert.ok(byWord['world model']);
-  assert.ok(byWord['autonomous driving']);
-  assert.equal(byWord.model, undefined, 'generic bare model should be filtered');
-  assert.equal(byWord['vision language action'].documents, 1, 'one paper only contributes one document hit');
-}
-
-function testDuplicatePaperRecordsDoNotInflateTheCloud() {
-  const windowed = hotWords.selectWindow([
-    { paper_id: 'same', date: '2026-07-29', title_en: 'Diffusion Models for Robotics' },
-    { paper_id: 'same', date: '2026-07-29', title_en: 'Diffusion Models for Robotics' },
-  ], 14);
-  assert.equal(windowed.records.length, 1);
-}
-
-testSidebarDateFoldersAreDeduplicated();
-testRecentFoldersSupportDailyAndRangeReports();
-testTwoWeekWindowUsesLatestAvailableDataRatherThanWallClock();
-testCloudPrefersUsefulPhrasesAndCapsRepeatedTextPerPaper();
-testDuplicatePaperRecordsDoNotInflateTheCloud();
-console.log('home hot words tests passed');
+testCuratedPayloadKeepsOnlyConciseUniqueTopics();
+testPayloadRejectsNoisyOrInsufficientData();
+console.log('home curated topic tests passed');

@@ -35,7 +35,8 @@ def test_home_hot_words_replaces_community_promo_with_a_stable_panel_target():
         assert 'class="dpr-home-hotwords-card dpr-home-panel"' in content, path
         assert "data-dpr-home-hotwords" in content, path
         assert 'class="dpr-home-panel-header"' in content, path
-        assert "近两周研究热点" in content, path
+        assert "AI 精选研究主题" in content, path
+        assert "DEEPSEEK CURATED" in content, path
         assert "AI 前沿" in content, path
         assert "QQ群" not in content and "社区与支持" not in content, path
 
@@ -87,7 +88,8 @@ def test_home_panels_share_a_quiet_visual_language():
     assert ".dpr-home-panel-header" in css
     assert ".dpr-home-frontier-week" in css
     assert ".dpr-home-hotwords-cloud" in css
-    assert ".dpr-hot-word" in css
+    assert ".dpr-home-hot-topic" in css
+    assert ".dpr-home-hotwords-eyebrow" in css
 
     panel_section = css.split("/* 首页信息面板", 1)[1].split("/* 侧边栏字体放大", 1)[0]
     # 信息面板本体保持克制；词云的加载占位允许使用局部 shimmer 动效。

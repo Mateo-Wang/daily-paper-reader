@@ -728,6 +728,25 @@ def run(args: argparse.Namespace) -> int:
     save_index(index, docs_dir)
     archive = write_archive_readme(index, docs_dir)
     home, sidebar = refresh_frontier_site(docs_dir)
+    # Keep the homepage's editorial topics fresh even in weeks where the
+    # independent frontier workflow runs before the daily-paper workflow.
+    # A failed provider call deliberately preserves the last good JSON.
+    api_key = clean(os.getenv("DEEPSEEK_API_KEY") or os.getenv("SUMMARY_API_KEY"))
+    if api_key:
+        try:
+            from home_hot_words import refresh_hot_words
+            from llm import DeepSeekClient
+
+            client = DeepSeekClient(
+                api_key=api_key,
+                model=clean(os.getenv("SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL")) or "deepseek-v4-flash",
+                base_url=clean(os.getenv("DEEPSEEK_BASE_URL") or os.getenv("SUMMARY_BASE_URL")) or "https://api.deepseek.com",
+            )
+            refreshed = refresh_hot_words(docs_dir, client)
+            if refreshed:
+                log(f"curated homepage topics refreshed: {refreshed.relative_to(root)}")
+        except Exception as exc:
+            log(f"[WARN] curated homepage topics were not refreshed: {exc}")
     log(f"weekly selection: week={week}, added={len(written)}, total={len(index.get('entries', []))}")
     log(f"site refreshed: {home.relative_to(root)}, {sidebar.relative_to(root)}, {archive.relative_to(root)}")
     return 0

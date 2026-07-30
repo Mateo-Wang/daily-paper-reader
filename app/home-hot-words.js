@@ -1,9 +1,10 @@
 /**
- * DPR Home Hot Words
+ * DPR Home Research Topics
  *
- * A deliberately small, dependency-free homepage word cloud.  The data is
- * computed in the browser from the same generated paper metadata that powers
- * the reader, plus the editorial AI-frontier index.  Nothing is sent away.
+ * The homepage deliberately renders a compact, editorially curated topic
+ * collection.  DeepSeek creates docs/hot-words.json in the existing daily and
+ * frontier pipelines; this browser module only validates and presents that
+ * generated public data.  We never fall back to a noisy term-frequency cloud.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -16,205 +17,10 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var SIDEBAR_URL = 'docs/_sidebar.md';
-  var FRONTIER_URL = 'docs/frontier/index.json';
-  var WINDOW_DAYS = 14;
-  var MAX_WORDS = 26;
-  var STOP_WORDS = {
-    a: 1, an: 1, and: 1, are: 1, as: 1, at: 1, be: 1, been: 1, between: 1,
-    by: 1, can: 1, for: 1, from: 1, in: 1, into: 1, is: 1, it: 1, its: 1,
-    of: 1, on: 1, or: 1, our: 1, that: 1, the: 1, their: 1, this: 1,
-    through: 1, to: 1, using: 1, via: 1, we: 1, with: 1, within: 1,
-    while: 1, across: 1, than: 1, these: 1, those: 1, they: 1, which: 1, under: 1,
-    new: 1, novel: 1, approach: 1, approaches: 1, based: 1, framework: 1,
-    method: 1, methods: 1, model: 1, models: 1, paper: 1, papers: 1,
-    performance: 1, proposed: 1, propose: 1, results: 1, task: 1, tasks: 1,
-    existing: 1, introduce: 1, introduced: 1, introduces: 1, present: 1,
-    demonstrate: 1, demonstrates: 1, show: 1, shows: 1, study: 1,
-    towards: 1, use: 1, used: 1, learning: 1, data: 1, large: 1,
-  };
-  var PHRASES = [
-    ['vision language action', /\bvision[\s-]+language[\s-]+action(?:[\s-]+models?)?\b/gi],
-    ['vision language model', /\bvision[\s-]+language[\s-]+models?\b/gi],
-    ['world model', /\bworld[\s-]+models?\b/gi],
-    ['autonomous driving', /\bautonomous[\s-]+driving\b/gi],
-    ['reinforcement learning', /\breinforcement[\s-]+learning\b/gi],
-    ['foundation model', /\bfoundation[\s-]+models?\b/gi],
-    ['large language model', /\blarge[\s-]+language[\s-]+models?\b/gi],
-    ['robot manipulation', /\brobot(?:ic)?[\s-]+manipulation\b/gi],
-    ['end to end', /\bend[\s-]+to[\s-]+end\b/gi],
-    ['diffusion model', /\bdiffusion[\s-]+models?\b/gi],
-    ['multi agent', /\bmulti[\s-]+agent\b/gi],
-  ];
+  var TOPICS_URL = 'docs/hot-words.json';
+  var MAX_TOPICS = 7;
 
   function text(value) { return String(value == null ? '' : value); }
-
-  function dateStamp(value) {
-    var match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text(value).trim());
-    if (!match) return 0;
-    return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  }
-
-  function dateLabel(stamp) {
-    if (!stamp) return '';
-    return new Date(stamp).toISOString().slice(0, 10);
-  }
-
-  function makePaperKey(item) {
-    var id = text(item && (item.paper_id || item.id || item.url || item.path)).trim();
-    if (id) return id.toLowerCase();
-    return (text(item && item.title_en) || text(item && item.title)).trim().toLowerCase();
-  }
-
-  function normalisePaper(item, kind) {
-    var source = item || {};
-    return {
-      key: makePaperKey(source),
-      date: text(source.discovered_at || source.selected_at || source.date || source.published_at),
-      title: text(source.title_en || source.title),
-      abstract: text(source.abstract_en || source.abstract || source.summary),
-      kind: kind || 'paper',
-    };
-  }
-
-  function uniquePapers(items) {
-    var seen = {};
-    return (items || []).filter(function (item) {
-      var key = makePaperKey(item);
-      if (!key || seen[key]) return false;
-      seen[key] = true;
-      return true;
-    });
-  }
-
-  function selectWindow(items, days) {
-    var records = uniquePapers(items || []).map(function (item) { return normalisePaper(item, item.kind); });
-    var latest = records.reduce(function (max, item) { return Math.max(max, dateStamp(item.date)); }, 0);
-    if (!latest) return { records: [], start: 0, end: 0 };
-    var start = latest - (Math.max(1, Number(days) || WINDOW_DAYS) - 1) * 86400000;
-    return {
-      records: records.filter(function (item) {
-        var stamp = dateStamp(item.date);
-        return stamp >= start && stamp <= latest;
-      }),
-      start: start,
-      end: latest,
-    };
-  }
-
-  function addWeight(counts, documents, word, weight, key) {
-    var token = text(word).trim().toLowerCase();
-    if (!token || token.length < 3 || STOP_WORDS[token]) return;
-    counts[token] = (counts[token] || 0) + weight;
-    documents[token] = documents[token] || {};
-    documents[token][key] = true;
-  }
-
-  function countText(counts, documents, source, weight, documentKey) {
-    var residual = text(source).toLowerCase();
-    PHRASES.forEach(function (entry) {
-      var found = false;
-      residual = residual.replace(entry[1], function () {
-        found = true;
-        return ' ';
-      });
-      if (found) addWeight(counts, documents, entry[0], weight * 1.35, documentKey);
-    });
-    var tokens = residual.match(/[a-z][a-z0-9-]{2,}/g) || [];
-    var present = {};
-    tokens.forEach(function (token) {
-      var normalized = token.replace(/'s$/i, '');
-      if (/ies$/i.test(normalized)) normalized = normalized.slice(0, -3) + 'y';
-      if (present[normalized]) return;
-      present[normalized] = true;
-      addWeight(counts, documents, normalized, weight, documentKey);
-    });
-  }
-
-  function buildWordCloud(records, limit) {
-    var counts = {};
-    var documents = {};
-    (records || []).forEach(function (record, index) {
-      var key = text(record.key || record.paper_id || record.id || index);
-      countText(counts, documents, record.title, 3, key);
-      countText(counts, documents, record.abstract, 1, key);
-    });
-    return Object.keys(counts).map(function (word) {
-      return { word: word, score: counts[word], documents: Object.keys(documents[word] || {}).length };
-    }).filter(function (item) {
-      return item.documents >= 1 && item.score >= 2.5;
-    }).sort(function (a, b) {
-      return b.score - a.score || b.documents - a.documents || a.word.localeCompare(b.word);
-    }).slice(0, Math.max(1, Number(limit) || MAX_WORDS));
-  }
-
-  function dateFoldersFromSidebar(content) {
-    var folders = {};
-    var regex = /#\/((?:\d{6}\/\d{2})|(?:\d{8}-\d{8}))\//g;
-    var match;
-    while ((match = regex.exec(text(content)))) {
-      folders[match[1]] = true;
-    }
-    return Object.keys(folders).sort().reverse();
-  }
-
-  function folderDateStamp(folder) {
-    var textFolder = text(folder);
-    var compact = /^(\d{6})\/(\d{2})$/.exec(textFolder);
-    if (compact) return dateStamp(compact[1].slice(0, 4) + '-' + compact[1].slice(4) + '-' + compact[2]);
-    var range = /^\d{8}-(\d{8})$/.exec(textFolder);
-    if (range) return dateStamp(range[1].slice(0, 4) + '-' + range[1].slice(4, 6) + '-' + range[1].slice(6));
-    return 0;
-  }
-
-  function recentFolders(folders, days) {
-    var sorted = (folders || []).slice().sort(function (a, b) { return folderDateStamp(b) - folderDateStamp(a); });
-    var latest = sorted.reduce(function (max, folder) { return Math.max(max, folderDateStamp(folder)); }, 0);
-    var lowerBound = latest - ((Number(days) || (WINDOW_DAYS + 7)) - 1) * 86400000;
-    return sorted.filter(function (folder) { return folderDateStamp(folder) >= lowerBound; });
-  }
-
-  function fetchJson(win, url) {
-    if (!win || typeof win.fetch !== 'function') return Promise.reject(new Error('fetch unavailable'));
-    return win.fetch(url, { cache: 'no-store' }).then(function (response) {
-      if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status || 0));
-      return response.json();
-    });
-  }
-
-  function fetchText(win, url) {
-    if (!win || typeof win.fetch !== 'function') return Promise.reject(new Error('fetch unavailable'));
-    return win.fetch(url, { cache: 'no-store' }).then(function (response) {
-      if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status || 0));
-      return response.text();
-    });
-  }
-
-  function loadRecords(win) {
-    return Promise.all([
-      fetchText(win, SIDEBAR_URL).catch(function () { return ''; }),
-      fetchJson(win, FRONTIER_URL).catch(function () { return { entries: [] }; }),
-    ]).then(function (result) {
-      var folders = recentFolders(dateFoldersFromSidebar(result[0]), WINDOW_DAYS + 7);
-      return Promise.all(folders.map(function (folder) {
-        return fetchJson(win, 'docs/' + folder + '/papers.meta.json').catch(function () { return null; });
-      })).then(function (dailyMetadata) {
-        var papers = [];
-        dailyMetadata.forEach(function (meta) {
-          (meta && Array.isArray(meta.papers) ? meta.papers : []).forEach(function (paper) {
-            papers.push(Object.assign({}, paper, {
-              kind: 'paper',
-              discovered_at: meta.generated_at || meta.date || meta.label || '',
-            }));
-          });
-        });
-        var frontier = result[1] && Array.isArray(result[1].entries) ? result[1].entries : [];
-        return papers.concat(frontier.map(function (entry) {
-          return Object.assign({}, entry, { kind: 'frontier' });
-        }));
-      });
-    });
-  }
 
   function escapeHtml(value) {
     return text(value).replace(/[&<>"']/g, function (char) {
@@ -222,31 +28,79 @@
     });
   }
 
-  function renderPanel(container, cloud, windowInfo) {
+  function cleanPhrase(value) {
+    return text(value).replace(/\s+/g, ' ').trim().replace(/^[\-–—]+|[\-–—]+$/g, '');
+  }
+
+  function validTopic(value) {
+    if (!value || typeof value !== 'object') return null;
+    var phrase = cleanPhrase(value.phrase_en);
+    var summary = text(value.summary_zh).trim();
+    var words = phrase.match(/[a-z0-9]+/gi) || [];
+    if (!summary || words.length < 2 || words.length > 7 || phrase.length > 84 || summary.length > 96) return null;
+    return { phrase_en: phrase, summary_zh: summary };
+  }
+
+  function validPayload(payload) {
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.topics)) return null;
+    var seen = {};
+    var topics = payload.topics.map(validTopic).filter(function (topic) {
+      if (!topic) return false;
+      var key = topic.phrase_en.toLowerCase();
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).slice(0, MAX_TOPICS);
+    if (topics.length < 4) return null;
+    var windowInfo = payload.window && typeof payload.window === 'object' ? payload.window : {};
+    return {
+      topics: topics,
+      recordCount: Math.max(0, Number(payload.record_count) || 0),
+      start: text(windowInfo.start).slice(0, 10),
+      end: text(windowInfo.end).slice(0, 10),
+    };
+  }
+
+  function fetchTopics(win) {
+    if (!win || typeof win.fetch !== 'function') return Promise.reject(new Error('fetch unavailable'));
+    return win.fetch(TOPICS_URL, { cache: 'no-store' }).then(function (response) {
+      if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status || 0));
+      return response.json();
+    }).then(function (payload) {
+      var valid = validPayload(payload);
+      if (!valid) throw new Error('invalid curated topic data');
+      return valid;
+    });
+  }
+
+  function renderPanel(container, data) {
     if (!container) return;
-    var range = windowInfo.start && windowInfo.end
-      ? dateLabel(windowInfo.start) + ' — ' + dateLabel(windowInfo.end)
-      : '等待新的论文数据';
-    var words = cloud.map(function (item, index) {
-      var classes = index < 3 ? ' is-major' : index < 9 ? ' is-medium' : '';
-      return '<button type="button" class="dpr-hot-word' + classes + '" data-dpr-hot-word="' +
-        escapeHtml(item.word) + '" title="appears in ' + item.documents + ' paper' + (item.documents === 1 ? '' : 's') + '">' +
-        escapeHtml(item.word) + '</button>';
+    var range = data.start && data.end ? data.start + ' — ' + data.end : '近两周';
+    var cards = data.topics.map(function (topic, index) {
+      return '<button type="button" class="dpr-home-hot-topic" data-dpr-hot-topic="' +
+        escapeHtml(topic.phrase_en) + '" data-dpr-topic-index="' + index + '">' +
+        '<span class="dpr-home-hot-topic-index">0' + (index + 1) + '</span>' +
+        '<span class="dpr-home-hot-topic-name">' + escapeHtml(topic.phrase_en) + '</span>' +
+        '<span class="dpr-home-hot-topic-summary">' + escapeHtml(topic.summary_zh) + '</span>' +
+        '<span class="dpr-home-hot-topic-arrow" aria-hidden="true">↗</span></button>';
     }).join('');
     container.innerHTML =
       '<div class="dpr-home-panel-header">' +
-      '<div><h3 class="dpr-home-hotwords-title">近两周研究热点</h3>' +
-      '<p class="dpr-home-hotwords-range">' + escapeHtml(range) + ' · 共分析 ' + windowInfo.records.length + ' 篇论文与 AI 前沿</p></div>' +
-      '<span class="dpr-home-hotwords-live" aria-label="数据会随论文更新">LIVE</span></div>' +
-      '<div class="dpr-home-hotwords-cloud" aria-label="高频英文关键词词云">' +
-      (words || '<p class="dpr-home-hotwords-empty">等待新的论文数据，热点将在这里形成。</p>') +
-      '</div>' +
-      '<p class="dpr-home-hotwords-hint">点击关键词，可在左侧论文库中继续检索</p>';
+      '<div><p class="dpr-home-hotwords-eyebrow">DEEPSEEK CURATED</p><h3 class="dpr-home-hotwords-title">AI 精选研究主题</h3>' +
+      '<p class="dpr-home-hotwords-range">' + escapeHtml(range) + ' · 基于 ' + data.recordCount + ' 篇论文与 AI 前沿</p></div>' +
+      '<span class="dpr-home-hotwords-live" aria-label="由 DeepSeek 提炼">CURATED</span></div>' +
+      '<div class="dpr-home-hotwords-cloud" aria-label="精选英文研究主题">' + cards + '</div>' +
+      '<p class="dpr-home-hotwords-hint">点击主题，可在左侧论文库中继续检索</p>';
   }
 
   function renderLoading(container) {
     if (!container) return;
-    container.innerHTML = '<div class="dpr-home-panel-header"><div><h3 class="dpr-home-hotwords-title">近两周研究热点</h3><p class="dpr-home-hotwords-range">正在汇总最新论文与 AI 前沿…</p></div><span class="dpr-home-hotwords-live">LIVE</span></div><div class="dpr-home-hotwords-cloud is-loading" aria-busy="true"><span></span><span></span><span></span><span></span><span></span></div>';
+    container.innerHTML = '<div class="dpr-home-panel-header"><div><p class="dpr-home-hotwords-eyebrow">DEEPSEEK CURATED</p><h3 class="dpr-home-hotwords-title">AI 精选研究主题</h3><p class="dpr-home-hotwords-range">正在整理近两周论文与 AI 前沿…</p></div><span class="dpr-home-hotwords-live">CURATED</span></div><div class="dpr-home-hotwords-cloud is-loading" aria-busy="true"><span></span><span></span><span></span><span></span></div>';
+  }
+
+  function renderUnavailable(container) {
+    if (!container) return;
+    container.innerHTML = '<div class="dpr-home-panel-header"><div><p class="dpr-home-hotwords-eyebrow">DEEPSEEK CURATED</p><h3 class="dpr-home-hotwords-title">AI 精选研究主题</h3><p class="dpr-home-hotwords-range">下一次数据更新后显示</p></div><span class="dpr-home-hotwords-live">CURATED</span></div><div class="dpr-home-hotwords-empty"><strong>正在等待精选主题</strong><span>DeepSeek 会从近期论文与 AI 前沿中提炼少量值得关注的技术信号。</span></div>';
   }
 
   function findContainer(win) {
@@ -259,14 +113,14 @@
     return !hash || hash === '#' || /^#\/?$/.test(hash);
   }
 
-  function searchForWord(win, word) {
+  function searchForTopic(win, phrase) {
     if (win && win.DPRSidebar && typeof win.DPRSidebar.searchPapers === 'function') {
-      win.DPRSidebar.searchPapers(word);
+      win.DPRSidebar.searchPapers(phrase);
       return;
     }
     var input = win && win.document && win.document.querySelector('.dpr-sidebar-search');
     if (input) {
-      input.value = word;
+      input.value = phrase;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
   }
@@ -280,15 +134,14 @@
     container.setAttribute('data-dpr-home-hotwords', '');
     container.setAttribute('data-dpr-hotwords-loading', '1');
     renderLoading(container);
-    return loadRecords(win).then(function (records) {
-      var windowInfo = selectWindow(records, WINDOW_DAYS);
-      renderPanel(container, buildWordCloud(windowInfo.records, MAX_WORDS), windowInfo);
-      container.removeAttribute('data-dpr-hotwords-loading');
-      return windowInfo;
+    return fetchTopics(win).then(function (data) {
+      renderPanel(container, data);
+      return data;
     }).catch(function () {
-      renderPanel(container, [], { records: [], start: 0, end: 0 });
-      container.removeAttribute('data-dpr-hotwords-loading');
+      renderUnavailable(container);
       return null;
+    }).finally(function () {
+      container.removeAttribute('data-dpr-hotwords-loading');
     });
   }
 
@@ -296,10 +149,10 @@
     if (!win || !win.document || win.__dprHotWordsInit) return;
     win.__dprHotWordsInit = true;
     win.document.addEventListener('click', function (event) {
-      var target = event.target && event.target.closest ? event.target.closest('[data-dpr-hot-word]') : null;
+      var target = event.target && event.target.closest ? event.target.closest('[data-dpr-hot-topic]') : null;
       if (!target) return;
       event.preventDefault();
-      searchForWord(win, target.getAttribute('data-dpr-hot-word'));
+      searchForTopic(win, target.getAttribute('data-dpr-hot-topic'));
     });
     win.document.addEventListener('dpr-docsify-ready', function () { refresh(win); });
     win.addEventListener('hashchange', function () {
@@ -309,12 +162,9 @@
   }
 
   return {
-    dateStamp: dateStamp,
-    dateFoldersFromSidebar: dateFoldersFromSidebar,
-    recentFolders: recentFolders,
-    selectWindow: selectWindow,
-    buildWordCloud: buildWordCloud,
-    loadRecords: loadRecords,
+    validTopic: validTopic,
+    validPayload: validPayload,
+    fetchTopics: fetchTopics,
     refresh: refresh,
     autoInit: autoInit,
   };
