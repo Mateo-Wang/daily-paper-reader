@@ -54,6 +54,8 @@ window.$docsify = {
       const DETAIL_MARKER = '【🧩 论文详细总结区】';
       const DETAIL_MARKER_LEGACY = '【🧩 论文详细总结】';
       let latestPaperRawMarkdown = '';
+      let latestPaperMeta = null;
+      let favoriteEventsBound = false;
 
       const extractSectionByTitle = (rawContent, matchFn) => {
         if (!rawContent || typeof rawContent !== 'string') return '';
@@ -3350,6 +3352,81 @@ window.$docsify = {
         });
       };
 
+      const favoriteSnapshotForCurrentPaper = () => {
+        const meta = latestPaperMeta;
+        if (!meta) return null;
+        const routePath = vm && vm.route && vm.route.path ? vm.route.path : '';
+        const href = routePath ? `#${routePath.startsWith('/') ? routePath : `/${routePath}`}` : window.location.hash;
+        const api = window.DPRFavorites;
+        const snapshot = {
+          id: href,
+          href,
+          title: meta.title || '',
+          title_zh: meta.title_zh || '',
+          source: meta.source || '',
+          date: meta.date || '',
+          score: meta.score,
+          tags: meta.tags || [],
+        };
+        return api && typeof api.normalizeFavoriteSnapshot === 'function'
+          ? api.normalizeFavoriteSnapshot(snapshot)
+          : snapshot;
+      };
+
+      const syncPaperFavoriteButton = () => {
+        const button = document.querySelector('[data-paper-favorite-toggle]');
+        if (!button) return;
+        const api = window.DPRFavorites;
+        const snapshot = favoriteSnapshotForCurrentPaper();
+        const favorite = !!(api && snapshot && api.isFavorite(snapshot.paper_id || snapshot.id));
+        button.classList.toggle('is-favorite', favorite);
+        button.setAttribute('aria-pressed', favorite ? 'true' : 'false');
+        button.setAttribute('title', favorite ? '取消收藏' : '收藏论文');
+        const icon = button.querySelector('[data-paper-favorite-icon]');
+        const label = button.querySelector('[data-paper-favorite-label]');
+        if (icon) icon.textContent = favorite ? '★' : '☆';
+        if (label) label.textContent = favorite ? '已收藏' : '收藏';
+      };
+
+      const setPaperFavoriteStatus = (message, tone) => {
+        const status = document.querySelector('[data-paper-favorite-status]');
+        if (!status) return;
+        status.textContent = String(message || '');
+        status.setAttribute('data-tone', tone || 'neutral');
+      };
+
+      const bindPaperFavorite = () => {
+        const button = document.querySelector('[data-paper-favorite-toggle]');
+        const api = window.DPRFavorites;
+        if (!button || !api) return;
+        syncPaperFavoriteButton();
+        Promise.resolve(api.ready).then(syncPaperFavoriteButton).catch(() => {});
+        if (!button.dataset.bound) {
+          button.dataset.bound = '1';
+          button.addEventListener('click', async () => {
+            const snapshot = favoriteSnapshotForCurrentPaper();
+            if (!snapshot) return;
+            button.disabled = true;
+            button.classList.add('is-saving');
+            setPaperFavoriteStatus('正在写入 GitHub 仓库…', 'loading');
+            try {
+              await api.toggle(snapshot);
+              syncPaperFavoriteButton();
+              setPaperFavoriteStatus(api.isFavorite(snapshot.paper_id || snapshot.id) ? '已收藏' : '已取消收藏', 'success');
+            } catch (error) {
+              setPaperFavoriteStatus(error && error.message || '收藏操作失败。', 'error');
+            } finally {
+              button.disabled = false;
+              button.classList.remove('is-saving');
+            }
+          });
+        }
+        if (!favoriteEventsBound) {
+          favoriteEventsBound = true;
+          document.addEventListener('dpr-favorites-changed', syncPaperFavoriteButton);
+        }
+      };
+
       // 根据 front matter 生成论文页面 HTML
       const renderPaperFromMeta = (meta) => {
         if (!meta) return '';
@@ -3416,6 +3493,10 @@ window.$docsify = {
         if (meta.score !== undefined && meta.score !== null) {
           lines.push(`<span class="paper-hero-score">Score <strong>${escapeHtml(String(meta.score))}</strong></span>`);
         }
+        lines.push('</div>');
+        lines.push('<div class="paper-hero-favorite-wrap">');
+        lines.push('<button type="button" class="paper-favorite-toggle" data-paper-favorite-toggle aria-pressed="false" title="收藏论文"><span class="paper-favorite-icon" data-paper-favorite-icon aria-hidden="true">☆</span><span data-paper-favorite-label>收藏</span></button>');
+        lines.push('<span class="paper-favorite-status" data-paper-favorite-status aria-live="polite"></span>');
         lines.push('</div>');
         if (meta.pdf) {
           const safePdf = escapeHtml(meta.pdf);
@@ -3516,14 +3597,17 @@ window.$docsify = {
         // 只对论文页面处理
         if (!isPaperRouteFile(file)) {
           latestPaperRawMarkdown = '';
+          latestPaperMeta = null;
           return content;
         }
         latestPaperRawMarkdown = content || '';
 
         const { meta, body } = parseFrontMatter(content);
         if (!meta) {
+          latestPaperMeta = null;
           return content;
         }
+        latestPaperMeta = meta;
 
         // 生成论文页面 HTML + 正文
         // ★ 保护正文中的 LaTeX 公式不被 marked 破坏
@@ -3666,6 +3750,7 @@ window.$docsify = {
         applyPaperTitleBar();
         bindPdfPreviewToggle();
         bindObsidianExport();
+        bindPaperFavorite();
 
         // 论文页左右切换：更新导航列表并绑定事件（只绑定一次）
         updateNavState();

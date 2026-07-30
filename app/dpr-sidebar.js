@@ -833,6 +833,101 @@
     return (paper && paper.id) || paperIdFromHref(paper && paper.href) || '';
   }
 
+  function Favorites() {
+    return window.DPRFavorites || null;
+  }
+
+  function favoriteIdentity(paper) {
+    var api = Favorites();
+    var raw = paperIdentity(paper);
+    if (api && typeof api.normalizePaperId === 'function') {
+      return api.normalizePaperId(raw || (paper && paper.href), paper && paper.source);
+    }
+    return raw;
+  }
+
+  function favoriteSnapshot(paper) {
+    var api = Favorites();
+    var input = {
+      id: paperIdentity(paper),
+      href: paper && paper.href || '',
+      title: paper && paper.title || '',
+      title_zh: paper && paper.title_zh || '',
+      source: paper && paper.source || '',
+      date: paper && (paper.published || paper.date) || dailyDateKeyFromHref(paper && paper.href),
+      score: paper && paper.score,
+      tags: paper && paper.tags || [],
+    };
+    if (api && typeof api.normalizeFavoriteSnapshot === 'function') {
+      return api.normalizeFavoriteSnapshot(input);
+    }
+    return input;
+  }
+
+  function favoriteMap() {
+    var api = Favorites();
+    var data = api && typeof api.getData === 'function' ? api.getData() : null;
+    return data && data.favorites || {};
+  }
+
+  function isPaperFavorite(paper) {
+    var id = favoriteIdentity(paper);
+    return !!(id && favoriteMap()[id]);
+  }
+
+  function allModelPapers(model) {
+    var seen = {};
+    var result = [];
+    flattenDailyPapers(model).concat(flattenConferencePapers(model), flattenFrontierPapers(model))
+      .forEach(function (record) {
+        var paper = record && record.paper;
+        var id = favoriteIdentity(paper);
+        if (!paper || !id || seen[id]) return;
+        seen[id] = true;
+        result.push(paper);
+      });
+    return result;
+  }
+
+  function findPaperByFavoriteId(model, id) {
+    var target = String(id || '');
+    var found = null;
+    allModelPapers(model).some(function (paper) {
+      if (favoriteIdentity(paper) !== target) return false;
+      found = paper;
+      return true;
+    });
+    return found;
+  }
+
+  function parsePaperDateTimestamp(paper) {
+    var raw = String(paper && (paper.published || paper.date) || '').trim();
+    var timestamp = timestampFromDateLike(raw);
+    if (timestamp) return timestamp;
+    var hrefKey = dailyDateKeyFromHref(paper && paper.href);
+    return timestampFromDateLike(hrefKey);
+  }
+
+  function favoriteFilterMatches(paper, options) {
+    var opts = options || {};
+    if (!isPaperFavorite(paper)) return false;
+    var tag = String(opts.favoriteTag || '').trim().toLowerCase();
+    if (tag && paperTagLabels(paper).map(function (label) { return label.toLowerCase(); }).indexOf(tag) === -1) {
+      return false;
+    }
+    var minScore = Number(opts.favoriteMinScore);
+    if (isFinite(minScore) && minScore > 0) {
+      var score = parseScore(paper && paper.score);
+      if (score == null || score < minScore) return false;
+    }
+    var days = Number(opts.favoriteDays);
+    if (isFinite(days) && days > 0) {
+      var timestamp = parsePaperDateTimestamp(paper);
+      if (!timestamp || timestamp < Date.now() - days * 86400000) return false;
+    }
+    return true;
+  }
+
   function normalizePaperIdSet(value) {
     if (value instanceof Set) return value;
     if (Array.isArray(value)) return new Set(value.filter(Boolean));
@@ -870,6 +965,10 @@
       keyword: String(opts.keyword || '').trim().toLowerCase(),
       readMap: opts.readMap || {},
       unreadOnly: !!opts.unreadOnly,
+      favoriteOnly: !!opts.favoriteOnly,
+      favoriteTag: String(opts.favoriteTag || ''),
+      favoriteMinScore: opts.favoriteMinScore,
+      favoriteDays: opts.favoriteDays,
       currentPaperId: currentPaperId || '',
       unreadResultPaperIds: normalizePaperIdSet(opts.unreadResultPaperIds),
     };
@@ -879,6 +978,7 @@
     var opts = resolveResultOptions(options);
     var id = paperIdentity(paper);
     if (opts.keyword && paperSearchText(paper).indexOf(opts.keyword) === -1) return false;
+    if (opts.favoriteOnly && !favoriteFilterMatches(paper, opts)) return false;
     if (opts.unreadOnly && opts.unreadResultPaperIds) return id && opts.unreadResultPaperIds.has(id);
     if (opts.unreadOnly && paperReadStatus(paper, opts.readMap) && paperIdentity(paper) !== opts.currentPaperId) return false;
     return true;
@@ -886,7 +986,7 @@
 
   function filterModelForPaperResults(model, options) {
     var opts = resolveResultOptions(options);
-    if (!opts.keyword && !opts.unreadOnly) return model || { home: null, tutorial: null, daily: [], conferences: [], frontier: [] };
+    if (!opts.keyword && !opts.unreadOnly && !opts.favoriteOnly) return model || { home: null, tutorial: null, daily: [], conferences: [], frontier: [] };
     var source = model || {};
     var filtered = {
       home: source.home || null,
@@ -1453,8 +1553,12 @@
     bodyEl: null,
     searchInput: null,
     unreadCountEl: null,
-    filter: 'all', // 'all' | 'unread'
+    filter: 'all', // 'all' | 'unread' | 'favorites'
     search: '',
+    favoriteTag: '',
+    favoriteMinScore: '',
+    favoriteDays: '',
+    selectedFavoriteIds: new Set(),
     unreadResultPaperIds: null,
     pendingPaperHref: '',
     lastFetchAt: 0,
@@ -1476,7 +1580,7 @@
   function loadPersistedFilter() {
     try {
       var v = window.localStorage && window.localStorage.getItem(FILTER_KEY);
-      return v === 'unread' ? 'unread' : 'all';
+      return v === 'unread' || v === 'favorites' ? v : 'all';
     } catch (e) {
       return 'all';
     }
@@ -1605,6 +1709,52 @@
     );
   }
 
+  function favoriteTagOptions(model) {
+    var seen = {};
+    allModelPapers(model).forEach(function (paper) {
+      if (!isPaperFavorite(paper)) return;
+      paperTagLabels(paper).forEach(function (label) {
+        var value = String(label || '').trim();
+        if (value) seen[value.toLowerCase()] = value;
+      });
+    });
+    return Object.keys(seen).sort().map(function (key) { return seen[key]; });
+  }
+
+  function renderFavoriteFilters(model) {
+    var tags = favoriteTagOptions(model);
+    var options = ['<option value="">全部标签</option>'];
+    tags.forEach(function (label) {
+      options.push('<option value="' + safeAttr(label) + '"' +
+        (String(state.favoriteTag).toLowerCase() === String(label).toLowerCase() ? ' selected' : '') + '>' +
+        safeText(label) + '</option>');
+    });
+    return (
+      '<div class="dpr-sidebar-favorite-filters" aria-label="收藏筛选">' +
+      '  <div class="dpr-sidebar-favorite-filter-row">' +
+      '    <select class="dpr-sidebar-favorite-select" data-favorite-filter="tag" aria-label="按标签筛选收藏">' + options.join('') + '</select>' +
+      '    <select class="dpr-sidebar-favorite-select" data-favorite-filter="score" aria-label="按评分筛选收藏">' +
+      '      <option value="">全部评分</option><option value="9"' + (state.favoriteMinScore === '9' ? ' selected' : '') + '>9 分以上</option>' +
+      '      <option value="8"' + (state.favoriteMinScore === '8' ? ' selected' : '') + '>8 分以上</option>' +
+      '      <option value="6"' + (state.favoriteMinScore === '6' ? ' selected' : '') + '>6 分以上</option>' +
+      '    </select>' +
+      '    <select class="dpr-sidebar-favorite-select" data-favorite-filter="date" aria-label="按日期筛选收藏">' +
+      '      <option value="">全部日期</option><option value="7"' + (state.favoriteDays === '7' ? ' selected' : '') + '>近 7 天</option>' +
+      '      <option value="30"' + (state.favoriteDays === '30' ? ' selected' : '') + '>近 30 天</option>' +
+      '      <option value="90"' + (state.favoriteDays === '90' ? ' selected' : '') + '>近 90 天</option>' +
+      '    </select>' +
+      '  </div>' +
+      '  <div class="dpr-sidebar-favorite-actions">' +
+      '    <button type="button" data-favorite-select-all>全选</button>' +
+      '    <button type="button" data-favorite-export="md">导出 MD</button>' +
+      '    <button type="button" data-favorite-export="csv">导出 CSV</button>' +
+      '    <button type="button" class="is-danger" data-favorite-remove-selected disabled>取消收藏</button>' +
+      '  </div>' +
+      '  <div class="dpr-sidebar-favorite-status" data-favorite-status aria-live="polite"></div>' +
+      '</div>'
+    );
+  }
+
   function dispatchNamedEvent(name) {
     try {
       document.dispatchEvent(new CustomEvent(name));
@@ -1652,6 +1802,8 @@
     var tutorialLabel = (state.model.tutorial && state.model.tutorial.label) || '教程';
     var filterAllActive = state.filter === 'all' ? 'is-active' : '';
     var filterUnreadActive = state.filter === 'unread' ? 'is-active' : '';
+    var filterFavoritesActive = state.filter === 'favorites' ? 'is-active' : '';
+    var favoriteCount = Object.keys(favoriteMap()).length;
     root.innerHTML =
       '<button type="button" class="dpr-sidebar-mobile-toggle" aria-label="切换侧边栏">' +
       '<span></span><span></span><span></span></button>' +
@@ -1664,7 +1816,9 @@
       '  <div class="dpr-sidebar-filter" role="tablist">' +
       '    <button type="button" class="dpr-sidebar-filter-btn ' + filterAllActive + '" data-filter="all">全部</button>' +
       '    <button type="button" class="dpr-sidebar-filter-btn ' + filterUnreadActive + '" data-filter="unread">未读 <span class="dpr-sidebar-unread-count" data-count="0">0</span></button>' +
+      '    <button type="button" class="dpr-sidebar-filter-btn dpr-sidebar-favorites-entry ' + filterFavoritesActive + '" data-filter="favorites"><span aria-hidden="true">★</span> 已收藏 <span class="dpr-sidebar-favorite-count">' + favoriteCount + '</span></button>' +
       '  </div>' +
+      renderFavoriteFilters(state.model) +
       '</div>' +
       '<nav class="dpr-sidebar-body" aria-label="论文导航"></nav>' +
       renderSidebarFooterControls(state.sidebarCollapsed) +
@@ -1690,7 +1844,10 @@
       activeConference: vs.activeConference || '',
       activeConferenceTag: vs.activeConferenceTag || '',
       search: String(vs.search || ''),
-      filter: vs.filter === 'unread' ? 'unread' : 'all',
+      filter: vs.filter === 'unread' || vs.filter === 'favorites' ? vs.filter : 'all',
+      favoriteTag: String(vs.favoriteTag || ''),
+      favoriteMinScore: String(vs.favoriteMinScore || ''),
+      favoriteDays: String(vs.favoriteDays || ''),
       readMap: vs.readMap || {},
       expandedAxisSections: normalizeSet(vs.expandedAxisSections),
       currentPaperHref: normalizeRouteHref(vs.currentPaperHref || ''),
@@ -1703,13 +1860,18 @@
     var map = readMap || vs.readMap || {};
     var axisMode = mode || '';
     var keyword = vs.search.trim();
-    var resultMode = axisMode === 'results' || !!keyword;
+    var favoriteOnly = vs.filter === 'favorites';
+    var resultMode = axisMode === 'results' || !!keyword || favoriteOnly;
     var normalUnreadFilterMode = vs.filter === 'unread' && !keyword && axisMode !== 'results';
     var currentPaperHref = resolveCurrentPaperHrefForRender(model, vs);
     var resultOptions = {
       keyword: keyword,
       readMap: map,
       unreadOnly: vs.filter === 'unread',
+      favoriteOnly: favoriteOnly,
+      favoriteTag: vs.favoriteTag,
+      favoriteMinScore: vs.favoriteMinScore,
+      favoriteDays: vs.favoriteDays,
       currentPaperId: currentPaperHref ? paperIdFromHref(currentPaperHref) : '',
       unreadResultPaperIds: vs.unreadResultPaperIds,
     };
@@ -1729,14 +1891,19 @@
     var html = [];
     var vs = resolveViewState(viewState);
     var unreadOnly = vs.filter === 'unread';
+    var favoriteOnly = vs.filter === 'favorites';
     var keyword = vs.search.trim();
-    var resultMode = !!keyword;
+    var resultMode = !!keyword || favoriteOnly;
     var normalUnreadFilterMode = unreadOnly && !keyword;
     var currentPaperHref = resolveCurrentPaperHrefForRender(model, vs);
     var resultOptions = {
       keyword: keyword,
       readMap: vs.readMap,
       unreadOnly: unreadOnly,
+      favoriteOnly: favoriteOnly,
+      favoriteTag: vs.favoriteTag,
+      favoriteMinScore: vs.favoriteMinScore,
+      favoriteDays: vs.favoriteDays,
       currentPaperId: currentPaperHref ? paperIdFromHref(currentPaperHref) : '',
       unreadResultPaperIds: vs.unreadResultPaperIds,
     };
@@ -1808,7 +1975,7 @@
       }
     }
     if ((resultMode || normalUnreadFilterMode) && renderedGroups === 0) {
-      html.push('<div class="dpr-sidebar-empty">没有匹配的论文</div>');
+      html.push('<div class="dpr-sidebar-empty">' + (favoriteOnly ? '还没有符合筛选条件的收藏论文' : '没有匹配的论文') + '</div>');
     }
     return html.join('');
   }
@@ -1827,6 +1994,9 @@
       activeConferenceTag: state.activeConferenceTag,
       search: state.search,
       filter: state.filter,
+      favoriteTag: state.favoriteTag,
+      favoriteMinScore: state.favoriteMinScore,
+      favoriteDays: state.favoriteDays,
       readMap: readMap,
       unreadResultPaperIds: state.filter === 'unread' ? ensureUnreadSessionPaperIds(state.model, readMap) : state.unreadResultPaperIds,
       expandedAxisSections: state.expandedAxisSections,
@@ -2118,6 +2288,13 @@
     var sectionClass = p.section ? ' dpr-sidebar-paper-' + p.section : '';
     var paperId = p.id || '';
     var status = paperReadStatus(p, readMap || {});
+    var favoriteId = favoriteIdentity(p);
+    var favorite = isPaperFavorite(p);
+    var favoriteClass = favorite ? ' is-favorite' : '';
+    var favoriteSelected = state.selectedFavoriteIds && state.selectedFavoriteIds.has(favoriteId);
+    var selectionControl = state.filter === 'favorites'
+      ? '<label class="dpr-sidebar-favorite-check" title="选择这篇收藏"><input type="checkbox" data-favorite-select="' + safeAttr(favoriteId) + '"' + (favoriteSelected ? ' checked' : '') + '><span aria-hidden="true"></span></label>'
+      : '';
     var activeClass = currentPaperId && paperIdentity(p) === currentPaperId ? ' is-active' : '';
     var dataAttrs = [
       'data-paper-id="' + safeAttr(paperId) + '"',
@@ -2126,6 +2303,7 @@
       'data-search="' + safeAttr(paperSearchText(p)) + '"',
       'data-read="' + (status ? '1' : '0') + '"',
       'data-read-status="' + safeAttr(status) + '"',
+      'data-favorite-id="' + safeAttr(favoriteId) + '"',
     ].join(' ');
     var stars = starHtmlFromScore(p.score);
     var tagBits = tagsHtml(p.tags);
@@ -2141,7 +2319,8 @@
       );
     }).join('');
     return (
-      '<li class="dpr-sidebar-paper' + sectionClass + activeClass + '" ' + dataAttrs + '>' +
+      '<li class="dpr-sidebar-paper' + sectionClass + activeClass + favoriteClass + '" ' + dataAttrs + '>' +
+      selectionControl +
       '  <div class="dpr-sidebar-paper-main">' +
       '    <a class="dpr-sidebar-paper-link" href="' + safeAttr(p.href) + '">' +
       '      <span class="dpr-sidebar-paper-title">' + safeText(p.title) + '</span>' +
@@ -2149,6 +2328,7 @@
       '      <span class="dpr-sidebar-paper-meta">' + stars + (tagBits ? '<span class="dpr-sidebar-paper-tags">' + tagBits + '</span>' : '') + '</span>' +
       '    </a>' +
       '    <div class="dpr-sidebar-paper-actions" aria-label="论文标记">' + actions + '</div>' +
+      '    <button type="button" class="dpr-sidebar-favorite-btn' + favoriteClass + '" data-favorite-toggle="' + safeAttr(favoriteId) + '" aria-pressed="' + (favorite ? 'true' : 'false') + '" title="' + (favorite ? '取消收藏' : '收藏论文') + '"><span aria-hidden="true">' + (favorite ? '★' : '☆') + '</span><span class="dpr-sidebar-favorite-label">' + (favorite ? '已收藏' : '收藏') + '</span></button>' +
       '  </div>' +
       '</li>'
     );
@@ -2216,6 +2396,8 @@
   function applyFilterAndSearch() {
     if (!state.rootEl) return;
     state.rootEl.classList.toggle('is-filter-unread', state.filter === 'unread');
+    state.rootEl.classList.toggle('is-filter-favorites', state.filter === 'favorites');
+    updateFavoriteSelectionUi();
   }
 
   function syncActive(options) {
@@ -2372,6 +2554,107 @@
     return applySidebarCollapsed(!state.sidebarCollapsed);
   }
 
+  function setFavoriteStatus(message, tone) {
+    var status = state.rootEl && $('[data-favorite-status]', state.rootEl);
+    if (!status) return;
+    status.textContent = String(message || '');
+    status.setAttribute('data-tone', tone || 'neutral');
+  }
+
+  function matchingFavoritePapers() {
+    var keyword = String(state.search || '').trim().toLowerCase();
+    return allModelPapers(state.model).filter(function (paper) {
+      if (!favoriteFilterMatches(paper, {
+        favoriteTag: state.favoriteTag,
+        favoriteMinScore: state.favoriteMinScore,
+        favoriteDays: state.favoriteDays,
+      })) return false;
+      return !keyword || paperSearchText(paper).indexOf(keyword) !== -1;
+    });
+  }
+
+  function favoriteExportEntries() {
+    var map = favoriteMap();
+    return matchingFavoritePapers().map(function (paper) {
+      return map[favoriteIdentity(paper)] || favoriteSnapshot(paper);
+    });
+  }
+
+  function downloadFavoriteExport(format) {
+    var api = Favorites();
+    if (!api) return setFavoriteStatus('收藏模块尚未加载。', 'error');
+    var entries = favoriteExportEntries();
+    var csv = format === 'csv';
+    var content = csv ? api.exportCsv(entries) : api.exportMarkdown(entries);
+    var mime = csv ? 'text/csv;charset=utf-8' : 'text/markdown;charset=utf-8';
+    var extension = csv ? 'csv' : 'md';
+    var blob = new Blob([content], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'daily-paper-reader-favorites.' + extension;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+    setFavoriteStatus('已导出 ' + entries.length + ' 篇收藏论文。', 'success');
+  }
+
+  function updateFavoriteSelectionUi() {
+    if (!state.rootEl) return;
+    var button = $('[data-favorite-remove-selected]', state.rootEl);
+    var selectedCount = state.selectedFavoriteIds ? state.selectedFavoriteIds.size : 0;
+    if (button) {
+      button.disabled = selectedCount === 0;
+      button.textContent = selectedCount ? '取消收藏 ' + selectedCount : '取消收藏';
+    }
+  }
+
+  function togglePaperFavorite(paper, button) {
+    var api = Favorites();
+    if (!api || typeof api.toggle !== 'function') {
+      setFavoriteStatus('收藏模块尚未加载。', 'error');
+      return Promise.resolve(false);
+    }
+    if (button) {
+      button.disabled = true;
+      button.classList.add('is-saving');
+    }
+    setFavoriteStatus('正在写入 GitHub 仓库…', 'loading');
+    return api.toggle(favoriteSnapshot(paper)).then(function () {
+      setFavoriteStatus(api.isFavorite(favoriteIdentity(paper)) ? '已收藏并写入 GitHub。' : '已取消收藏并写入 GitHub。', 'success');
+      return true;
+    }).catch(function (error) {
+      setFavoriteStatus(error && error.message || '收藏操作失败。', 'error');
+      return false;
+    }).finally(function () {
+      if (button) {
+        button.disabled = false;
+        button.classList.remove('is-saving');
+      }
+    });
+  }
+
+  function removeSelectedFavorites() {
+    var api = Favorites();
+    var selected = state.selectedFavoriteIds ? Array.from(state.selectedFavoriteIds) : [];
+    if (!api || !selected.length) return Promise.resolve(false);
+    var papers = selected.map(function (id) { return findPaperByFavoriteId(state.model, id); }).filter(Boolean);
+    if (!papers.length) return Promise.resolve(false);
+    if (typeof window.confirm === 'function' && !window.confirm('确定取消收藏选中的 ' + papers.length + ' 篇论文吗？')) {
+      return Promise.resolve(false);
+    }
+    setFavoriteStatus('正在批量更新 GitHub 仓库…', 'loading');
+    return api.updateMany(papers.map(favoriteSnapshot), false).then(function () {
+      state.selectedFavoriteIds.clear();
+      setFavoriteStatus('已取消收藏 ' + papers.length + ' 篇论文。', 'success');
+      return true;
+    }).catch(function (error) {
+      setFavoriteStatus(error && error.message || '批量取消收藏失败。', 'error');
+      return false;
+    });
+  }
+
   function syncResponsiveSidebarMode() {
     var root = state.rootEl || $('#dpr-sidebar-v2');
     if (!root || !root.classList) return state.sidebarCollapsed;
@@ -2400,12 +2683,53 @@
       var fbtn = e.target.closest('.dpr-sidebar-filter-btn');
       if (fbtn) {
         var f = fbtn.getAttribute('data-filter') || 'all';
-        state.filter = f === 'unread' ? 'unread' : 'all';
+        state.filter = f === 'unread' || f === 'favorites' ? f : 'all';
+        if (state.filter !== 'favorites') state.selectedFavoriteIds.clear();
         $$('.dpr-sidebar-filter-btn', root).forEach(function (b) {
           b.classList.toggle('is-active', b.getAttribute('data-filter') === state.filter);
         });
         persistFilter();
         rerenderSidebarBody({ syncActive: false });
+        return;
+      }
+      var favoriteToggle = e.target.closest('.dpr-sidebar-favorite-btn[data-favorite-toggle]');
+      if (favoriteToggle) {
+        e.preventDefault();
+        e.stopPropagation();
+        var favoriteId = favoriteToggle.getAttribute('data-favorite-toggle') || '';
+        var favoritePaper = findPaperByFavoriteId(state.model, favoriteId);
+        if (favoritePaper) togglePaperFavorite(favoritePaper, favoriteToggle);
+        return;
+      }
+      var selectAllFavorites = e.target.closest('[data-favorite-select-all]');
+      if (selectAllFavorites) {
+        e.preventDefault();
+        var visibleFavorites = matchingFavoritePapers();
+        var allSelected = visibleFavorites.length > 0 && visibleFavorites.every(function (paper) {
+          return state.selectedFavoriteIds.has(favoriteIdentity(paper));
+        });
+        visibleFavorites.forEach(function (paper) {
+          var id = favoriteIdentity(paper);
+          if (allSelected) state.selectedFavoriteIds.delete(id);
+          else state.selectedFavoriteIds.add(id);
+        });
+        $$('.dpr-sidebar-favorite-check input[data-favorite-select]', root).forEach(function (input) {
+          input.checked = state.selectedFavoriteIds.has(input.getAttribute('data-favorite-select') || '');
+        });
+        selectAllFavorites.textContent = allSelected ? '全选' : '取消全选';
+        updateFavoriteSelectionUi();
+        return;
+      }
+      var exportFavorites = e.target.closest('[data-favorite-export]');
+      if (exportFavorites) {
+        e.preventDefault();
+        downloadFavoriteExport(exportFavorites.getAttribute('data-favorite-export') || 'md');
+        return;
+      }
+      var removeFavorites = e.target.closest('[data-favorite-remove-selected]');
+      if (removeFavorites) {
+        e.preventDefault();
+        if (!removeFavorites.disabled) removeSelectedFavorites();
         return;
       }
       // 移动端切换
@@ -2563,6 +2887,27 @@
       }
     });
 
+    root.addEventListener('change', function (e) {
+      var favoriteFilter = e.target.closest('[data-favorite-filter]');
+      if (favoriteFilter) {
+        var filterKind = favoriteFilter.getAttribute('data-favorite-filter');
+        if (filterKind === 'tag') state.favoriteTag = favoriteFilter.value || '';
+        if (filterKind === 'score') state.favoriteMinScore = favoriteFilter.value || '';
+        if (filterKind === 'date') state.favoriteDays = favoriteFilter.value || '';
+        state.selectedFavoriteIds.clear();
+        rerenderSidebarBody({ syncActive: false, preserveScroll: true, dispatchUpdated: false });
+        updateFavoriteSelectionUi();
+        return;
+      }
+      var favoriteSelect = e.target.closest('input[data-favorite-select]');
+      if (favoriteSelect) {
+        var selectedId = favoriteSelect.getAttribute('data-favorite-select') || '';
+        if (favoriteSelect.checked) state.selectedFavoriteIds.add(selectedId);
+        else state.selectedFavoriteIds.delete(selectedId);
+        updateFavoriteSelectionUi();
+      }
+    });
+
     root.addEventListener('mouseover', function (e) {
       var paper = e.target.closest('.dpr-sidebar-paper');
       if (!paper) return;
@@ -2609,6 +2954,17 @@
     window.addEventListener('resize', syncResponsiveSidebarMode);
     document.addEventListener('dpr-paper-read-state-changed', function () {
       rerenderSidebarBody(rerenderOptionsForReadStateEvent());
+    });
+    document.addEventListener('dpr-favorites-changed', function () {
+      if (!state.rootEl || !state.bodyEl) return;
+      var count = Object.keys(favoriteMap()).length;
+      var countEl = $('.dpr-sidebar-favorite-count', state.rootEl);
+      if (countEl) countEl.textContent = String(count);
+      Array.from(state.selectedFavoriteIds).forEach(function (id) {
+        if (!favoriteMap()[id]) state.selectedFavoriteIds.delete(id);
+      });
+      rerenderSidebarBody({ syncActive: true, centerActive: false, autoMark: false, preserveScroll: true, dispatchUpdated: false });
+      updateFavoriteSelectionUi();
     });
 
     document.addEventListener('visibilitychange', function () {
