@@ -22,6 +22,9 @@ assert.ok(plugin.includes("if (root.querySelector('.paper-hero'))"), 'hero pages
 assert.match(css, /body\.dpr-paper-page \.paper-glance-row\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/, 'desktop quick read should use a roomy 2×2 grid');
 assert.match(css, /@media \(max-width: 760px\)[\s\S]*paper-glance-row\s*\{[\s\S]*grid-template-columns:\s*1fr/, 'mobile quick read should stack cleanly');
 assert.match(css, /body\.dpr-paper-page \.dpr-page-content > h2 > a[\s\S]*color:\s*var\(--dpr-paper-ink\) !important/, 'markdown heading links should use the reading-page title color');
+assert.match(css, /--dpr-paper-heading:\s*#302b45/, 'paper headings should use the purple-tinted graphite color');
+assert.match(css, /\.dpr-page-content > h2 > a \*[\s\S]*color:\s*inherit !important/, 'nested Docsify heading text should inherit the paper heading color');
+assert.match(css, /\.dpr-page-content > h3 > a \*[\s\S]*color:\s*inherit !important/, 'nested third-level heading text should inherit the paper heading color');
 assert.match(css, /body\.dpr-paper-page \.paper-glance-summary\s*\{[\s\S]*border-left:\s*4px solid var\(--dpr-paper-violet\)/, 'full summary should be a distinct purple-accented card');
 
 console.log('paper detail layout tests passed');
