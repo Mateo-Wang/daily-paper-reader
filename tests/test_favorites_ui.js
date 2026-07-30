@@ -11,7 +11,10 @@ const data = JSON.parse(fs.readFileSync('data/favorites.json', 'utf8'));
 assert.ok(index.indexOf("path: 'app/favorites.js'") < index.indexOf("path: 'app/dpr-sidebar.js'"), 'favorites must load before sidebar rendering');
 assert.ok(index.includes("path: 'app/paper-ambient.js'"), 'paper-only ambient enhancement should be loaded');
 assert.equal(data.version, 1);
-assert.deepEqual(data.favorites, {});
+assert.ok(data.favorites && typeof data.favorites === 'object' && !Array.isArray(data.favorites));
+Object.entries(data.favorites).forEach(([paperId, favorite]) => {
+  assert.equal(favorite.paper_id, paperId, 'favorite entries should remain deduplicated by paper_id');
+});
 
 assert.ok(sidebar.includes('data-filter="favorites"'), 'sidebar should expose an 已收藏 entry');
 assert.ok(sidebar.includes('data-favorite-filter="tag"'), 'favorite list should filter by tag');
