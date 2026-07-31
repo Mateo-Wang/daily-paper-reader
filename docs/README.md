@@ -21,14 +21,14 @@
       <span class="dpr-home-dashboard-kicker">2026-07-31</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 39 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>21</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>18</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-07-31 03:42:49 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-07-31 22:00:43 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共处理19篇论文，精读7篇、速读12篇，聚焦具身智能与机器人学习前沿。</p>
-<p>最值得精读的是《KineBench》（9.0）与《WCM》（9.0），分别提出无IDM运动学基准和世界认知模型，是理解具身世界模型的关键。</p>
-<p>建议进一步浏览速读中的《World Translation》《FM-VLA》《Patch Policy》，它们覆盖仿真迁移、力觉记忆和视觉表征等实用方向。</p>
+<p>今日共处理39篇论文，精读21篇、速读18篇，覆盖具身智能、机器人控制与离线强化学习等方向。最值得关注的是两篇9.0分精读论文：零样本多楼层动态避障导航（ZONDA）与可解释可纠正的模仿学习注意力机制（GuidedAttention）。建议优先深入理解这两篇核心方法，并留意8.0分速读论文中关于层级动作分块与持续学习的人形控制进展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">21 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="KineBench: Benchmarking Embodied World Models via IDM-Free Kinematic Grounding">KineBench: Benchmarking Embodied World Models via IDM-Free Kinematic Grounding</span></li><li><span class="dpr-home-dashboard-paper-title" title="WCM: World-Cognition Model for Generalizable Human-Robot Interaction">WCM: World-Cognition Model for Generalizable Human-Robot Interaction</span></li><li><span class="dpr-home-dashboard-paper-title" title="DC-WAM: Dynamic-Centric Visual Supervision and Reasoning for World-Action Models">DC-WAM: Dynamic-Centric Visual Supervision and Reasoning for World-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ZONDA: Zero-shot Object Navigation with Dynamic Avoidance in Multi-floor Environments">ZONDA: Zero-shot Object Navigation with Dynamic Avoidance in Multi-floor Environments</span></li><li><span class="dpr-home-dashboard-paper-title" title="GuidedAttention: Interpretable and Correctable Visual Attention for OOD-Robust Robot Manipulation via Imitation Learning">GuidedAttention: Interpretable and Correctable Visual Attention for OOD-Robust Robot Manipulation via Imitation Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Offline Vision-Language Navigation with Geometric Goal Localization for Outdoor Environments">Offline Vision-Language Navigation with Geometric Goal Localization for Outdoor Environments</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>19</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -63,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">18 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="World Translation: Minimizing Sim-to-Real Gap with Backward Dynamics Extraction and Unpaired Domain Translation">World Translation: Minimizing Sim-to-Real Gap with Backward Dynamics Extraction and Unpaired Domain Translation</span></li><li><span class="dpr-home-dashboard-paper-title" title="FM-VLA: Force-based Memory for Vision-Language-Action Models in Contact-Rich Manipulation">FM-VLA: Force-based Memory for Vision-Language-Action Models in Contact-Rich Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Patch Policy: Efficient Embodied Control via Dense Visual Representations">Patch Policy: Efficient Embodied Control via Dense Visual Representations</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReferTrack: Referring Then Tracking for Embodied Visual Tracking">ReferTrack: Referring Then Tracking for Embodied Visual Tracking</span></li><li><span class="dpr-home-dashboard-paper-title" title="Extreme-RGMT: Continual Learning of Highly Dynamic Skills for Robust Generalist Humanoid Control">Extreme-RGMT: Continual Learning of Highly Dynamic Skills for Robust Generalist Humanoid Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Offline RL with Hierarchical Action Chunking">Offline RL with Hierarchical Action Chunking</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>13</strong></span><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span></div>
 </section>
 </div>
 
