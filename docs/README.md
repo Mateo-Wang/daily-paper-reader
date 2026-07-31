@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-07-29</span>
+      <span class="dpr-home-dashboard-kicker">2026-07-31</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 36 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>24</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-07-29 21:45:41 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-07-31 03:42:49 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选36篇论文，聚焦机器人中间表示、安全驾驶场景生成及多模态微调等前沿方向。</p>
-<p>最值得关注的是《RoboInter1.5》的机器人世界建模中间表示套件与《SafeGen》中面向VLM自动驾驶的安全关键场景视频扩散方法。</p>
-<p>建议普通读者优先关注具身智能与世界模型的结合趋势，这两篇9分论文代表了当前机器人+自动驾驶两大热门方向的核心突破。</p>
+<p>今日共处理19篇论文，精读7篇、速读12篇，聚焦具身智能与机器人学习前沿。</p>
+<p>最值得精读的是《KineBench》（9.0）与《WCM》（9.0），分别提出无IDM运动学基准和世界认知模型，是理解具身世界模型的关键。</p>
+<p>建议进一步浏览速读中的《World Translation》《FM-VLA》《Patch Policy》，它们覆盖仿真迁移、力觉记忆和视觉表征等实用方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">24 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RoboInter1.5: A Holistic Intermediate Representation Suite for Embodied World Modeling and Robotic Manipulation">RoboInter1.5: A Holistic Intermediate Representation Suite for Embodied World Modeling and Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SafeGen: Goal-Conditioned Video Diffusion of Safety-Critical Scenarios for VLM-Based Autonomous Driving">SafeGen: Goal-Conditioned Video Diffusion of Safety-Critical Scenarios for VLM-Based Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Defer to Plan: Adaptive Multi-Agent Fusion for End-to-End V2X Driving">Defer to Plan: Adaptive Multi-Agent Fusion for End-to-End V2X Driving</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="KineBench: Benchmarking Embodied World Models via IDM-Free Kinematic Grounding">KineBench: Benchmarking Embodied World Models via IDM-Free Kinematic Grounding</span></li><li><span class="dpr-home-dashboard-paper-title" title="WCM: World-Cognition Model for Generalizable Human-Robot Interaction">WCM: World-Cognition Model for Generalizable Human-Robot Interaction</span></li><li><span class="dpr-home-dashboard-paper-title" title="DC-WAM: Dynamic-Centric Visual Supervision and Reasoning for World-Action Models">DC-WAM: Dynamic-Centric Visual Supervision and Reasoning for World-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>14</strong></span><span class="dpr-home-dashboard-tag">driving <strong>10</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -66,20 +66,24 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Generalizable VLA Finetuning via Representation Anchoring and Language-Action Alignment">Generalizable VLA Finetuning via Representation Anchoring and Language-Action Alignment</span></li><li><span class="dpr-home-dashboard-paper-title" title="Test-Time Scaling for World Action Models via Zero-Shot Geometric Evaluation">Test-Time Scaling for World Action Models via Zero-Shot Geometric Evaluation</span></li><li><span class="dpr-home-dashboard-paper-title" title="PGN: Design and Implementation of a Vision-Language Navigation System Based on Pangu Multimodal Foundation Model">PGN: Design and Implementation of a Vision-Language Navigation System Based on Pangu Multimodal Foundation Model</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="World Translation: Minimizing Sim-to-Real Gap with Backward Dynamics Extraction and Unpaired Domain Translation">World Translation: Minimizing Sim-to-Real Gap with Backward Dynamics Extraction and Unpaired Domain Translation</span></li><li><span class="dpr-home-dashboard-paper-title" title="FM-VLA: Force-based Memory for Vision-Language-Action Models in Contact-Rich Manipulation">FM-VLA: Force-based Memory for Vision-Language-Action Models in Contact-Rich Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Patch Policy: Efficient Embodied Control via Dense Visual Representations">Patch Policy: Efficient Embodied Control via Dense Visual Representations</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
 </div>
 
-<div class="dpr-home-promo-card dpr-home-panel">
+<section class="dpr-home-hotwords-card dpr-home-panel" data-dpr-home-hotwords aria-label="AI 精选研究主题">
   <div class="dpr-home-panel-header">
-    <h3 class="dpr-home-promo-title">社区与支持</h3>
+    <div>
+      <p class="dpr-home-hotwords-eyebrow">DEEPSEEK CURATED</p>
+      <h3 class="dpr-home-hotwords-title">AI 精选研究主题</h3>
+      <p class="dpr-home-hotwords-range">正在整理近两周论文与 AI 前沿…</p>
+    </div>
+    <span class="dpr-home-hotwords-live" aria-label="由 DeepSeek 提炼">CURATED</span>
   </div>
-  <p class="dpr-home-promo-copy">欢迎通过 Star、Fork、Issue 或 PR 一起完善 Daily Paper Reader。</p>
-  <div class="dpr-home-promo-meta">
-    <span>QQ群 <strong>583867967</strong></span>
-    <span class="dpr-home-promo-separator" aria-hidden="true">·</span>
-    <span>已有 <strong>1,491</strong> 人参与交流</span>
+  <div class="dpr-home-hotwords-empty">
+    <strong>正在等待精选主题</strong>
+    <span>DeepSeek 会从近期论文与 AI 前沿中提炼少量值得关注的技术信号。</span>
   </div>
-</div>
+  <p class="dpr-home-hotwords-hint">点击主题，可在左侧论文库中继续检索</p>
+</section>
