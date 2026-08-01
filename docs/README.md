@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-07-31</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-01</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 39 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>21</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>18</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-07-31 22:00:43 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-01 21:16:04 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共处理39篇论文，精读21篇、速读18篇，覆盖具身智能、机器人控制与离线强化学习等方向。最值得关注的是两篇9.0分精读论文：零样本多楼层动态避障导航（ZONDA）与可解释可纠正的模仿学习注意力机制（GuidedAttention）。建议优先深入理解这两篇核心方法，并留意8.0分速读论文中关于层级动作分块与持续学习的人形控制进展。</p>
+<p>今天共处理19篇论文，其中精读7篇、速读12篇，重点覆盖机器人控制与世界模型方向。最值得关注的是两篇9.0分精读论文：基于超网络的自适应多任务制导控制，以及无搜索世界模型的意图到动作学习。建议优先阅读这两篇高分工作，并留意8.0分的高精度机器人操作数据缩放规律。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">21 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ZONDA: Zero-shot Object Navigation with Dynamic Avoidance in Multi-floor Environments">ZONDA: Zero-shot Object Navigation with Dynamic Avoidance in Multi-floor Environments</span></li><li><span class="dpr-home-dashboard-paper-title" title="GuidedAttention: Interpretable and Correctable Visual Attention for OOD-Robust Robot Manipulation via Imitation Learning">GuidedAttention: Interpretable and Correctable Visual Attention for OOD-Robust Robot Manipulation via Imitation Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Offline Vision-Language Navigation with Geometric Goal Localization for Outdoor Environments">Offline Vision-Language Navigation with Geometric Goal Localization for Outdoor Environments</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Learning Adaptive Multi-Task Guidance, Navigation, and Control via Hypernetworks">Learning Adaptive Multi-Task Guidance, Navigation, and Control via Hypernetworks</span></li><li><span class="dpr-home-dashboard-paper-title" title="INTACT: Isomorphic Intent-to-Action Learning for Search-Free World Models">INTACT: Isomorphic Intent-to-Action Learning for Search-Free World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="DLAM: Distributional Latent Actions with Temporal Constraints">DLAM: Distributional Latent Actions with Temporal Constraints</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>19</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">18 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ReferTrack: Referring Then Tracking for Embodied Visual Tracking">ReferTrack: Referring Then Tracking for Embodied Visual Tracking</span></li><li><span class="dpr-home-dashboard-paper-title" title="Extreme-RGMT: Continual Learning of Highly Dynamic Skills for Robust Generalist Humanoid Control">Extreme-RGMT: Continual Learning of Highly Dynamic Skills for Robust Generalist Humanoid Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Offline RL with Hierarchical Action Chunking">Offline RL with Hierarchical Action Chunking</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="The Curse of Precision: A Data Scaling Law for High-Precision Robotic Manipulation">The Curse of Precision: A Data Scaling Law for High-Precision Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="PRISM: Polynomial Representations for Interaction-Structured Motor Control">PRISM: Polynomial Representations for Interaction-Structured Motor Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Reusable Hybrid Motion Priors for Humanoid Locomotion from Motion Imitation">Learning Reusable Hybrid Motion Priors for Humanoid Locomotion from Motion Imitation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>13</strong></span><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 </div>
 
