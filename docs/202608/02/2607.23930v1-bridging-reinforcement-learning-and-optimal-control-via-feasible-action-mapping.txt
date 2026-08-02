@@ -1,0 +1,1495 @@
+Title: Bridging Reinforcement Learning and Optimal Control via Feasible Action Mapping
+
+URL Source: https://arxiv.org/pdf/2607.23930v1
+
+Published Time: Tue, 28 Jul 2026 01:26:02 GMT
+
+Number of Pages: 26
+
+Markdown Content:
+# Bridging Reinforcement Learning and Optimal Control via Feasible Action Mapping 
+
+Stefan Richter ∗ sr@richteroptimization.com 
+
+Richter Optimization GmbH, Vienna, Austria, 
+
+Alberto Giammarino ∗ alberto.a.giammarino@sony.com 
+
+Sony AI, Tokyo, Japan 
+
+Guillem Torrente guillem.torrente@sony.com 
+
+Sony AI, Tokyo, Japan 
+
+Sam Blakeman samrobertallan.blakeman@sony.com 
+
+Sony AI, Zurich, Switzerland 
+
+Peter Dürr peter.duerr@sony.com 
+
+Sony AI, Zurich, Switzerland  
+
+> ∗
+
+Contributed equally to this work. 
+
+Abstract 
+
+Operating constrained dynamical systems requires controllers to efficiently solve complex tasks while enforcing recursive feasibility and safety constraints. To address these compet-ing requirements, we present Feasible Action for Optimal Control (FAOC), a novel control framework integrating Reinforcement Learning (RL) and Optimal Control (OC). The key contribution is a computationally efficient, optimization-based mapping algorithm that transforms the RL agent’s action from a static abstract set into a state-dependent feasible parameter set of the Optimal Control Problem (OCP), guaranteeing strict satisfaction of the dynamical system’s constraints. Thus, FAOC effectively combines the predictable safety of OC with the flexibility of RL. In contrast to prior work, the abstract action space of the RL agent does not require expert or heuristic design, and the OCP formulation is not compromised by the inability of RL to guarantee feasibility. We apply our approach to real-time motion planning for robot table tennis, which encapsulates these challenges. Via simulated experiments, we show that FAOC outperforms state-of-the-art baselines in both sample efficiency and closed-loop performance. 
+
+# 1 Introduction 
+
+Recent technological breakthroughs have significantly advanced the state of the art in the control of constrained dynamical systems. One clear example is robotics, where fully autonomous robots, operat-ing without pre-programmed routines, are now capable of performing complex tasks at human-level proficiency [1 –3]. Reinforcement Learning (RL) has been a cornerstone of this progress, demonstrat-ing the capability to solve complex control problems across several domains [2 –6]. Pure RL-based controllers, however, exhibit significant shortcomings, most notably the inability to strictly guarantee constraint satisfaction. These limitations have restricted the adoption of RL in real-world applications, which typically require strict safety guarantees [7–9]. Another fundamental approach to the closed-loop control of constrained dynamical systems is Optimal Control (OC), specifically Model Predictive Control (MPC), which offers complementary properties to RL. Most notably, OC incorporates prior knowledge of the system dynamics and explicitly 
+
+1arXiv:2607.23930v1 [eess.SY] 27 Jul 2026 Constrained                            
+
+> Dynamical System
+> 𝑢
+> Input
+> 𝑥
+> State
+> 𝑥 +
+> Next
+> state
+> Optimal Control Problem
+> Control input
+> Neural Network RL Agent
+> 𝜇
+> Σ
+> 𝑏 ((𝜇 ,Σ))
+> Multivariate
+> bounded
+> Gaussian
+> Mapping Algorithm
+> ത𝑎
+> Sampled
+> action
+> min
+> 𝑧 ∈𝑓 𝑧 ,𝑝 ,𝑥
+> 𝑠 .𝑡 .𝑔 𝑧 ,𝑝 ,𝑥 ≤0
+> 𝐻 𝑧 𝑧 +𝐻 𝑝 𝑝 +𝐻 𝑥 𝑥 +ℎ=0
+> 𝑝
+> P𝑥 Params (𝑥 ,𝑝 )
+> 𝑥 ⟵𝑥 +
+> FAOC
+> 𝑀
+> A
+> Z
+> N
+> 𝑠 𝑒𝑛𝑣
+
+Figure 1: Overview of the FAOC framework illustrated for a 2D action space. From left to right: 
+
+Step 1: An RL agent outputs the parameters (mean μ and covariance Σ) of a multivariate Gaussian distribution, given the system state x and potentially other observations senv . A raw action is sampled from this distribution during training, or taken as the mean during deployment. A nonlinear function b
+
+transforms this unbounded raw action into an abstract action ¯a confined within a static, compact abstract set ¯A. Step 2: The abstract action ¯a is mapped via M into a parameter set P (x) that depends on the current state x of the dynamical system. This set encompasses all feasible parameters for the underlying OCP (e.g., terminal state targets). The color gradient visualizes the continuous mapping between the sets. Step 3: The mapped parameter p fixes the action-encoding vector in the OCP, which is subsequently solved to yield an optimal control input trajectory. Step 4: This trajectory is applied to the system in open loop. The resulting subsequent state x+ is observed and serves as the initial condition for the next control cycle. enforces safety through input, state, and output constraints, ensuring safe operation even in unseen environments. Nevertheless, the scale and complexity of formulating these tasks as Optimal Control Problems (OCPs) increase solution times, sometimes rendering the computation intractable within strict real-time deadlines. Furthermore, OC remains challenging to apply to nonconvex, long-horizon problems with sparse reward signals, limiting its effectiveness in tasks requiring extensive exploration or delayed credit assignment [10–14]. The idea of combining RL and OC to leverage their complementary strengths has been widely explored (see [15] for a comprehensive survey and Section 2 for a summary of related work). To explicitly handle long-horizon problems and sparse reward signals while retaining the advantages of OC, one common approach is to learn the terminal cost of the OCP using a Neural Network (NN) that approximates the infinite-horizon cost-to-go [16 –18]. However, this approach generally renders the OCP nonconvex, which can severely impact real-time solvability. Another common formulation combines RL with a parameterized OCP, where the RL agent selects OCP parameters to maximize long-term cumulative rewards. While successful, this coupling is difficult when RL actions affect OCP feasibility: some actions may render the OCP infeasible, requiring slack variables or careful reformulation. For tractability, existing methods often employ simple, static, continuous RL action spaces; however, the actual feasible parameter sets of the underlying OCP are typically state-dependent and geometrically complex. Consequently, static parameterizations may include infeasible or redundant actions while excluding optimal feasible ones. This forces the RL policy to implicitly learn poorly defined feasibility boundaries, thereby degrading learning efficiency and final performance [19]. 
+
+Main Contributions 
+
+We introduce Feasible Action for Optimal Control (FAOC), a novel RL-OC framework for constrained dynamical systems resolving persistent feasibility and exploration challenges. FAOC enables the RL policy to sample from a static, geometrically simple abstract set while guaranteeing the resulting OCP remains feasible and all valid parameters remain reachable. This relieves the RL agent from satisfying physical constraints, focusing its capacity solely on the overarching task (Fig. 1). Our main contributions are: 
+
+2(i) Topological Characterization of OCP Feasibility. We identify mild geometric conditions ensuring the state-dependent parameter set P (x) of a generic OCP is compact, solid, and convex (Lemma 1), explicitly demonstrated for linear MPC (Corollary 1). (ii) Invertible Feasible Action Mapping. We propose a computationally efficient radial algorithm (Algorithm 1) bijectively transforming any abstract RL action ¯a ∈ ¯A into a guaranteed-feasible parameter p ∈ P (x) (Proposition 1). (iii) Mitigation of Geometric Distortion. To prevent point accumulation, we develop an area-matching directional transformation (Propositions 2 and 3), and a scalable linear transformation utilizing affinely related ellipsoidal surrogates for arbitrary dimensions (Proposition 4). (iv) Tractability for Implicitly Defined Sets. For real-time scalability without explicit geometric rep-resentations of P (x), we derive robust formulations for computing interior points (Propositions 6 and 7) and target shape matrices (Proposition 8) directly from OCP constraints (Example 3). (v) Validation in Robot Table Tennis. We apply FAOC to motion planning for an 8-DoF robot arm, achieving professional human-level table tennis [1] (Section 5.1). FAOC consistently surpasses state-of-the-art RL-MPC controllers in sample efficiency, final performance, and system controlla-bility. Notably, while the mapping algorithm assumes convex sets, this application highlights FAOC’s capability in nonconvex domains: the RL agent resolves strategic nonconvexities (e.g., obstacle avoidance, nonlinear kinematics), while the OCP handles local kinematic constraints yielding a convex set amenable to mapping. Our mapping algorithm and OCP implementation are open-sourced 1.
+
+# 2 Related work 
+
+Both RL and OC enable state-feedback control of constrained dynamical systems, yet they exhibit com-plementary strengths and weaknesses. In particular, RL typically suffers from poor sample efficiency and lacks guarantees of constraint satisfaction. Conversely, while OC systematically enforces constraints, its application to complex, nonconvex problems often suffers from computational intractability and sensitivity to initialization. Specifically, local optimization solvers may converge to infeasible stationary points even when a globally feasible solution exists. Consequently, combining these two technologies to leverage their respective advantages has emerged as a promising research direction. Recent literature extensively explores this intersection, particularly focusing on MPC (see [15] for a comprehensive review). For context, we first situate our contribution within the classification described in [15]. Our approach belongs to the category of works in which a parameterized MPC is treated as part of the RL environment, and the RL agent learns state-dependent values for its parameters. Furthermore, we consider a hierarchical architecture in which the RL policy does not depend on the OCP decision variables. As a result, the RL actions—namely, the parameters of the MPC framework—are treated as constants rather than decision variables within the underlying OCP. Most existing works adopt parameterizations that do not influence OCP feasibility, such as cost function parameterizations, since ensuring feasibility is generally beyond the capabilities of an RL agent. While this allows any RL action to be admissible, it raises the fundamental question of how to define meaningful action space bounds. In such formulations, the action space becomes a hyperparameter that must be tuned. For instance, in [20], the RL agent learns subgoals for a navigation task, with actions defined in a 2D space bounded heuristically by the maximum reachable distance (computed by applying maximum velocity over the horizon). To guarantee OCP feasibility even if the desired goal is unreachable, the distance to the goal is penalized in the terminal cost rather than enforced as a hard constraint. Similar cost penalization strategies are used in [21] for tracking velocity references in dense traffic scenarios. In [22], RL is combined with nonlinear MPC where actions corresponding to reference lateral position and speed in Frenet coordinates [23] are mapped via a domain-informed expansion function to a high-dimensional MPC cost parameterization. Other 
+
+> 1https://github.com/SonyResearch/feasible_action_for_optimal_control
+
+3examples include quadrotor waypoint selection [24] and learning parameters for both the cost and control barrier functions using an unbounded action space [25]. An exception to these heuristic bounds is [26], where the RL agent learns two parameters (the stochastic propagation horizon and the constraint robustification factor) that are naturally bounded by physical and probabilistic considerations. However, such well-bounded parameterizations are problem-specific and not easily generalized. In approaches where OCP feasibility directly depends on the RL-selected parameters, but the action space itself does not inherently guarantee feasibility, the RL agent must explicitly learn to avoid infeasible actions, which ultimately hampers final performance. For example, in [27], RL actions define constraints for intersection handling, and infeasible configurations are penalized through the reward function. Similarly, in [28], a chance-constrained MPC acts as a safety filter during training; infeasible OCPs trigger constraint relaxation and re-solving until the agent eventually learns safe actions. An alternative approach is presented in [29], where the RL action space is restricted to a finite set of Pareto-optimal MPC weight configurations obtained via Bayesian Optimization. While this guarantees safety and enables efficient exploration, the discretization heavily restricts the action space and limits overall performance. In this work, we simultaneously address the two primary issues highlighted above: (i) mitigating the need for ill-defined, tuned action spaces that induce trade-offs, and (ii) ensuring OCP feasibility when RL actions directly define constraints. We achieve this by mapping the RL agent’s output from a static abstract action set into a feasible, state-dependent parameter set of the OCP, ensuring that all feasible actions are included and infeasible ones are strictly excluded. A related idea was proposed in [30], where a one-dimensional linear mapping transforms the RL output from a static range [−1, 1 ] into a feasible set determined by the current system state. While conceptually similar, this approach is limited to independent one-dimensional mappings. As we demonstrate in our numerical application (Section 5), extending this concept to mappings over general 
+
+n-dimensional sets provides greater expressiveness and significantly improves performance. Another attempt to generalize this mapping is presented in [31]; however, their method assumes the abstract action set can be represented as a hypercube and requires the feasible parameter set to contain the origin—both of which are restrictive assumptions. In contrast, our method supports arbitrary compact, convex sets by incorporating a robust procedure to compute an interior point, thereby eliminating the restrictive assumption that the origin must lie within the interior of the feasible parameter set. Additionally, it accounts for the geometric shapes of both the abstract set and the state-dependent parameter set, mitigating point accumulation and thus accelerating learning. Finally, we note that [32] proposes learning the mapping via supervised learning to handle nonconvex or disconnected feasible sets, whereas our exact analytical approach focuses on strict constraint guarantees. Our methodology relies on an invertible mapping between a static abstract set and a state-dependent feasible parameter set. Conceptually, this foundation aligns with optimal transport, which utilizes continuous deterministic mappings to transform probability distributions [33]—a mechanism our area-matching transformation parallels. Furthermore, the hierarchical structure of FAOC connects to inverse optimization, which infers unknown parameters to achieve specific outcomes, albeit driven by expert demonstrations rather than reward maximization. Recent applications of inverse optimization for learning MPC policies [34] and representing complex feasible sets [35] share this core parameter-inference architecture. 
+
+# 3 Problem Setup and Assumptions 
+
+Consider a constrained dynamical system operating in an environment that requires complex, po-tentially long-horizon decision making. To govern such a system, we consider a hierarchical control architecture: a high-level RL policy evaluates the state of the environment to select strategic behaviors, while a low-level parameterized OCP computes optimal control inputs that satisfy physical and safety constraints while tracking these high-level targets. The fundamental challenge within this architecture arises at the interface between the two layers. We assume that the RL policy operates in a static, geometrically simple abstract space. In contrast, the 
+
+4underlying OCP is governed by strict physical limits, which induce a complex, state-dependent feasible region for the action-encoding parameter vector. If the RL agent selects an abstract action that maps to an incompatible parameter configuration, the OCP becomes infeasible, causing the control system to fail. Therefore, our goal is to design an intermediary mapping algorithm that safely and bijectively translates the RL agent’s abstract action into a guaranteed-feasible OCP parameter. To ensure that the proposed FAOC framework encompasses a broad class of systems, we first establish the general topological properties required of both the RL policy output and the parameterized OCP. While we keep these initial structural assumptions as mild as possible to maximize theoretical generizability, we introduce specific computational restrictions (such as polytopic representations) in Section 4 to facilitate a tractable, real-time algorithmic implementation. 
+
+3.1 Reinforcement Learning Interface 
+
+A high-level sequential decision-making process can be modeled as a finite-horizon discounted Markov decision process (MDP) described by the tuple (S, A, κ, r, ρ0, γ). Here, S is the continuous state space, 
+
+A ⊆ Rn is the action space, κ : S × A → P(S) represents the stochastic transition kernel (where 
+
+P(S) denotes the space of probability distributions over S), r : S × A → R is the reward function, 
+
+ρ0 ∈ P(S) is the initial state distribution, and γ ∈ [0, 1 ) is the discount factor. We focus on continuous control problems where the learning agent is modeled as a parameterized stochastic policy πθ (a|s),parametrized by a deep neural network with weights θ. The deep RL objective is to learn the optimal weights θ∗ that maximize the expected total discounted reward over a horizon N:
+
+J(θ) = E    
+
+> s0∼ρ0
+> ak∼πθ(·| sk)
+> sk+1∼κ(·| sk,ak)
+
+" T
+
+# ∑
+
+> k=0
+
+γkr(sk, ak)
+
+#
+
+. (1) Because neither the transition dynamics κ nor the reward function r are available to the learning agent, model-free interaction with the environment is required. A standard method to maximize the objective (1) relies on estimating the action-value function Qπ (s, a), which represents the expected cumulative discounted reward of taking action a in state s and subsequently following policy π:
+
+Qπ (s, a) = E   
+
+> ak∼π(·| sk)
+> sk+1∼κ(·| sk,ak)
+
+" N
+
+# ∑
+
+> k=0
+
+γkr(sk, ak) s0 = s, a0 = a
+
+#
+
+.In value-based deep RL implementations, a neural network parameterization Qψ(s, a) approximates this function, and the policy parameters θ are updated to maximize Qψ(s, a) with a ∼ πθ (·| s). The widely adopted Soft Actor-Critic (SAC) framework operates on this principle. Within these algorithms, the policy typically outputs a raw, potentially unbounded action a ∈ A .To interface the RL policy with the underlying optimal control layer, this raw output is passed through a bounded nonlinear mapping b (e.g., an element-wise tanh function), yielding the abstract action ¯a = b(a) ∈ ¯A. Consequently, the abstract action set ¯A ⊂ Rn forms a compact set. For the proposed FAOC framework, we additionally assume that ¯A is a solid, convex set (i.e., it possesses a nonempty interior, int ¯A̸ = ∅), with a standard configuration being the hyperbox [−1, 1 ]n.
+
+3.2 Parameterized Optimal Control Formulation 
+
+For the mapping algorithm in Section 4 to successfully couple the RL agent with the OC framework, we require the state-dependent parameter set of the OCP to share the topological properties of the abstract action set ¯A—namely, it must be compact, solid, convex, and of dimensionality n. To establish the mathematical conditions under which the parameter set satisfies these properties, we formulate the 
+
+5parameterized OCP as the following mathematical program: min  
+
+> z∈Z
+
+f (z, p, x) (2) s.t. g(z, p, x) ≤ 0, 
+
+Hzz + Hp p + Hx x + h = 0 . Here, x ∈ Rnx is the measured or estimated initial state of the dynamical system, which acts as a fixed parameter establishing the initial conditions. The vector z ∈ Rnz groups the OCP decision variables (e.g., the predicted state and input trajectories over a finite horizon). Finally, p ∈ Rn is the action-encoding parameter dictated by the RL agent (e.g., representing a terminal state target). Depending on the values of the initial state x and the selected parameter p, the OCP (2) may or may not possess a feasible solution z. To ensure the safe and continuous operation of the system given an initial state x, the RL agent must only select parameters p that guarantee problem feasibility. We formalize the topological properties of the state-dependent feasible parameter set in the following lemma. 
+
+Lemma 1 (Topological Properties of the Parameter Set) . For a given initial state x , let P (x) denote the effective domain of the parameterized OCP (2) , defined as the set of parameters p for which a feasible decision vector z exists: 
+
+P (x) ≜ {p ∈ Rn |∃ z ∈ Z : g(z, p, x) ≤ 0, 
+
+Hzz + Hp p + Hx x + h = 0} .
+
+Assume that for every dynamically reachable initial state x: 1. The set Z ⊆ Rnz is nonempty, compact, and convex. 2. The cost function f (z, p, x) is a real-valued continuous function everywhere on Z × Rn. The constraint function g (z, p, x) is jointly convex in (z, p) and continuous. 3. The joint feasible set S(x) = {(z, p) ∈ Z × Rn | g(z, p, x) ≤ 0, Hzz + Hp p + Hx x + h = 0} has no directions of recession in p. 4. There exist feasible points ˜z ∈ relint Z and ˜p ∈ Rn such that Hz ˜z + Hp ˜p + Hx x + h = 0. Furthermore, for these points, g i( ˜z, ˜ p, x) < 0 for all components i. Finally, rg (Hp) ⊆ HzT, where T = aff Z − ˜z. Under these conditions, the state-dependent parameter set P (x) is a compact, solid, and convex subset of Rn.Proof. By Assumption 1, for any fixed parameter p, the feasible subset Z is closed and bounded, ensur-ing that—since it is nonempty—a minimum of the continuous cost function f is attained (Weierstrass theorem). Thus, problem solvability directly coincides with feasibility. The joint feasible set S(x) is convex because it is the intersection of the convex set Z × Rn with the convex sublevel sets of g and the hyperplanes defined by the affine equality constraints. Because g and the affine relations are continuous, S(x) is closed. The parameter set P (x) is the linear projection of 
+
+S(x) onto the p-subspace. Because the linear projection of a convex set is convex, P (x) is a convex set. According to [36, Theorem 9.1], the linear transformation of a closed convex set is closed if the set contains no directions of recession mapped to zero by the transformation. Because Z is compact, 
+
+S(x) contains no such directions of recession, guaranteeing that P (x) is closed. By Assumption 3, S(x)
+
+contains no directions of recession in the p-subspace. Therefore, its projection P (x) is bounded [36, Theorem 8.4] and, being closed, P (x) is compact. Finally, we prove that P (x) is solid, i.e., int P (x)̸ = ∅. Consider the perturbation p = ˜p + δp. By Assumption 4, for any δp, there exists a corresponding move δz ∈ T such that Hzδz = −Hpδp. This ensures the equality constraints remain satisfied, as Hz( ˜z + δz) + Hp( ˜p + δp) + Hx x + h = 0. Because ˜z ∈ relint Z, ˜z + δz remains in Z for sufficiently small ∥δp∥. Furthermore, because the components of 
+
+g are continuous and strictly satisfied at ( ˜z, ˜p), gi( ˜z + δz, ˜p + δp, x) < 0 remains true for sufficiently small ∥δp∥. Thus, there exists a full-dimensional neighborhood around ˜p completely contained within 
+
+P (x). Consequently, P (x) has a nonempty interior. 
+
+6The theoretical guarantees of Lemma 1 apply to a broad range of OCP formulations, including those with a nonconvex cost function f . To illustrate a specific instance, we introduce next a parameterized OCP with linear, time-varying dynamics and a parameter-dependent terminal constraint. 
+
+Corollary 1 (Linear MPC with Terminal Constraint) . Consider the following parameterized OCP over a prediction horizon of length N: 
+
+min  
+
+> x0: N,u0: N−1
+
+V(xN ) + 
+
+> N−1
+
+# ∑
+
+> k=0
+
+l(xk, uk, p) (3) 
+
+s.t. xk+1 = Ak xk + Bkuk, ∀k ∈ { 0, . . . , N − 1},
+
+x0 = x,
+
+(xk, uk) ∈ Z k, ∀k ∈ { 0, . . . , N − 1},
+
+xN ∈ X N
+
+Cx N = p .
+
+Assume the stage-wise sets Zk and the terminal set XN are compact, solid, and convex, and that the cost functions V and l are continuous and real-valued everywhere. For every initial state x for which there exists a strictly feasible trajectory residing in the interior of the sets Zk and XN , the feasible parameter set P (x) is a compact, solid, and convex subset of Rn if and only if the terminal constraint matrix C has full row rank. Proof. The OCP formulation (3) is a direct specialization of (2) with z =(x0, u0, x1, u1, . . . , xN−1, uN−1, xN ). The set Z = ∏k Zk × X N is compact and convex (Assump-tion 1). Because Z is also solid, it is nonempty and satisfies relint Z = int Z, yielding aff Z = Rnz .Furthermore, the cost function satisfies Assumption 2, and the dynamics alongside the terminal constraint constitute the affine equality constraints. Because XN is bounded, the parameter p = Cx N
+
+must also be bounded, preventing any directions of recession in p (Assumption 3). Finally, to verify the range condition in Assumption 4, we note that because aff Z = Rnz , the subspace of allowable perturbations is T = Rnz . Deriving the explicit affine equality matrices Hz and 
+
+Hp (omitted here for brevity) reveals that the range condition rg (Hp) ⊆ HzT simplifies to Rn ⊆ CRnx .This inclusion holds if and only if C has full row rank. 
+
+# 4 Invertible Mapping Between Convex Sets 
+
+As established in the previous sections, the core requirement of the FAOC framework is to map an abstract action ¯a ∈ ¯A into the state-dependent feasible parameter set P (x). Both of these sets are compact, solid, and convex. Furthermore, to avoid “action aliasing”—i.e., different actions mapping to the same parameter—this mapping must be invertible. An invertible mapping additionally allows for more flexibility in the use of auxiliary RL techniques, e.g., symmetric data augmentation as in [1], or including demonstrations in the replay buffer. Finally, because the mapping resides within the real-time closed-loop control cycle, it must be computationally efficient and scale favorably with the dimension n.In this section, we develop a family of optimization-based mapping algorithms that satisfy these requirements. To present these results as generically as possible, we momentarily abstract away from the specific RL and OCP domains. We define a compact, solid, and convex base set X ⊂ Rn (from which we map) and a corresponding target set Y ⊂ Rn (into which we map). In the context of the FAOC framework, these correspond to X ≜ ¯A and Y ≜ P (x), respectively. Note that we temporarily drop the explicit parametric state dependence of Y for brevity, but will reconsider it in Section 4.4. 
+
+4.1 A Generic Mapping Algorithm 
+
+The foundation of our approach is the radial scaling methodology detailed in Algorithm 1. The algorithm operates by determining the boundary scaling factor of a ray originating from an interior 
+
+7Algorithm 1 Invertible Mapping Between Convex Sets 
+
+Require: Base set X ⊂ Rn and target set Y ⊂ Rn (both compact, solid, and convex), interior points xc ∈
+
+int X and yc ∈ int Y, point to map x ∈ X , and a continuous, invertible, positively homogeneous directional transformation ϕ : Rn → Rn.
+
+Ensure: y = M(x) ∈ Y , where the mapping M is invertible.  
+
+> 1:
+
+if x = xc then  
+
+> 2:
+
+y ← yc 
+
+> 3:
+
+else  
+
+> 4:
+
+d ← x − xc 
+
+> 5:
+
+Compute α ≥ 1 such that xc + αd ∈ bd X 
+
+> 6:
+
+d′ ← ϕ(d) 
+
+> 7:
+
+Compute β > 0 such that yc + βd′ ∈ bd Y 
+
+> 8:
+
+y ← yc + βα d′ 
+
+> 9:
+
+end if 
+
+point of the base set, applying a bijective directional transformation ϕ(·), and proportionally scaling the transformed ray relative to an interior point of the target set. A simplified variant of this radial mapping was previously utilized in [31], where the authors formally established its continuity. However, their formulation was strictly restricted to cases where the base set is a hypercube, the directional transformation is the identity ( ϕ(d) = d), and the interior point of the target set is fixed at the origin. A critical requirement for integrating this mapping within the FAOC framework is that the transformation must be perfectly reversible. This ensures that any feasible parameter chosen by the optimal controller, or provided via expert demonstration, can be uniquely projected back into the abstract action space of the RL agent, avoiding action aliasing. We formally establish the invertibility of the proposed radial mapping in the following proposition. 
+
+Proposition 1 (Invertibility of the Generic Mapping) . Given a continuous, invertible, and positively homogeneous directional transformation ϕ and two compact, solid, and convex sets X ⊂ Rn and Y ⊂ Rn,Algorithm 1 computes a vector-valued map M : X → Y such that M−1(M(x)) = x for each x ∈ X and M(M−1(y)) = y for each y ∈ Y , i.e., M is bijective. Here, M−1 : Y → X is the inverse mapping obtained by exchanging the roles of (X , xc, x) and (Y, yc, y) in Algorithm 1 and replacing the directional transformation ϕ
+
+with its inverse ϕ−1.Proof. For x = xc, the trivial mapping y = yc is directly inverted. For x̸ = xc, because xc ∈ int X and 
+
+X is compact and convex, any ray originating from xc intersects the boundary bd X at a unique, finite scaling factor α ≥ 1. Similarly, because yc ∈ int Y and ϕ(d)̸ = 0, the ray defined by d′ hits bd Y at a unique, finite β > 0. The mapped point y is strictly bounded by the segment [yc, yc + β d′] because 
+
+α ≥ 1, ensuring y ∈ Y .To apply the inverse mapping M−1 to y, we extract the direction v′ = y − yc = βα d′. The scaling factor ˜α for v′ required to reach bd Y is determined as ˜α = α ≥ 1, since yc + ˜α v′ = yc + β d′ ∈ bd Y. The inverse directional transformation yields v = ϕ−1(v′) = ϕ−1  βα ϕ(d), which results in v = βα d since the inverse ϕ−1 is positively homogeneous. Scaling to bd X requires ˜β = α2 
+
+> β
+
+, as xc + ˜β v = xc + α d ∈ bd X .Reconstructing the original point yields x = xc + ˜β 
+
+> ˜α
+
+v = xc + αββα d = xc + d, recovering the original x.Implementing Algorithm 1 requires computing the interior points ( xc, yc) and evaluating the boundary scaling factors ( α, β). A strictly defined interior point can be obtained via standard convex optimization techniques (e.g., the analytic center or the Chebyshev center, which maximizes the radius of an inscribed ball) [37]. The boundary scaling factors are determined by solving simple convex line-search problems along the given directions: 
+
+α = max {α | xc + α d ∈ X } , β = max {β | yc + β d′ ∈ Y } .
+
+8Grid Sampling   
+
+> Identity Transformation Area-Matching Transformation Linear Transformation
+
+Figure 2: Visualization of the proposed mapping approaches. First plot: The base set X (a unit square in R2) is sampled using a structured grid pattern. Second plot: Naive mapping utilizing an identity directional transformation ( ϕ(d) = d). This results in significant point accumulation, as the highly elongated geometry of the target set Y differs severely from X (note that for visualization purposes, the x:y axes scaling ratio of the Y plots is 1:60). Third plot: Mapping utilizing the area-matching transformation ϕ. While strictly valid only in R2, this method exactly matches the marginal angular distributions of the sets’ areas, perfectly mitigating point accumulation. Fourth plot: Mapping utilizing an invertible linear transformation ( ϕ(d) = Φd). By employing affine surrogate sets to approximate geometric distortion, this approach effectively preserves the proportional density of the base distribution, thereby mitigating point accumulation in arbitrary dimensions. In the prevalent case where X and Y are polytopes defined by H-representations ( X = {x | Ax x ≤ bx },
+
+Y = {y | Ayy ≤ by}), the line-search problems collapse to computationally trivial ratio tests over the bounding half-spaces. For instance, the scaling factor α is analytically given by 
+
+α = min  
+
+> i∈{ j|a⊤
+> x,jd>0}
+
+bx,i − a⊤ 
+
+> x,i
+
+xc
+
+a⊤
+
+> x,i
+
+d ,where a⊤ 
+
+> x,i
+
+denotes the i-th row of matrix Ax, and bx,i the corresponding element of bx.If the directional transformation is simply chosen as the identity function ( ϕ(d) = d), e.g., as in [31], the algorithm remains topologically valid but becomes geometrically “blind.” Specifically, if the target set Y possesses a significantly different aspect ratio or orientation than the base set X , uniformly distributed points in X will accumulate unnaturally in the narrower regions of Y. As illustrated in the second plot of Fig. 2, this distortion requires an excessive number of samples during learning to adequately explore the action space. The next section proposes a specific, area-aware transformation ϕ
+
+that mitigates this unwanted effect. 
+
+4.2 Area-Matching Transformation in 2D 
+
+To mitigate point accumulation, the directional transformation ϕ must account for the geometric disparities between the base and target sets. In this section, we derive a transformation ϕ for n =
+
+2, which matches the marginal angular distributions of the sets’ areas, thereby mitigating point accumulation under the mapping M. To formalize this geometric relationship, we construct the following area-based measure. 
+
+Definition 1 (Normalized Area Function) . Let X ⊂ R2 be a compact, solid, and convex set, AX = R 
+
+> X
+
+dx be its total area, and x c be an interior point. For any angle ξ ∈ [0, 2 π], we define the angular wedge: 
+
+X (ξ) ≜ X ∩ 
+
+
+
+xc + μ
+
+cos (θ)
+
+sin (θ)
+
+
+
+| μ ≥ 0, θ ∈ [0, ξ]
+
+
+
+.
+
+The normalized area function is then a X (ξ) ≜ AX (ξ)/AX .
+
+This function acts as a marginal Cumulative Distribution Function (CDF) representing a 2D uniform distribution over X with respect to the polar angle originating from xc. Specifically, aX (0) = 0, 
+
+9aX (2π) = 1, and if a random vector X is distributed uniformly over X , then Pr (X ∈ X (ξ)) = aX (ξ).Furthermore, because X is solid and convex, aX is continuous and strictly increasing. To construct a transformation that accounts for geometric disparities, we define ϕ : R2 → R2 using the normalized area functions of the respective sets. First, we recall a standard result regarding the invertibility of such functions. 
+
+Lemma 2 (Monotone Invertibility [38, Chap. 12, Thm. 3]) . Let f : [a, b] → R be a strictly increasing and continuous function. Then its inverse function f −1 exists, is strictly increasing, and is continuous on the domain 
+
+[ f (a), f (b)] .
+
+Because the normalized area function aY (ξ) is continuous and strictly increasing on [0, 2 π], its inverse a−1 
+
+> Y
+
+is well-defined on [0, 1 ] due to Lemma 2. This allows us to define the specific directional transformation for the 2D area-matching approach. 
+
+Definition 2 (Area-Matching Directional Transformation) . For any base direction d ∈ R2, let ξ = arg (d)
+
+be its polar angle. The area-matching directional transformation ϕ : R2 → R2 is defined as: 
+
+ϕ(d) ≜ ∥d∥
+
+cos (υ)
+
+sin (υ)
+
+
+
+, where υ = a−1 
+
+> Y
+
+(aX (ξ)) . (4) In order to guarantee that integrating Definition 2 into Algorithm 1 yields a valid and invertible mapping between X and Y, the transformation ϕ must satisfy the topological conditions established in Proposition 1. 
+
+Proposition 2 (Area-Matching Transformation Properties) . The area-matching directional transformation ϕ
+
+defined in (4) is continuous, invertible, and positively homogeneous. Proof. By definition, the normalized area functions aX and aY are continuous and strictly increasing in the interval [0, 2 π]. By Lemma 2, a−1 
+
+> Y
+
+is also continuous and strictly increasing. Since the composition of strictly increasing continuous functions is strictly increasing and continuous, the angular mapping 
+
+υ(ξ) is a continuous bijection on [0, 2 π). Combined with the norm preservation ( ∥d′∥ = ∥d∥), the overall transformation ϕ : R2 → R2 is continuous and bijective. Furthermore, let v = cd , c > 0. Scaling a vector by a positive scalar preserves its polar angle, i.e., ξ′ = arg (cd ) = ξ. Because ξ is invariant under positive scaling, the mapped target angle υ remains unchanged. Applying the definition of ϕ to the scaled vector yields: 
+
+ϕ(cd ) = ∥cd ∥
+
+cos (υ)
+
+sin (υ)
+
+
+
+= c ∥d∥
+
+cos (υ)
+
+sin (υ)
+
+
+
+= cϕ(d) .Thus, ϕ is positively homogeneous. Having established that integrating this area-matching transformation into the generic mapping algorithm preserves strict invertibility (due to the established properties of ϕ and Proposition 1), we now formalize its primary objective: mitigating point accumulation. We demonstrate that if the abstract action space is uniformly sampled, the resulting mapped parameters are distributed such that they perfectly respect the area proportions of the target set. 
+
+Proposition 3 (Preservation of Marginal Area Proportions) . Assume that a random vector X is distributed uniformly over the compact, solid, and convex base set X ⊂ R2. Thus, its marginal angular CDF matches the normalized area function: PX (ξ) ≜ Pr (X ∈ X (ξ)) = aX (ξ) for ξ ∈ [0, 2 π] .
+
+Applying the mapping algorithm with the directional transformation ϕ defined by (4) yields a mapped random vector Y = M(X) ∈ Y whose marginal angular CDF identically matches the normalized area function of the target set, i.e., P Y (υ) = aY (υ).
+
+10 Proof. By the geometric nature of the radial scaling algorithm, probability mass along any angular wedge originating from xc ∈ X is bijectively mapped to the corresponding angular wedge originating from yc ∈ Y . Thus, the mapped marginal CDF satisfies PY (υ) = PX (ξ(υ)) .Substituting the inverse angular relation ξ(υ) = a−1 
+
+> X
+
+(aY (υ)) defined in (4) , and applying the uniform premise PX (ξ) ≡ aX (ξ), yields: 
+
+PY (υ) = aX
+
+
+
+a−1
+
+> X
+
+ aY (υ)
+
+= aY (υ) .Because aY (υ) is exactly the marginal angular CDF of a uniform distribution over Y, the mapping successfully preserves the marginal area proportions of the target set. It is important to note that while this transformation perfectly matches the marginal distributions to mitigate excessive point accumulation, it does not guarantee a strictly uniform joint distribution over the entirety of Y. Specifically, the distribution of mapped points along individual radial lines can still vary depending on the geometric curvature of the target boundary. From a computational perspective, explicitly evaluating the normalized area function and its inverse may appear expensive due to the trigonometric functions and integrations involved. However, when 
+
+X and Y are convex polygons (e.g., defined by counter-clockwise ordered vertex sets), aX (ξ) and 
+
+a−1 
+
+> Y
+
+(aX (ξ)) can be computed analytically using sequential signed triangular area calculations. This geometric approach completely circumvents explicit angle computation via trigonometric evaluations, rendering the 2D area-matching transformation highly efficient for real-time applications. As illustrated in Fig. 2 in the third plot, utilizing this area-matching transformation effectively eliminates point accumulation. While the area-matching transformation resolves point accumulation exactly in 2D, its reliance on exact volumetric integration renders it computationally intractable for arbitrary dimensions n > 2. We now present an approximate, scalable alternative based on a linear transformation. 
+
+4.3 Linear Transformation in Arbitrary Dimensions 
+
+In order to motivate our approach for dimensions n > 2, consider a random vector X distributed over 
+
+X ⊂ Rn with a Probability Density Function (PDF) pX . Under an invertible affine map Y = ΦX + cΦ,the PDF of the mapped random vector Y is given by pY (y) = |det Φ|−1 pX
+
+ Φ−1(y − cΦ). This fundamental property dictates that an affine mapping perfectly preserves the geometric nature (i.e., the “type”) of the probability distribution. Consequently, we aim to restrict our directional transformation to be an invertible linear map, 
+
+ϕ(d) = Φd, where the matrix Φ ∈ Rn×n is chosen to approximate the geometric distortion between 
+
+X and Y. Because any invertible linear map is inherently continuous, bijective, and positively homogeneous, this choice strictly satisfies the topological requirements of Proposition 1. To formally construct the transformation matrix Φ, we rely on the concept of affinely related surrogate sets .
+
+Assumption 1 (Affinely Related Surrogate Sets) . Let eX be a solid and convex surrogate set that approximates the geometric proportions of the base set X . Suppose we are given an invertible affine mapping defined by a matrix Φ ∈ Rn×n alongside an offset vector cΦ ∈ Rn. The image of the base surrogate under this mapping produces a solid and convex set, eY = Φ eX + cΦ, acting as a surrogate that captures the geometric proportions of the target set Y.
+
+If Assumption 1 holds, substituting ϕ(d) = Φd into Algorithm 1 ensures that the radial scaling algorithm distributes points in a manner that closely mimics the target set’s geometry, effectively mitigating point accumulation. The challenge remains to systematically compute Φ. A highly practical choice for the surrogate sets eX and eY is to define them as solid ellipsoids. This geometric structure admits a direct analytical computation of the linear transformation matrix Φ.
+
+Proposition 4 (Ellipsoidal Surrogates) . Let the surrogate sets eX and eY be solid ellipsoids, characterized by centers q eX , q eY and invertible shape matrices Q eX , Q eY , respectively. The linear transformation matrix satisfying Assumption 1 is given by Φ = Q eY Q−1 
+
+> eX
+
+.
+
+11 Proof. The solid ellipsoidal surrogates are explicitly defined as: 
+
+eX = {x ∈ Rn | x = Q eX u + q eX , ∥u∥2 ≤ 1} ,
+
+eY = {y ∈ Rn | y = Q eY v + q eY , ∥v∥2 ≤ 1} .To construct the affine map connecting the surrogate sets, we isolate the unit vector. Because the ellipsoids are solid, their shape matrices are invertible. For any x ∈ eX , the corresponding unit vector is uniquely given by u = Q−1 
+
+> eX
+
+(x − q eX ). Substituting u into the definition of eY as a feasible vector v yields the corresponding mapped point y ∈ eY:
+
+y = Q eY Q−1 
+
+> eX
+
+(x − q eX ) + q eY .This establishes the affine point-wise mapping y = Φx + cΦ, where the linear transformation matrix is 
+
+Φ = Q eY Q−1 
+
+> eX
+
+and the offset is cΦ = q eY − Φq eX . Because Φ is the product of two invertible matrices, it is also invertible, thus fulfilling all conditions of Assumption 1. In the prevalent case where the true sets X and Y are explicitly known polytopes defined by H-representations, an effective way to obtain these ellipsoidal surrogates is by computing their Maximum Volume Inscribed Ellipsoids (MVIEs). This can be achieved efficiently by solving standard convex Semidefinite Programs (SDPs) [37]. Utilizing this transformation matrix Φ to warp the search directions approximately aligns the mapped distribution with the geometric proportions of the target set. As illustrated in the fourth plot of Fig. 2, this approach drastically reduces point accumulation and approximately preserves the proportional density of the base distribution, all without the computational burden of multidimensional integration. However, constructing Φ requires explicitly defining the surrogate set eY, which necessitates full geometric knowledge of the target set Y. In hierarchical control schemes like FAOC, the state-dependent feasible parameter set is frequently defined only implicitly via the OCP constraints. The following section extends this linear transformation methodology to implicitly defined, state-dependent target sets, circumventing the need for computationally prohibitive explicit geometric representations and thereby enabling real-time applicability. 
+
+4.4 Mapping for Implicitly Defined Target Sets 
+
+To efficiently execute the linear transformation mapping without relying on an explicit geometric representation of the target set, we consider the case where it is defined as the affine image of a compact and convex set W ⊂ Rnw with dimension nw > n, i.e., 
+
+Y = EW + e , (5) where E ∈ Rn×nw is a projection matrix and e ∈ Rn is an offset vector. By (5) , the set Y is inherently compact and convex. However, for the mapping in Algorithm 1 to apply, Y must also be solid. To guarantee this topological property, we make the following assumption. 
+
+Assumption 2 (Affine Hull Projection) . The image of the affine hull of W under E spans the entire target space, i.e., E (aff W ) = Rn.
+
+A necessary consequence of this assumption is that the matrix E must possess full row rank. Under this rank condition, a sufficient (though not necessary) condition for Assumption 2 to hold is that W is solid. To relate this generic geometric setup to the OCP (2) previously discussed, we provide the following example. 
+
+Example 1 (Implicit Target Set for Generic OCP) . Consider the generic parameterized OCP defined in (2) .To map this formulation into the structure of (5) , we must isolate the parameter p . First, we assume that the inequality constraints are independent of p, such that g (z, p, x) ≡ g(z, x) ≤ 0.
+
+12 Second, we partition the affine equality constraints into those that are independent of p (e.g., system dynamics) and those that explicitly define p (e.g., a terminal state target). Let the parameter-independent equalities be denoted by Azz + Ax x + a = 0. To match the proposed implicit structure, we assume the parameter-dependent constraints can be rearranged into the form Bp p = Bzz + Bx x + b , where the square matrix Bp ∈ Rn×n is invertible. This allows us to isolate the parameter as p = B−1 
+
+> p
+
+(Bzz + Bx x + b), which implies that any equality constraint involving p acts purely to define the parameter space without imposing additional hidden restrictions on z . In prevalent formulations for linear MPC, e.g., (3) , where p = Cx N , this natural separation holds exactly, with B p simply being the identity matrix. We now define W as the state-dependent set of all decision variables satisfying the parameter-independent constraints, i.e., 
+
+W (x) ≜ {z ∈ Z | g(z, x) ≤ 0, Azz + Ax x + a = 0} .
+
+Note that since this set contains explicit equality constraints, it generally possesses an empty interior in Rnz .By definition, a parameter p belongs to the state-dependent feasible parameter set P (x) of the OCP if and only if there exists a z ∈ W (x) such that p = B−1 
+
+> p
+
+(Bzz + Bx x + b). Thus, the parameter set takes the form 
+
+P (x) = EW (x) + e(x), where the state-independent projection matrix is E = B−1 
+
+> p
+
+Bz, and the state-dependent offset is e(x) = B−1 
+
+> p
+
+(Bx x + b). Provided the original OCP satisfies the assumptions of Lemma 1 at the initial state x, the resulting parameter set P (x) is guaranteed to be compact, solid, and convex. 
+
+Having established the implicit definition of the target set Y in (5) , we now demonstrate how to execute Algorithm 1 by computing its three required components—an interior point yc ∈ int Y, the linear transformation matrix Φ, and the boundary scaling factor β—directly from W and the affine mapping (E, e), completely circumventing the need to extract a computationally demanding explicit representation of Y.
+
+4.4.1 Computing an Interior Point 
+
+The first requirement of Algorithm 1 is to locate an interior point yc within the implicitly defined target set Y. The following proposition establishes that this can be achieved purely by projecting a relative interior point of the higher-dimensional base set W, circumventing any geometric operations in the target space. 
+
+Proposition 5 (Interior Point of an Implicitly Defined Set) . Given a convex set W ⊂ Rnw and a point wc ∈ relint W, the mapped point yc = Ew c + e is an interior point of Y = EW + e , provided Assumption 2 holds. Proof. According to [36, Thm. 6.6], the relative interior of a convex set is preserved under linear transformations. Thus, the relative interior of the target set is given by relint Y = E(relint W ) + e. Since 
+
+wc ∈ relint W, it follows that yc ∈ relint Y. By Assumption 2, the affine hull of the target set is the entire space, thus relint Y = int Y and yc ∈ int Y.A robust method to compute a point wc ∈ relint W is to explicitly parameterize the affine hull of the set. Any point w ∈ aff W can be uniquely expressed using a reduced coordinate vector v as 
+
+w = Fv + wp, where the columns of the matrix F form a basis for the linear subspace parallel to aff W,and wp ∈ aff W is a particular translation vector. By applying this coordinate transformation, we project the problem into a lower-dimensional space, defining the reduced set: 
+
+V ≜ {v | Fv + wp ∈ W } .Because this parameterization explicitly eliminates the affine equality constraints, the resulting set V is solid ( int V̸ = ∅). Consequently, one can compute an interior point vc ∈ int V using standard convex optimization techniques, such as finding the Chebyshev center. The required relative interior point is finally recovered via wc = Fv c + wp ∈ relint W.To illustrate this coordinate reduction in a practical OC setting, we provide the following example. 
+
+13 Example 2 (Interior Point Computation for Linear MPC) . Consider the parameterized OCP (3) , where the generic decision vector is z = ( x0: N , u0: N−1), composed of the state sequence x0: N and the input sequence u0: N−1
+
+(note that we have ordered the components of z differently than in the proof of Corollary 1). Because the stage-wise sets Zk and the terminal set XN are assumed to be solid, the affine equality constraints defining the affine hull of 
+
+W (x) stem exclusively from the initial state condition and the system dynamics. We can compactly express these equalities as a linear system: 
+
+Ax0: N + Bu0: N−1 = Cx .
+
+Because the matrix A represents the causal state propagation, it is inherently lower triangular with identity matrices on the diagonal, and thus always invertible. This allows us to explicitly express the state trajectory in terms of the initial state x and the control sequence u 0: N−1:x0: N = A−1(Cx − B u0: N−1) .
+
+This explicit relation serves as the exact analogue to the generic affine parameterization ( w = Fv + wp), where the control sequence u0: N−1 acts as the reduced coordinate vector v . Substituting this expression for x0: N
+
+into the constraints projects the problem into the reduced input space, defining 
+
+V (x) ≜
+
+
+
+u0: N−1
+
+(xk, uk) ∈ Z k, xN ∈ X N
+
+with x 0: N = A−1(Cx − B u0: N−1)
+
+
+
+.
+
+Provided the initial state x admits a strictly feasible trajectory (as assumed in Corollary 1), there exists at least one control sequence that strictly satisfies the constraints imposed by the solid bounding sets Zk and XN .Consequently, the resulting set V (x) is guaranteed to be a solid set ( int V (x)̸ = ∅). One can therefore compute an interior point uc,0: N−1 ∈ int V (x). Finally, the corresponding state trajectory xc,0: N is computed via dynamic propagation, yielding the required relative interior point w c = ( xc,0: N , uc,0: N−1) ∈ relint W (x).
+
+Numerical experience indicates that relying on interior points computed via Proposition 5 can occasionally introduce numerical sensitivities within the mapping procedure detailed in Algorithm 1. For instance, if the target set Y exhibits a highly skewed aspect ratio or narrow regions, an arbitrarily positioned interior point might fall disproportionately close to a boundary, thereby compromising the reliable computation of the boundary scaling factor β. To mitigate this, we propose two optimization-based formulations designed to compute an interior point y∗ 
+
+> c
+
+“deep” within Y by explicitly maximizing an inscribed norm ball, all without requiring an explicit representation of Y.The first formulation utilizes a vertex-based representation. 
+
+Proposition 6 (Vertex-Based Inscribed Ball) . Let BP(r) ⊂ Rn be the closed ball of radius r > 0 under a polyhedral norm ∥ · ∥ P, i.e., BP(r) = {q | ∥ q∥P ≤ r}, and let {qj}mj=1 denote the finite set of vertices of the unit ball BP(1). Assume we are given a nonempty convex set W and an affine mapping defined by (E, e) such that 
+
+Y = EW + e . Let G ∈ Rn×n be a user-defined invertible shape matrix, chosen to align the inscribed ball with the geometry of the target set. The radius r∗ of the largest scaled ball GBP(r∗) + yc inscribed in Y is obtained by solving the following convex optimization problem: r∗ = max 
+
+> r,yc,w1: m
+
+r (6) 
+
+s.t. Ew j + e = rGq j + yc, ∀j ∈ { 1, . . . , m},
+
+wj ∈ W , ∀j ∈ { 1, . . . , m} .
+
+If r ∗ > 0, then y ∗ 
+
+> c
+
+∈ int Y.Proof. Because GBP(r) + yc is a convex polytope, the inclusion condition GBP(r) + yc ⊆ Y holds if and only if all vertices of the former are contained within the latter. Thus, it is necessary and sufficient that 
+
+rGq j + yc ∈ Y for all j ∈ { 1, . . . , m}. By the definition of Y, this implies that every such mapped vertex must correspond to at least one valid pre-image wj ∈ W such that Ew j + e = rGq j + yc. Maximizing 
+
+r yields the largest such inscribed ball. Since W is nonempty, r∗ ≥ 0. If r∗ > 0, the invertibility of G
+
+guarantees that the inscribed ball possesses a nonempty interior, proving that the optimal center point satisfies y∗ 
+
+> c
+
+∈ int Y.
+
+14 For a 1-norm ball, this formulation introduces m = 2n vertices, whereas an ∞-norm ball yields 
+
+m = 2n vertices. Consequently, the computational burden of (6) restricts its real-time applicability to target sets of small dimension n.To circumvent the scaling of the number of constraints with the target set dimension n, we present an alternative formulation that builds upon the concept of lifting. This approach naturally extends to non-polyhedral norm balls and restricts the number of constraints to the order required to describe 
+
+W. While this method provides only a lower bound to the true maximum radius r∗, it remains computationally tractable for higher dimensions n. For brevity, we detail this approach specifically for a polyhedral W, noting that the principle generalizes to arbitrary convex sets. 
+
+Proposition 7 (Lifting-Based Inscribed Ball) . Let B(r) ⊂ Rn be the closed ball of radius r > 0 under an arbitrary norm ∥ · ∥ . Assume W is a nonempty polyhedral set given by W = {w ∈ Rnw | a⊤ 
+
+> j
+
+w ≤ bj, j =
+
+1, . . . , nc} and its affine image is Y = EW + e . Let G ∈ Rn×n be a user-defined invertible shape matrix. A lower bound r ≤ r∗ to the radius of the largest scaled ball GB(r∗) + yc inscribed in Y is computed by the following convex optimization problem over the variables r ∈ R, w c ∈ Rnw , and L ∈ Rnw ×n:r = max 
+
+> r,L,wc
+
+r (7) 
+
+s.t. EL = rG ,
+
+∥L⊤ aj∥∗ + a⊤ 
+
+> j
+
+wc ≤ bj, ∀j ∈ { 1, . . . , nc} ,
+
+where ∥ · ∥ ∗ denotes the dual norm of ∥ · ∥ . If r > 0, then y ∗ 
+
+> c
+
+= Ew ∗ 
+
+> c
+
++ e ∈ int Y.Proof. We require rGq + yc ∈ Y for all q ∈ B (1). This holds if there exists a pre-image w(q) ∈ W 
+
+satisfying Ew (q) + e = rGq + yc. Based on the concept of lifting techniques for inner approximations, we restrict this pre-image to the affine parameterization w(q) = Lq + wc. Matching the linear and constant terms for all q yields EL = rG and yc = Ew c + e.The inclusion w(q) ∈ W requires a⊤ 
+
+> j
+
+(Lq + wc) ≤ bj for all q ∈ B (1) and all j ∈ { 1, . . . , nc}. By the definition of the dual norm, this is exactly equivalent to ∥L⊤ aj∥∗ + a⊤ 
+
+> j
+
+wc ≤ bj. Maximizing r under this restrictive parameterization yields a valid convex optimization problem that provides a lower bound 
+
+r ≤ r∗. If r > 0 and G is invertible, the inscribed ball is solid, ensuring that y∗ 
+
+> c
+
+= Ew ∗ 
+
+> c
+
++ e ∈ int Y.
+
+4.4.2 Computing the Linear Transformation Matrix 
+
+To mitigate point accumulation during the mapping process, Algorithm 1 utilizes a linear transformation matrix Φ derived from affinely related surrogate sets (cf. Proposition 4). Without having access to an explicit representation of Y, existing methods to compute a surrogate set (e.g., the MVIE for polytopes) cannot be applied. Instead, we construct a solid surrogate set eY by computing an appropriate ellipsoidal surrogate in the higher-dimensional space Rnw and mapping it forward. To ensure that eY is solid in Rn, its pre-image surrogate must span the affine hull aff W. We achieve this by leveraging the reduced, solid set V ⊂ Rnv introduced in the previous section. Because V is constructed by explicitly parameterizing the affine hull of W via the basis F and particular solution wp,any solid surrogate within V naturally spans this affine subspace. The following proposition details the exact recovery of the target shape matrix. 
+
+Proposition 8 (Implicit Target Shape Matrix) . Let set eV = {Q eV u + q eV | ∥ u∥2 ≤ 1} be a solid ellipsoidal surrogate for the reduced set V, i.e., Q eV ∈ Rnv ×nv is invertible. Let the corresponding lifted surrogate set be defined as fW = F eV + wp. If Assumption 2 holds, the mapped surrogate in the target space, eY = E fW + e , is a solid ellipsoid. Furthermore, if EFQ eV = U Σ 0 V⊤, the target surrogate is exactly characterized by the invertible shape matrix Q eY = UΣ, meaning eY = {Q eY v + q eY | ∥ v∥2 ≤ 1}, with center q eY = E(Fq eV + wp) + e .Proof. Because eV is solid in Rnv , it shares the affine hull of its embedding space, yielding aff eV = Rnv .Consequently, the lifted surrogate strictly preserves the affine hull of the base set, i.e., aff fW = F(aff eV ) + 
+
+wp = aff W. Under Assumption 2, this geometric preservation guarantees that E(aff fW ) = Rn.
+
+15 Mapping the lifted surrogate forward yields the target set eY = {Ru + q eY | ∥ u∥2 ≤ 1} with 
+
+R = EFQ eV ∈ Rn×nv . Because E(aff fW ) = Rn, the matrix R is guaranteed to possess full row rank, meaning n ≤ nv. To extract a square, invertible shape matrix Q eY ∈ Rn×n, we apply the SVD to R.Substituting R = U Σ 0 V⊤ into the definition of eY reveals that the orthogonal matrix V⊤ acts merely as an isometry on the unit ball {u | ∥ u∥2 ≤ 1} in Rnv , leaving its geometry completely unaltered. Subsequently, the block matrix In 0 orthogonally projects this rotated nv-dimensional unit ball onto its first n components, which results exactly in an n-dimensional unit ball {v | ∥ v∥2 ≤ 1}. Thus, the shape of the projected ellipsoid is perfectly captured by Q eY = UΣ. The matrix Q eY is therefore invertible, confirming that eY is a solid ellipsoid. 
+
+Example 3 (State-Independent Transformation Matrix) . In order to demonstrate how to compute a state-independent linear transformation matrix Φ for the parameterized, state-dependent OCP in (3) , we extend the approach from Example 2. Note that if the transformation matrix were state-dependent, it would require solving an optimization problem—such as an SDP to compute the MVIE—at every control cycle, thereby violating real-time constraints. Instead, we construct an augmented set by lifting the initial state x into the input space. Let X0 ⊂ Rnx be a solid and convex set of viable initial states. We define the augmented set as: 
+
+Va ≜
+
+
+
+(x, u0: N−1)
+
+x ∈ X 0,
+
+(xk, uk) ∈ Z k, ∀k ∈ { 0, . . . , N − 1},
+
+xN ∈ X N ,
+
+with x 0: N = A−1(Cx − B u0: N−1)
+
+
+
+.
+
+Provided there exists at least one initial state x ∈ int X0 that admits a strictly feasible trajectory (residing in the interior of the sets Zk and XN ), the joint set Va contains an interior point and is therefore solid. We can therefore compute its solid ellipsoidal surrogate offline, i.e., 
+
+eVa =
+
+ Qx
+
+Qu
+
+
+
+¯v +
+
+qx
+
+qu
+
+
+
+∥ ¯v∥2 ≤ 1
+
+
+
+,
+
+where the invertible block shape matrix Q⊤ 
+
+> x
+
+Q⊤
+
+> u
+
+⊤ and center q⊤ 
+
+> x
+
+q⊤
+
+> u
+
+⊤ are state independent. At runtime, the initial state x is fixed, imposing the linear constraint Qx ¯v = x − qx. The general solution for the unit ball vector is 
+
+¯v = ¯vp(x) + K⊥v ,
+
+where ¯vp(x) = Q† 
+
+> x
+
+(x − qx ) is the minimum-norm particular solution and K⊥ is an orthonormal basis for the nullspace of Qx. Because ¯vp(x) is orthogonal to the nullspace, we obtain ∥ ¯v∥22 = ∥ ¯vp(x)∥22 + ∥v∥22 ≤ 1. We can therefore reparameterize the nullspace vector as v = r(x) ˜v , where ∥ ˜v∥2 ≤ 1 and r(x) = 
+
+q
+
+1 − ∥ ¯vp(x)∥22. Note that if ∥ ¯vp(x)∥2 > 1, the scalar r(x) becomes undefined, which simply implies that the state x lies outside the (inner) surrogate ellipsoid even though the true feasible set may still be nonempty. We can safely proceed without explicitly evaluating r (x) because, as shown below, it acts solely as a scaling factor that is ultimately discarded. Substituting this parameterization back into the control sequence block yields: u0: N−1 =  r(x)QuK⊥
+
+ ˜v +  Qu ¯vp(x) + qu
+
+ .
+
+The exact shape matrix of this geometric “slice” is r(x)QuK⊥. Crucially, r(x) is only a positive scalar. Because the radial mapping in Algorithm 1 inherently scales the directional transformation ϕ(d) = Φd to the boundary of the target set via the line-search parameter β, any uniform scalar factor inside Φ is completely absorbed. Thus, we can safely discard r (x) and define the effective shape matrix in the control space as: Q eV = QuK⊥ .
+
+Because Qu and K⊥ are computed entirely offline, Q eV is strictly independent of x . Propagating this constant shape matrix forward via Proposition 8 yields a strictly constant target shape matrix Q eY , and consequently, a state-independent linear transformation matrix Φ.
+
+16 4.4.3 Computing the Boundary Scaling Factor 
+
+Finally, to execute Algorithm 1, we must determine the boundary scaling factor β > 0 along the mapped direction d′ = Φd. Rather than performing a boundary search against an explicitly computed geometric representation of Y—which would require computationally prohibitive projection operations online—we maximize the scaling factor directly by lifting the search into the higher-dimensional space of the decision variables. Because W is a convex set, this is formulated as a single convex optimization problem: max  
+
+> β,w
+
+β (8) s.t. Ew + e = yc + βd′,
+
+w ∈ W ,By coupling the robust inscribed-ball formulations for the interior point yc (Proposition 6 or Proposition 7), the state-independent linear transformation matrix Φ derived via Proposition 8 and Example 3, and the scaling computation (8) , the mapping M given by Algorithm 1 is executed without ever computing an explicit geometric representation of the state-dependent target set Y during the coupled execution of the RL policy and the OCP. This circumvention of complex online geometric operations ensures that FAOC remains computationally tractable and highly efficient for real-time control. 
+
+# 5 Experimental Evaluation 
+
+We evaluate FAOC on robot table tennis using an 8-DoF mobile manipulator. The proposed framework is deployed on a real robot that, for the first time, competes and wins against professional-level players in official ITTF matches. Additional experimental details are provided in [1]. 
+
+5.1 Experimental setup 
+
+We first outline the hierarchical control architecture driving the robotic system. To balance strategic decision-making with hardware safety, the control stack operates across two timescales. At the high level, an RL policy processes visual and kinematic feedback to dictate the interception strategy while avoiding static obstacles (e.g., the table and robot links). At the low level, joint controllers track position references at 1 kHz for low latency. FAOC bridges these layers, translating the RL agent’s intent into dynamically feasible joint trajectories via an OCP. 
+
+5.1.1 Motion Planning Setup 
+
+At each control step, the RL agent observes the full 157-dimensional system state (e.g., ball observations, joint states and desired skill) and outputs a 16-dimensional target position and velocity waypoint vector (two for each of the eight joints). These waypoints must be reached after a 32 ms horizon, therefore the RL agent acts at 31.25 Hz . The low-level controllers require reference positions every 1 ms , thus, for each joint, we plan a trajectory of 32 open-loop setpoints. To ensure smooth, safe motions and prevent excessive torques, these trajectories must strictly adhere to physical limits on position, velocity, acceleration, and jerk. To meet these requirements efficiently, we solve a parameterized OCP (structured as in Corollary 1) within the FAOC framework for each joint per RL step. Instead of planning at the native 1 ms resolution, we divide the 32 ms horizon into N = 4 intervals of T = 8 ms , assuming constant jerk over each. Integrating this piecewise-constant jerk three times yields a continuous-time cubic spline for the 
+
+17 0.75  0.50  0.25 0.00  0.25  0.50  0.75  0.20  0.25  0.30  0.35  0.40                
+
+> q[m] q[m]
+> 2
+> 1
+> 0
+> 1
+> 2
+> q[m/s]
+> Full Kinematic Limits
+> Joint 1
+> 0.5
+> 0.0
+> 0.5
+> 1.0
+> 1.5
+> 2.0
+> q[m/s]
+> Zoomed -in Kinematic Limits
+> Joint 1
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25
+> Observation  index 0.0 0.5 1.0
+> Time [s]
+> 0.20
+> 0.25
+> 0.30
+> 0.35
+> q [m]
+> 0.0 0.5 1.0
+> Time [s]
+> 0.0
+> 0.5
+> 1.0
+> q [m/s]
+> 0.0 0.5 1.0
+> Time [s]
+> 5
+> 0
+> 5
+> 10
+> q [m/s 2]
+> 0.0 0.5 1.0
+> Time [s]
+> 400
+> 200
+> 0
+> 200
+> q [m/s 3]
+> Joint 1
+
+Figure 3: Illustration of FAOC deployed during a table tennis game. Top: the executed sequence of actions (black dots), position–velocity trajectories (gray lines) and feasible polytopes for one robot joint during a robot shot. On the top-left, the ranges for the x-axis (position) and y-axis (velocity) correspond to the full kinematic limits of that joint. On the top-right, the axes are magnified for the range used during that particular motion. The feasible polytopes are small due to the relatively high control frequency of 31.25 Hz . Bottom: corresponding position, velocity, acceleration, and jerk trajectories as a function of time. position trajectory. The OCP is formulated as min 
+
+x0: N ,u0: N−1
+
+12
+
+N−1
+
+# ∑
+
+k=0
+
+u2
+
+k (9) s.t. xk+1 = Ax k + Bu k, ∀k ∈ { 0, . . . , N − 1},
+
+x0 = x,
+
+(xk, uk) ∈ Z k, ∀k ∈ { 0, . . . , N − 1},
+
+xN ∈ X ∞
+
+Cx N = p ,where uk ∈ R is the jerk input and xk ∈ R3 denotes the state (position, velocity, acceleration) at the interval boundaries. The matrices A ∈ R3×3 and B ∈ R3×1 represent the exact zero-order hold discretization of the continuous-time triple integrator at the T = 8 ms interval: 
+
+A =
+
+1 T T2
+
+2
+
+0 1 T
+
+0 0 1
+
+ , B =
+
+
+
+T3
+
+6
+
+T2
+
+2
+
+T
+
+ .Here, stage constraints Zk encapsulate the state and input limits. To guarantee recursive feasibility, the terminal state xN is constrained to the Maximum Control Invariant Set (MCIS), denoted as X∞ [39]. Crucially, we slightly shrink the maximum position and velocity limits within Zk. As detailed in [40], this mathematically rigorous conservatism guarantees that sampling the resulting continuous-time 
+
+18 1.0 0.5 0.0 0.5 1.0 
+
+> action position
+> 1.00
+> 0.75
+> 0.50
+> 0.25
+> 0.00
+> 0.25
+> 0.50
+> 0.75
+> 1.00
+> action velocity
+> Action grid
+
+(a) 0.496 0.498 0.500 0.502 0.504                                                                
+
+> position
+> 0.3
+> 0.2
+> 0.1
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> velocity
+> 2Dsoft Wt=[10,10] ws=10.0
+> 0.496 0.498 0.500 0.502 0.504
+> position
+> 0.3
+> 0.2
+> 0.1
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> velocity
+> 2Dsoft Wt=[10,10] ws=1.0
+> 0.496 0.498 0.500 0.502 0.504
+> position
+> 0.3
+> 0.2
+> 0.1
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> velocity
+> 2Dsoft Wt=[10,10] ws=0.1
+> 0.496 0.498 0.500 0.502 0.504
+> position
+> 0.3
+> 0.2
+> 0.1
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> velocity
+> 2Dsoft Wt=[10,10] ws=0.0
+> 0.496 0.498 0.500 0.502 0.504
+> position
+> 0.3
+> 0.2
+> 0.1
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> velocity
+> FAOC 0.502 0.504 0.506 0.508 0.510 0.512 0.514
+> position
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> velocity
+> 2Dsoft Wt=[10,10] ws=10.0
+> 0.502 0.504 0.506 0.508 0.510 0.512 0.514
+> position
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> velocity
+> 2Dsoft Wt=[10,10] ws=1.0
+> 0.502 0.504 0.506 0.508 0.510 0.512 0.514
+> position
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> velocity
+> 2Dsoft Wt=[10,10] ws=0.1
+> 0.502 0.504 0.506 0.508 0.510 0.512 0.514
+> position
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> velocity
+> 2Dsoft Wt=[10,10] ws=0.0
+> 0.502 0.504 0.506 0.508 0.510 0.512 0.514
+> position
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> velocity
+> FAOC
+
+(b) 
+
+Figure 4: Actions sampled in a 15 × 15 grid for FAOC and 2Dsoft (left). Comparison of FAOC (right-most column) vs 2Dsoft (four left columns, for different combinations of cost weights Wt and ws)trajectories generated from those sampled actions for two different initial states (rows). spline at 1 ms never violates the original, unshrunk position limits or the limits on the backward-difference approximations of velocity, acceleration, and jerk. This technique decouples the OCP discretization ( T = 8 ms ) from the low-level control rate (1 ms ), reducing the OCP horizon by a factor of eight and drastically reducing the MCIS geometric complexity to enable real-time computation. The target parameter p ∈ P (x) ⊂ R2 defines the desired terminal waypoint. It is generated by mapping the abstract RL action ¯a via the implicit transformation from Section 4.4. The full-row-rank matrix C = I2 0 ∈ R2×3 isolates the position and velocity components from xN to enforce the target. The resulting quadratic programs are solved in realtime with DAQP [41]. The MCIS is computed offline using Qhull [42] to eliminate redundancies. While the 2D area-matching transformation is applicable, we exclusively use the linear transformation due to its lower computational cost, superior numerical robustness, and equivalent performance. 
+
+5.1.2 Compared controllers 
+
+We compare FAOC against alternative controllers in simulation, as statistically meaningful real-world comparisons are impractical due to the limited availability of professional table-tennis players. First, we implement the method of [30] using the klimits library 2. Like FAOC, this method incorporates reachability into the action space design. However, it is limited to one-dimensional waypoints, so the RL agent specifies either position, velocity, or acceleration. We refer to these variants as 1Dpos , 1Dvel , and 1Dacc .We also compare FAOC with a two-dimensional controller that does not account for reachability when defining the action space. The RL policy outputs a position–velocity waypoint over the full kinematic range (cf. top-left rectangle in Fig. 3), which may therefore be infeasible. To accommodate infeasible targets, the OCP replaces the terminal equality constraint in (9) with the soft terminal cost 12
+
+N−1
+
+# ∑
+
+k=0
+
+wsu2
+
+k + ∥p − Cx N ∥2
+
+Wt
+
+!
+
+,where ws ∈ R++ and Wt ∈ S2
+
+++ are the stage and terminal weights, respectively. This formulation is implemented with the Clarabel solver through the qpsolvers library [43] 3, and is referred to as 2Dsoft .Unlike FAOC, 2Dsoft uses a static, state-independent action space and relies on the cost weights to balance trajectory smoothness against waypoint tracking. As a result, the action space may contain unreachable waypoints, introducing redundant actions whose extent depends on the robot state and the choice of ws and Wt. In contrast, FAOC guarantees feasible waypoints through a terminal equality constraint and requires no tuning. These differences are illustrated in Fig. 4. 
+
+2https://github.com/translearn/limits , version 1.1.3, MIT License 
+
+3https://github.com/qpsolvers/qpsolvers , version 3.4.0, LGPL-3.0 license. 
+
+19 5.1.3 Reinforcement Learning Problem Formulation 
+
+We formulate the RL agent using Universal Value Function Approximators (UVFAs) [44] to learn three table-tennis skills: ball placement, topspin/backspin generation, and smashes. At the start of each training episode, one skill is sampled uniformly at random. Each episode consists of returning a single incoming shot and terminates upon a successful return or a miss. Training shots are sampled from a mixture of synthetic trajectories and real-world human shots to increase shot diversity. The agent receives a reward only at the end of each episode, resulting in a sparse-reward problem. Further details are provided in [1]. 
+
+5.1.4 Evaluation metrics 
+
+The evaluation metrics quantify how effectively the agents learn the target skills. Each data point in Figs. 5 and 6 is computed from 1000 evaluation episodes. Fraction Balls Returned measures the return rate, while Generated Topspin , Generated Velocity , Generated Backspin , and Goal Distance , evaluate topspin, return velocity, backspin, and target accuracy, respectively. Higher values indicate better performance except for Generated Backspin and Goal Distance , as indicated by the arrows in Fig. 5. All metrics are computed from the ball state at its bounce on the opponent’s side and are therefore undefined for unsuccessful returns. To reduce estimation variance, we exclude evaluations with a return rate below 50%. For each of the five controllers (FAOC, 2Dsoft, 1Dpos, 1Dvel, and 1Dacc), we train five agents using different random seeds. 
+
+5.2 Baseline experiment (SAC + BRONets) 
+
+We compare FAOC, 2Dsoft, 1Dpos, 1Dvel, and 1Dacc using off-policy RL algorithm Soft Actor-Critic (SAC) [45] with BRO-based policy and critic network architectures [46]. Hyperparameters and ad-ditional training details are provided in [1]. Fig. 6a reports normalized reward as a function of environment steps (state–action–reward–next-state transitions). FAOC achieves the highest sample effi-ciency and final performance, while the two 2D controllers (FAOC and 2Dsoft) consistently outperform the 1D variants. The latter also exhibit substantially larger variability across random seeds. Statistical comparisons of the evaluation metrics are shown in Fig. 5a using the best-performing checkpoint from each of the five training seeds. The 1Dacc controller is excluded because three of its five seeds achieve a return rate below 50%. FAOC significantly outperforms all other methods in return rate, generated topspin, and generated velocity, explaining its superior reward. No statistically significant differences are observed in generated backspin or goal distance. All methods generate little backspin, likely because cutting the ball at high speed while avoiding the table is challenging. Likewise, placing the ball at any arbitrary location regardless of the incoming shot is difficult. The measured aiming error (approximately 30 cm ) is sufficient for coarse shot placement and is consistent with the conservative reward design used to improve zero-shot transfer to the real robot. The inferior performance of the 1D controllers can be attributed to their reduced controllability: the RL agent directly specifies only one waypoint variable, leaving the remaining degrees of freedom to the optimizer. This limits the set of achievable behaviors and increases sensitivity to exploration, resulting in lower performance and higher variance across seeds. Although 2Dsoft provides the same controllability as FAOC, its state-independent action space contains unreachable waypoints. Exploring such infeasible actions reduces sample efficiency, making it more difficult to discover optimal policies than with FAOC. 
+
+5.3 Effect of algorithm and architectures (SimBaV2) 
+
+To assess whether FAOC’s advantage persists with stronger RL methods, we repeat the comparison using the algorithmic and architectural modifications of SimBaV2 [47]. Specifically, we replace the critics with categorical distributional critics, which have been shown to improve exploration and RL performance [48, 49]. Additionally, we increase the actor and critic sizes by factors of 1.71 (i.e., from 
+
+20 FAOC 
+
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+0.90 
+
+0.95 
+
+1.00 
+
+> Fraction Balls Returned
+
+*: 0.016 *: 0.012 *: 0.008 
+
+(a) 
+
+Baseline Experiment 
+
+(SAC & BRONets) 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+0.90 
+
+0.95 
+
+1.00 *: 0.012 ns: 0.222 ns: 0.834 *: 0.008 
+
+(b) 
+
+Effect of Algorithm and Architectures 
+
+(SimBaV2) 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+0.70 
+
+0.75 
+
+0.80 
+
+0.85 
+
+0.90 
+
+0.95 
+
+1.00 *: 0.021 *: 0.012 *: 0.012 *: 0.012 
+
+(c) 
+
+Effect of low RL Frequency 
+
+(SimBaV2 & low RL frequency) 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+
+0
+
+100 
+
+200 
+
+300 
+
+400 
+
+500 
+
+> Generated Topspin [rad/s]
+
+*: 0.008 *: 0.008 *: 0.008 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+0
+
+100 
+
+200 
+
+300 
+
+400 
+
+500 
+
+*: 0.008 ns: 0.056 *: 0.032 ns: 0.056 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+0
+
+100 
+
+200 
+
+300 
+
+400 
+
+500 
+
+ns: 0.056 *: 0.008 *: 0.016 *: 0.008 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10 
+
+> Generated Velocity [m/s]
+
+*: 0.008 *: 0.008 *: 0.008 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10 
+
+*: 0.016 *: 0.016 *: 0.032 ns: 0.056 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+4
+
+5
+
+6
+
+7
+
+8
+
+9
+
+10 
+
+*: 0.008 *: 0.008 *: 0.008 *: 0.008 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+
+300 
+
+200 
+
+100 
+
+0
+
+100 
+
+> Generated Backspin [rad/s]
+
+ns: 0.421 ns: 0.421 ns: 1.000 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+300 
+
+200 
+
+100 
+
+0
+
+100 
+
+*: 0.008 ns: 0.222 ns: 0.056 ns: 1.000 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+300 
+
+200 
+
+100 
+
+0
+
+100 
+
+ns: 0.421 *: 0.016 ns: 0.056 *: 0.032 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+0.38 
+
+> Goal Distance [m]
+
+ns: 0.841 ns: 0.841 ns: 0.421 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+0.38 ns: 0.421 ns: 0.222 ns: 0.690 ns: 0.548 
+
+> FAOC
+> (ours)
+> 2Dsoft
+> 1Dpos
+> 1Dvel
+> 1Dacc
+
+0.24 
+
+0.26 
+
+0.28 
+
+0.30 
+
+0.32 
+
+0.34 
+
+0.36 
+
+0.38 ns: 0.421 ns: 0.548 ns: 0.548 ns: 0.548 Figure 5: Statistical comparison of performance metrics (plot rows) for the five methods (five seeds each), i.e., FAOC (ours), 2Dsoft, 1Dpos, 1Dvel, and 1Dacc, for the three conducted experiments (plot columns), i.e., (a) baseline experiment using SAC, (b) study of the effect of algorithm and architectures using SimBaV2, and (c) study of the effect of lower RL frequency with SimBaV2. Dashed lines indicate mean value of FAOC (ours). For the baseline experiment, results for 1Dacc are not reported since three seeds did not learn to return balls to the opponent. Arrows next to metrics names indicate which direction is better for the metric, either higher is better (up arrow) or lower is better (down arrow). Above each boxplot of the methods we compare FAOC against, we report p-values of pairwise Mann-Whitney U tests between the corresponding method and FAOC, where ∗ denotes a statistically significant advantage for FAOC ( p < 0.05) while ns indicates no significant difference. Importantly, none of the methods is significantly better than FAOC in any of the metrics for any of the experiments. 
+
+21 0.0 0.2 0.4 0.6 0.8 1.0 1.2  
+
+> Env Steps 1e8
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Normalized Reward
+
+(a) Baseline experiment (SAC & BRONets) 0.0 0.2 0.4 0.6 0.8 1.0 1.2            
+
+> Env Steps 1e8
+> 0.0
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Normalized Reward
+> 0.80 0.85 0.90 0.95 1.00 1.05 1.10 1.15 1.20 1.25
+> Env Steps 1e8
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> Zoom
+
+(b) Effect of algorithm and architecture (SimBaV2) 0.0 0.2 0.4 0.6 0.8 1.0            
+
+> Env Steps 1e8
+> 0.1
+> 0.2
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> Normalized Reward
+> 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 0.95 1.00
+> Env Steps 1e8
+> 0.62
+> 0.64
+> 0.66
+> 0.68
+> 0.70
+> 0.72
+> Zoom
+
+(c) Effect of low RL frequency (SimBaV2 & low RL frequency) 
+
+FAOC (ours) 2Dsoft 1Dpos 1Dvel 1Dacc 
+
+Figure 6: Means (bold lines) and standard deviations (shaded areas) of normalized reward as a function of environment steps across five seeds for each controller. (a) Baseline experiment using SAC algorithm and BRONet architectures. (b) Effect of algorithm and architectures using SimBaV2. (c) Effect of low RL frequency using SimBaV2. Experiment (b) tests whether FAOC is intrinsically better than the other methods, regardless of algorithm and architectures. Experiment (c) tests the hypothesis that FAOC features better trajectory segment controllability by combining 2D waypoints and reachability awareness through its state-dependent action space formulation. Comparing zoomed-in areas of (b) and (c) reveals that FAOC retains better controllability than the other controllers when reducing RL frequency. 2,570,073 to 4,407,385 parameters) and 8.07 (i.e., from 6,380,545 to 51,519,520 parameters), respectively, relative to Section 5.2. This has been shown to improve expressivity, resulting in better exploration [50]. Training curves and statistical comparisons are reported in Fig. 6b and Fig. 5b. Because the rewards for spin and velocity are proportional to tanh (spin/ 450 ) and tanh (vel/ 8),improvements at large values in these metrics produce only small reward differences. Consequently, the normalized reward curves appear similar despite the clearer distinctions observed in Fig. 5b. All controllers improve substantially over the baseline, yet FAOC consistently remains among the best-performing methods and retains statistically significant superiority in eight comparisons. These results indicate that although stronger RL algorithms and larger networks improve all controllers, FAOC’s action space formulation continues to provide a performance advantage. 
+
+5.4 Effect of low RL frequency (SimBaV2 & low RL frequency) 
+
+The experiments above use an RL decision frequency of 31.25 Hz , allowing the policy to replan every 32 ms . Frequent replanning improves controllability because each action shapes only a short trajectory segment, reducing the impact of suboptimal decisions. However, it also increases the number of decisions per episode, making credit assignment more difficult. We want to consider systems where, e.g., due to mechanical, sensory or communication latency, only lower control frequency is possible. Visual-motor latency of humans can be as fast as 150 ms , so for this experiment we choose trajectory segments of 128 ms , corresponding to an RL frequency of 7.8125 Hz . All controllers are trained using the same algorithm and architectures as in Section 5.3. Fig. 6c shows that FAOC largely preserves the performance achieved at the higher decision frequency, as highlighted by the zoomed view of the final 45 million environment steps. In contrast, the remaining controllers degrade more substantially. This trend is confirmed by the statistical analysis in Fig. 5c, where FAOC is significantly better than the competing methods in 13 pairwise comparisons, compared with 8 in Fig. 5b. 
+
+22 6 Conclusion 
+
+We introduced Feasible Action for Optimal Control (FAOC), a control framework that maps Reinforce-ment Learning (RL) actions from a static convex set to a state-dependent feasible parameter set. We demonstrated FAOC on robot table tennis, where it enabled a physical robot to compete and win against professional-level players in official matches [1]. Experimental results confirm that FAOC consistently outperforms existing RL-OC architectures by seamlessly combining strict reachability awareness with superior trajectory segment controllability. 
+
+# Acknowledgment 
+
+The authors sincerely thank Daniel Arnström for developing the DAQP solver and for his prompt, invaluable support throughout this project. Additionally, the authors acknowledge Christian Conti, Dunai Fuentes Hitos, Mario Ynocente Castro, Lison Abecassis, Yannik Nagel, Andrea Scotti, Etienne Walther, Jengyan Wong, and the platform team of Sony AI led by Piyush Khandelwal for their contributions to the training pipeline used in the experiments of this paper. 
+
+# References 
+
+[1] P. Dürr, M. El Gheche, G. J. Maeda, N. Mukai, N. Takahashi, S. Heusser, H. Sahloul, Y. Saraiji, P. Adodin, Y. Bi, S. Blakeman, C. Conti, D. Fuentes Hitos, Y. Hu, F. Khadivar, R. Kreiser, L. Martinez, F. Schilling, R. Tapiador Morales, G. Torrente, M. Ynocente Castro, L. Abecassis, A. Giammarino, Y.-T. Huang, Y. Nagel, A. Scotti, A. Sigrist, T. Silva, E. Walther, J. Wong, B. Yang, A. Aydin, D. Grover, A. Saha, V. Cavinato, T. Kakinuma, T. Kunori, V. Monferrato, S. Richter, S. Charalambous, S. Guist, M. A. Kuhlmann-Jorgensen, L. Miele, A. Politis, M. Scardecchia, H. Kitano, P. R. Wurman, P. Stone, and M. Spranger, “Outplaying elite table tennis players with an autonomous robot,” Nature , vol. 652, no. 8111, pp. 886–891, Apr 2026. [Online]. Available: https://doi.org/10.1038/s41586-026-10338-5 [2] E. Kaufmann, L. Bauersfeld, A. Loquercio, M. Mueller, V. Koltun, and D. Scaramuzza, “Champion-level drone racing using deep reinforcement learning,” Nature , vol. 620, pp. 982–987, 08 2023. [3] J. Luo, C. Xu, J. Wu, and S. Levine, “Precise and dexterous robotic manipulation via human-in-the-loop reinforcement learning,” Science Robotics , vol. 10, no. 105, p. eads5033, 2025. [4] P. Wurman, S. Barrett, K. Kawamoto, J. MacGlashan, K. Subramanian, T. Walsh, R. Capobianco, A. Devlic, F. Eckert, F. Fuchs, L. Gilpin, P. Khandelwal, V. Kompella, H. Lin, P. MacAlpine, D. Oller, T. Seno, C. Sherstan, M. Thomure, and H. Kitano, “Outracing champion gran turismo drivers with deep reinforcement learning,” Nature , vol. 602, pp. 223–228, 02 2022. [5] D. Hoeller, N. Rudin, D. Sako, and M. Hutter, “Anymal parkour: Learning agile navigation for quadrupedal robots,” Science Robotics , vol. 9, no. 88, p. eadi7566, 2024. [6] J. Hwangbo, J. Lee, A. Dosovitskiy, D. Bellicoso, V. Tsounis, V. Koltun, and M. Hutter, “Learning agile and dynamic motor skills for legged robots,” Science Robotics , vol. 4, no. 26, p. eaau5872, 2019. [7] P. Adjei, N. Tasfi, S. Gomez-Rosero, and M. A. M. Capretz, “Safe reinforcement learning for arm manipulation with constrained markov decision process,” Robotics , vol. 13, no. 4, 2024. [8] K. Fan, J. Zhang, X. Zhang, Y. Wu, J. Cao, Y. Zhou, and J. Ma, “Safety-polarized and prioritized reinforcement learning,” in Proceedings of the 42nd International Conference on Machine Learning , ser. Proceedings of Machine Learning Research, vol. 267. PMLR, 2025, pp. 15 862–15 886. [9] S. Gros, M. Zanon, and A. Bemporad, “Safe reinforcement learning via projection on a safe set: How to achieve optimality?” IFAC-PapersOnLine , vol. 53, no. 2, pp. 8076–8081, 2020. 
+
+23 [10] G. Torrente, E. Kaufmann, P. Foehn, and D. Scaramuzza, “Data-driven mpc for quadrotors,” IEEE Robotics and Automation Letters , vol. 6, no. 2, pp. 3274–3281, 2021. [11] L. Hewing, K. P. Wabersich, M. Menner, and M. N. Zeilinger, “Learning-based model predictive control: Toward safe learning in control,” Annual Review of Control, Robotics, and Autonomous Systems , vol. 3, no. 1, pp. 269–296, 2020. [12] C. E. García, D. M. Prett, and M. Morari, “Model predictive control: Theory and practice—a survey,” Automatica , vol. 25, no. 3, pp. 335–348, 1989. [13] D. Mayne, J. Rawlings, C. Rao, and P. Scokaert, “Constrained model predictive control: Stability and optimality,” Automatica , vol. 36, no. 6, pp. 789–814, 2000. [14] F. Borrelli, A. Bemporad, and M. Morari, Predictive Control for Linear and Hybrid Systems . Cambridge University Press, 2017. [15] R. Reiter, J. Hoffmann, D. Reinhardt, F. Messerer, K. Baumgärtner, S. Sawant, J. Boedecker, M. Diehl, and S. Gros, “Synthesis of model predictive control and reinforcement learning: Survey and classification,” arXiv preprint arXiv:2502.02133 , 2025. [16] M. Zhong, M. Johnson, Y. Tassa, T. Erez, and E. Todorov, “Value function approximation and model predictive control,” in 2013 IEEE Symposium on Adaptive Dynamic Programming and Reinforcement Learning (ADPRL) . IEEE, 2013, pp. 100–107. [17] R. Reiter, A. Ghezzi, K. Baumgärtner, J. Hoffmann, R. D. McAllister, and M. Diehl, “Ac4mpc: Actor-critic reinforcement learning for guiding model predictive control,” IEEE Transactions on Control Systems Technology , 2025. [18] K. Lowrey, A. Rajeswaran, S. Kakade, E. Todorov, and I. Mordatch, “Plan online, learn offline: Efficient learning and exploration via model-based control,” in International Conference on Learning Representations , 2019. [19] J. Zhu, F. Wu, and J. Zhao, “An overview of the action space for deep reinforcement learning,” in 
+
+Proceedings of the 2021 4th International Conference on Algorithms, Computing and Artificial Intelligence .Association for Computing Machinery, 2022. [20] B. Brito, M. Everett, J. P. How, and J. Alonso-Mora, “Where to go next: Learning a subgoal recommendation policy for navigation in dynamic environments,” IEEE Robotics and Automation Letters , vol. 6, no. 3, pp. 4616–4623, 2021. [21] B. Brito, A. Agarwal, and J. Alonso-Mora, “Learning interaction-aware guidance for trajectory optimization in dense traffic scenarios,” IEEE Transactions on Intelligent Transportation Systems ,vol. 23, no. 10, pp. 18 808–18 821, 2022. [22] R. Reiter, J. Hoffmann, J. Boedecker, and M. Diehl, “A hierarchical approach for strategic motion planning in autonomous racing,” in 2023 European Control Conference (ECC) . IEEE, 2023, pp. 1–8. [23] R. Reiter and M. Diehl, “Parameterization approach of the frenet transformation for model predictive control of autonomous vehicles,” in 2021 European Control Conference (ECC) . IEEE, 2021, pp. 2414–2419. [24] C. Greatwood and A. G. Richards, “Reinforcement learning and model predictive control for robust embedded quadrotor guidance and control,” Autonomous Robots , vol. 43, no. 7, pp. 1681–1693, 2019. [25] E. Sabouni, H. S. Ahmad, V. Giammarino, C. G. Cassandras, I. C. Paschalidis, and W. Li, “Rein-forcement learning-based receding horizon control using adaptive control barrier functions for safety-critical systems,” in 2024 IEEE 63rd Conference on Decision and Control (CDC) . IEEE, 2024, pp. 401–406. [26] B. Zarrouki, C. Wang, and J. Betz, “Adaptive stochastic nonlinear model predictive control with look-ahead deep reinforcement learning for autonomous vehicle motion control,” in 2024 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) . IEEE, 2024, pp. 12 726–12 733. 
+
+24 [27] T. Tram, I. Batkovic, M. Ali, and J. Sjöberg, “Learning when to drive in intersections by combining reinforcement learning and model predictive control,” in 2019 IEEE Intelligent Transportation Systems Conference (ITSC) . IEEE, 2019, pp. 3263–3268. [28] S. Pfrommer, T. Gautam, A. Zhou, and S. Sojoudi, “Safe reinforcement learning with chance-constrained model predictive control,” in Learning for Dynamics and Control Conference . PMLR, 2022, pp. 291–303. [29] B. Zarrouki, M. Spanakakis, and J. Betz, “A safe reinforcement learning driven weights-varying model predictive control for autonomous vehicle motion control,” in 2024 IEEE Intelligent Vehicles Symposium (IV) . IEEE, 2024, pp. 1401–1408. [30] J. C. Kiemel and T. Kröger, “Learning robot trajectories subject to kinematic joint constraints,” in 
+
+2021 IEEE International Conference on Robotics and Automation (ICRA) . IEEE, 2021, p. 4799–4805. [31] X. Yuan, Y. Wang, J. Liu, and C. Sun, “Action mapping: A reinforcement learning method for constrained-input systems,” IEEE Transactions on Neural Networks and Learning Systems , vol. 34, no. 10, pp. 7145–7157, 2023. [32] M. Theile, L. Dirnberger, R. Trumpp, M. Caccamo, and A. Sangiovanni-Vincentelli, “Action mapping for reinforcement learning in continuous environments with constraints,” Reinforcement Learning Journal , vol. 6, pp. 343–363, 2025. [33] M. Sadr, P. Mohajerin Esfahani, and H. Gorji, “Optimal transportation by orthogonal coupling dynamics,” SIAM Journal on Scientific Computing , 2026. [34] S. A. Akhtar, A. S. Kolarijani, and P. M. Esfahani, “Learning for control: An inverse optimization approach,” IEEE Control Systems Letters , vol. 6, pp. 187–192, 2021. [35] K. Ren, P. Mohajerin Esfahani, and A. Georghiou, “Inverse optimization via learning feasible regions,” in Proceedings of the International Conference on Machine Learning (ICML) , 2025. [36] R. T. Rockafellar, Convex Analysis . Princeton University Press, 1970. [37] S. P. Boyd and L. Vandenberghe, Convex Optimization . Cambridge University Press, 2004. [38] M. Spivak, Calculus , 4th ed. Publish or Perish, Inc., 2008. [39] J. B. Rawlings, D. Q. Mayne, and M. M. Diehl, Model Predictive Control: Theory, Computation, and Design , 2nd ed. Madison, WI: Nob Hill Publishing, 2017. [40] S. Richter, “Method and apparatus for low-complexity trajectory planning,” Patent WO2 025 011 908A1, 2025. [Online]. Available: https://patents.google.com/patent/ WO2025011908A1/en [41] D. Arnström, A. Bemporad, and D. Axehill, “A dual active-set solver for embedded quadratic programming using recursive LDL T updates,” IEEE Transactions on Automatic Control , vol. 67, no. 8, pp. 4362–4369, 2022. [42] C. B. Barber, D. P. Dobkin, and H. Huhdanpaa, “The quickhull algorithm for convex hulls,” ACM Transactions on Mathematical Software , vol. 22, no. 4, pp. 469–483, 1996. [43] S. Caron, D. Arnström, S. Bonagiri, A. Dechaume, N. Flowers, A. Heins, T. Ishikawa, D. Kenefake, G. Mazzamuto, D. Meoli, B. O’Donoghue, A. A. Oppenheimer, A. Pandala, J. J. Quiroz Omaña, N. Rontsis, P. Shah, S. St-Jean, N. Vitucci, S. Wolfers, F. Yang 
+
+et al. , “qpsolvers: Quadratic Programming Solvers in Python,” 2024. [Online]. Available: https://github.com/qpsolvers/qpsolvers [44] T. Schaul, D. Horgan, K. Gregor, and D. Silver, “Universal value function approximators,” in 
+
+International Conference on Machine Learning . PMLR, 2015, pp. 1312–1320. [45] T. Haarnoja, A. Zhou, P. Abbeel, and S. Levine, “Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor,” in International Conference on Machine Learning .PMLR, 2018, pp. 1861–1870. 
+
+25 [46] M. Nauman, M. Ostaszewski, K. Jankowski, P. Miło´ s, and M. Cygan, “Bigger, regularized, optimistic: scaling for compute and sample efficient continuous control,” Advances in Neural Information Processing Systems , vol. 37, pp. 113 038–113 071, 2024. [47] H. Lee, Y. Lee, T. Seno, D. Kim, P. Stone, and J. Choo, “Hyperspherical normalization for scalable deep reinforcement learning,” arXiv preprint arXiv:2502.15280 , 2025. [48] K. Sun, Y. Zhao, E. Shi, Y. Wang, X. Yan, B. Jiang, and L. Kong, “Intrinsic benefits of categorical distributional loss: Uncertainty-aware regularized exploration in reinforcement learning,” in 
+
+Advances in Neural Information Processing Systems , 2025. [49] J. Farebrother, J. Orbay, Q. Vuong, A. A. Taïga, Y. Chebotar, T. Xiao, A. Irpan, S. Levine, P. S. Castro, A. Faust et al. , “Stop regressing: Training value functions via classification for scalable deep rl,” in 
+
+International Conference on Machine Learning , 2024. [50] K. Wang, I. Javali, M. Bortkiewicz, B. Eysenbach et al. , “1000 layer networks for self-supervised rl: Scaling depth can enable new goal-reaching capabilities,” arXiv preprint arXiv:2503.14858 , 2025. 
+
+26

@@ -18,7 +18,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-01</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-02</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -28,7 +28,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-01 21:16:04 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-02 20:42:53 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今天共处理19篇论文，其中精读7篇、速读12篇，重点覆盖机器人控制与世界模型方向。最值得关注的是两篇9.0分精读论文：基于超网络的自适应多任务制导控制，以及无搜索世界模型的意图到动作学习。建议优先阅读这两篇高分工作，并留意8.0分的高精度机器人操作数据缩放规律。</p>
+<p>今日精读7篇、速读12篇，共19篇论文，重点聚焦驾驶行为与跨实体动作理解。</p>
+<p>最值得看：DriveDNA（9.0）提出大规模多模态自然驾驶数据集与驾驶风格识别基准；ContactFlow（9.0）实现跨形态视频动作条件迁移。</p>
+<p>下一步建议：优先深入这两个高分方向，速读中将KAI、IMPRINT等作为场景化补充拓展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -51,9 +53,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Learning Adaptive Multi-Task Guidance, Navigation, and Control via Hypernetworks">Learning Adaptive Multi-Task Guidance, Navigation, and Control via Hypernetworks</span></li><li><span class="dpr-home-dashboard-paper-title" title="INTACT: Isomorphic Intent-to-Action Learning for Search-Free World Models">INTACT: Isomorphic Intent-to-Action Learning for Search-Free World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="DLAM: Distributional Latent Actions with Temporal Constraints">DLAM: Distributional Latent Actions with Temporal Constraints</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DriveDNA: A Large-Scale Multimodal Naturalistic Driving Dataset and Benchmark for Driving Style Identification">DriveDNA: A Large-Scale Multimodal Naturalistic Driving Dataset and Benchmark for Driving Style Identification</span></li><li><span class="dpr-home-dashboard-paper-title" title="ContactFlow: A video action conditioning that transfers across embodiments">ContactFlow: A video action conditioning that transfers across embodiments</span></li><li><span class="dpr-home-dashboard-paper-title" title="Cross-Embodiment Transfer via Behavior-Aligned Representations">Cross-Embodiment Transfer via Behavior-Aligned Representations</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,9 +66,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="The Curse of Precision: A Data Scaling Law for High-Precision Robotic Manipulation">The Curse of Precision: A Data Scaling Law for High-Precision Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="PRISM: Polynomial Representations for Interaction-Structured Motor Control">PRISM: Polynomial Representations for Interaction-Structured Motor Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Reusable Hybrid Motion Priors for Humanoid Locomotion from Motion Imitation">Learning Reusable Hybrid Motion Priors for Humanoid Locomotion from Motion Imitation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="KAI: A Kinematic-Aware Interface for Data-Efficient Articulated Object Manipulation">KAI: A Kinematic-Aware Interface for Data-Efficient Articulated Object Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="IMPRINT: Image-Conditioned Query Enrichment for Long-Tail Object Goal Navigation">IMPRINT: Image-Conditioned Query Enrichment for Long-Tail Object Goal Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Decompose and Reorganize: Planning with Primitives and Visuomotor Policies Learned from Demonstrations">Decompose and Reorganize: Planning with Primitives and Visuomotor Policies Learned from Demonstrations</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
 </div>
 

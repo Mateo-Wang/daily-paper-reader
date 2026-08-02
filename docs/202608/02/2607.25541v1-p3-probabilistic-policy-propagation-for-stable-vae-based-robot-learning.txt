@@ -1,0 +1,1194 @@
+Title: P3: Probabilistic Policy Propagation for Stable VAE-Based Robot Learning
+
+URL Source: https://arxiv.org/pdf/2607.25541v1
+
+Published Time: Wed, 29 Jul 2026 00:57:48 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# P 3: Probabilistic Policy Propagation for Stable VAE-Based Robot Learning 
+
+# Liyun Yan 1,4 , Jianming Ma 1,4 , Yang Zhang 1,Shengcheng Fu 2, Zhanxiang Cao 1,4 , Keqi Zhu 3,4 ,Yizhi Chen 2,4 , Yue Gao 1,4 ∗
+
+> 1
+
+Shanghai Jiao Tong University, Shanghai, China 
+
+> 2
+
+Tongji University, Shanghai, China 
+
+> 3
+
+Zhejiang University, Hangzhou, China 
+
+> 4
+
+Shanghai Innovation Institute, Shanghai, China yuegao@sjtu.edu.cn 
+
+Abstract 
+
+Variational Autoencoders are widely used to encode high-dimensional and noisy observations in robotics. However, their stochastic latent creates a mismatch with Proximal Policy Optimization (PPO): an effective policy marginalizes over the latent distribution, whereas former implementations estimate its probability ratio and KL divergence using only one latent sample. We identify a fundamental but overlooked theoretical cause: naive single-sample approximations in stochastic latent space induce significant variance and bias in the surrogate loss. To address this, we introduce P 3 (Probabilistic Policy Propagation), a distribution-aware optimization framework for VAE-based policies. P 3 couples moment-based probabilistic method for stable and efficient learning with sampling-based calibration for robust policy behavior under latent uncertainty. In our experiments, P 3 boosts data efficiency from 64 .6% to 
+
+> 96% , reduces convergence steps by > 20% . Furthermore, 
+
+P 3 is evaluated on challenging humanoid parkour tasks and shows an effective foundation for VAE-based PPO. Code is available at https://github.com/ylyem9x/P3_Open. 
+
+# 1 Introduction 
+
+The integration of Variational Autoencoder (VAE) (Kingma and Welling 2014; Higgins et al. 2017) with Proximal Pol-icy Optimization (PPO) (Schulman et al. 2017) has become a widely adopted framework in learning-based legged lo-comotion. In this framework, the VAE compresses high-dimensional proprioceptive and exteroceptive data into a compact latent representation (Burgess et al. 2018; Im Im et al. 2017), which serves as an informative observation for the actor. By coupling state estimation with control, this framework has supported remarkable progress in complex-terrain locomotion and robust sim-to-real transfer for both quadrupedal (Luo et al. 2024a; Yu et al. 2024; Li et al. 2025; Lim et al. 2024; Luo et al. 2024b; Lee et al. 2025; Zhang, Nie, and Gao 2024; Liu et al. 2025) and humanoid (Long et al. 2025; Cao et al. 2025; Castillo et al. 2024; Castillo, Lodha, and Hereid 2026; Cui et al. 2024). The widespread adoption of this framework stems from its ability to address real-world partial observability (Ji et al. 2022; Kumar et al. 2021; Kang, Wang, and Xiong 2024), where high-dimensional, noisy observation histories must be 
+
+> ∗
+
+Corresponding author. 
+
+distilled into task-relevant latent states. Moreover, by train-ing on stochastic samples from this latent distribution, the framework forces the policy to adapt to representation un-certainty and filter out sensor noise (Long et al. 2024). These properties make VAE-based PPO an effective framework for learning robust robot-control policies. Despite its empirical success, the stochastic latent repre-sentation introduces an optimization issue that standard PPO does not explicitly account for. Existing implementations, even those employing heuristics such as adaptive bootstrap-ping (Nahrendra, Yu, and Myung 2023), often exhibit slow convergence, training instability, and suboptimal asymptotic performance (Yuan et al. 2026). This raises a key question: why is this effective framework difficult to optimize reliably? In this work, we identify a previously overlooked theo-retical problem in VAE-based PPO. Each observation de-fines a latent distribution, and each latent sample induces a different action distribution. PPO should compare the ag-gregate distributions—the marginalized policies—whereas prior methods compare one sampled component from each policy. As shown in Figure 1, this approximation biases KL estimation and increases the variance of surrogate-loss gradi-ents, causing erroneous clipping and unstable optimization. To address this problem, we introduce P 3 (Probabilistic Policy Propagation), a distribution-aware framework with complementary estimators of the marginalized policy (Fig-ure 2). Deterministic moment matching (MM) (Hernández-Lobato and Adams 2015; Wu et al. 2019; Wright, Nakahira, and Moura 2024; Gast and Roth 2018; Akgül, Haußmann, and Kandemir 2024) enables stable, efficient learning, while a Monte Carlo (MC) latent-sampling refinement (Chua et al. 2018) improves robustness to latent uncertainty. Our main contributions are summarized as follows: 
+
+• We explain why prior methods exhibit slow, unstable training and suboptimal asymptotic performance. 
+
+• We introduce P 3, which propagates the latent distribution through the actor to combine efficient optimization with accurate uncertainty estimation. 
+
+• Experiments show that P 3 raises data efficiency from 
+
+64 .6% to > 96% , reduces convergence steps by > 20% ,and achieves the best transfer results. arXiv:2607.25541v1 [cs.RO] 28 Jul 2026 Figure 1: Single-sample likelihood mismatch in VAE-based PPO. Each latent sample induces an action compo-nent (blue), while the marginalized policy aggregates them (green). Using one component (red) underestimates its over-lap with the old policy (orange), distorting the ratio and KL divergence used by PPO. 
+
+# 2 Preliminaries: VAE-based Legged Locomotion 
+
+POMDP Formulation. Legged locomotion is standardly modeled as a Partially Observable Markov Decision Process (POMDP), defined by the tuple M = ( S, O, A, T , R, γ ).At each timestep t, the agent receives a partial observa-tion ot ∈ O and executes an action at ∈ A . The envi-ronment transitions according to st+1 ∼ T (st+1 | st, a t)
+
+and yields a reward rt. The goal is to learn a policy that maximizes the expected cumulative discounted return 
+
+J(π) = Eτ ∼π [P∞ 
+
+> t=0
+
+γtrt].
+
+VAE-based State Estimation. Since critical states (e.g., linear velocity vt and terrain friction) are often unobservable, recent methods integrate Variational Autoencoders (VAEs) for state estimation. (Nahrendra, Yu, and Myung 2023) pio-neered the use of proprioceptive history oHt to encode a latent variable zt, reconstructing future observations to implicitly model environments and dynamics. Subsequent works like PIE (Luo et al. 2024a) incorporate exteroceptive data oextero 
+
+into the encoder and reconstruction target ˆyt (e.g., height maps), enabling explicit modeling of complex terrain. 
+
+Policy Structure and Optimization. This framework cou-ples a stochastic encoder qϕ(zt | oHt ) with a policy network 
+
+pψ (at | zt, o t) (denoted as qϕ(zt | ot) and pψ (at | zt) here-inafter). Consequently, the effective control policy is formu-lated as a marginal distribution over the latent space: 
+
+πθ (at | ot) = 
+
+Z
+
+pψ (at | zt)qϕ(zt | ot) dz t. (1) End-to-end training of θ = ( ϕ, ψ ) minimizes the combined clipped policy-gradient and VAE loss: 
+
+Ltotal = LCLIP (θ) + LV AE (ϕ),
+
+LCLIP (θ) = ˆE
+
+h
+
+− min( rθ ˆA, clip (rθ , 1 − ϵ, 1 + ϵ) ˆA)
+
+i
+
+,
+
+LV AE (ϕ) = M SE (yt) + βD KL (qϕ(zt | ot)∥N (0 , I )) .
+
+(2) Here, rθ = πθ (a | o)/π θold (a | o) denotes the probability ratio, ˆA is the advantage estimate, M SE (yt) represents the reconstruction error, and β is the weighting coefficient. This joint optimization aims to learn a robust latent representation while simultaneously maximizing task performance. 
+
+# 3 Theoretical Analysis 
+
+As illustrated in Figure 1, each latent sample z ∼ qϕ(·| o) in-duces a Gaussian distribution in the action space via the actor network pψ (·| z) and policy standard deviation σact for PPO exploration. The overall policy πθ (a|o), which marginalizes over the latent space, aggregates these components and forms a distribution with higher variance. However, replacing the marginalized policy with a sin-gle sampled component creates two distinct estimation er-rors. First, it systematically distorts the log probability ratio, changing PPO’s clipping decisions and yielding a biased KL estimate after averaging over actions. Second, finite la-tent sampling makes the probability-ratio estimate fluctuate across evaluations, increasing the variance of the surrogate-loss gradient and destabilizing optimization. 
+
+3.1 KL Divergence Analysis 
+
+To further elucidate how this systematic distortion under-mines trust-region enforcement in PPO, we use the connec-tion between the KL divergence and the probability ratio, 
+
+DKL (πθold ∥ πθ ) = Ea∼πθold [− log rθ (a)] , and first exam-ine the decomposed policy KL divergence. We substitute the marginalized policy πθ (at | ot) = R pψ (at | zt)qϕ(zt |
+
+ot) dz t into the KL divergence formula. By applying Jensen’s inequality, we obtain a tractable upper bound for the policy KL divergence (detailed in Appendix A.1): 
+
+DKL (πθold (·| o) ∥ πθ (·| o)) 
+
+≤ Ez∼qϕold 
+
+h
+
+DKL 
+
+ pψold (·| z) ∥ pψ (·| z)i
+
++ DKL 
+
+ qϕold ∥ qϕ
+
+.
+
+(3) To quantify the impact of this decomposition on optimization stability, we recall the theoretical monotonic improvement lower bound derived in TRPO (Schulman et al. 2015): 
+
+J(πθ ) ≥ L(πθ ) − C · Dmax  
+
+> KL
+
+(πθold ∥ πθ ), (4) where L(πθ ) is the unclipped surrogate objective. While PPO approximates this trust region constraint via clipping, sub-stituting our decomposition upper bound (Equation (3)) into Equation (4) yields this latent-conditioned-policy objective: 
+
+J(πθ ) ≥L(πθ )
+
+− C · Emax z∼qϕold 
+
+h
+
+DKL 
+
+ pψold (·| z) ∥ pψ (·| z)i
+
+− C · Dmax KL 
+
+ qϕold ∥ qϕ
+
+.
+
+(5) This derivation highlights that when optimizing a policy with a latent state estimator, the objective must simultaneously constrain the estimator’s distribution shift ( Dmax KL (qϕold ∥
+
+qϕ)) and the actor’s consistency across the entire latent dis-tribution. While the former is implicitly regularized by the KL term in the VAE’s loss function, prior methods often neglect the consistency term Emax z∼qϕold 
+
+h
+
+DKL 
+
+ pψold (·| z) ∥
+
+pψ (·| z)i
+
+, instead regularizing it only with respect to a single latent sample. In the PPO-clip objective, the component-to-marginal mismatch systematically distorts the log probability ratio. These distorted probability ratios erroneously clip ben-eficial actions, while failing to penalize policy updates that exceed the trust region, leading to training inefficiency and instability. 
+
+3.2 Gradient Noise Analysis 
+
+We also perform an analysis of the additional noise (Noise latent ) introduced into the gradient by the stochas-tic sampling process. Our derivation (detailed in Appen-dices A.2 and A.4) utilizes the Delta method and a Taylor expansion (conditions validated in Section 5.3) of the actor network to approximate the variance of the gradient ˆg. The analysis reveals that the total variance of the gradient estima-tor constitutes the sum of the intrinsic PPO gradient variance and the additional noise induced by latent sampling. The analytical expression for additional noise suggests: Noise latent ∝ A2
+
+N ·
+
+ da
+
+σ2
+
+> act
+
+| {z }
+
+> Score Var
+
+·
+
+ σ2
+
+> vae
+
+∥Jψ ∥2
+
+> F
+
+σ2
+
+> act
+
+| {z }
+
+> Ratio Var
+
+. (6) 
+
+N is the number of latent samples, da is the action dimen-sion, σact is the action standard deviation, and ∥Jψ ∥F is the Frobenius norm of the actor Jacobian. The term Score Var stems from the error in gradient calculation via PPO action sampling, while Ratio Var arises from latent-space sampling. From this equation, we draw the following conclusions regarding the optimization dynamics: 
+
+Adam-style optimizers Adam’s update step is inversely scaled by the estimated gradient to ensure stability (Kingma and Ba 2015). When facing the elevated gradient noise in-troduced by the latent sampling, the optimizer is forced to adopt aggressively smaller step sizes. More critically, as the policy attempts to converge—characterized by a reduction in σact —the gradient noise explodes. This surge in variance triggers an excessive reduction in the effective learning rate, causing the training to stagnate precisely when fine-grained policy refinement is required. 
+
+SGD-style optimizers Characterized by stochastic gradi-ent estimation, the optimization trajectory tends to naturally escape regions of high gradient variance due to the lack of adaptive moment estimation. SGD introduces an implicit bias that hinders the policy from reducing σact , making it difficult to converge towards a deterministic optimal policy. Additionally, the noise magnitude is directly correlated with the action dimension da. In high-degree-of-freedom tasks, such as humanoid control, this scaling effect further exacerbates the optimization difficulties. Therefore, to retain the robustness of the VAE encoder while mitigating erroneous trust-region clipping and conver-gence stagnation, PPO should estimate the marginalized ac-tion likelihood rather than rely on a single latent sample. This requires propagating the VAE latent distribution through the actor, motivating the probability estimators introduced next. 
+
+# 4 Method 
+
+We propose Probabilistic Policy Propagation ( P 3) to esti-mate the marginalized policy in Equation (1) for PPO. P 3
+
+provides two interchangeable estimators: deterministic mo-ment matching (MM) and Monte Carlo (MC) latent sam-pling. They share the same objective and checkpoints, dif-fering only in how latent uncertainty is propagated to the action likelihood. MM favors efficient, low-noise optimiza-tion, whereas MC more faithfully captures latent uncertainty at higher computational cost. Our default instantiation com-bines their strengths by learning a strong policy with MM and then applying a short sampling-based calibration, termed 
+
+Latent Sample Fine-Tuning (LSFT). 
+
+4.1 Moment-Matching Estimator 
+
+MM evaluates the actor by propagating the first two moments 
+
+(μ, v) through its existing layers under a diagonal-covariance approximation. This is a probabilistic evaluation rule for the same weights ψ, rather than a separate actor network. For deterministic actor inputs such as the previous action, the input variance is zero; the VAE latent contributes (μz , σ2 
+
+> z
+
+).The propagated action variance is combined with the actor’s exploration variance to give 
+
+bπMM  
+
+> θ
+
+(a | o) = N  a μout , diag( vout ) + σ2
+
+> act
+
+I . (7) 
+
+Probabilistic Linear Layer. Given input moments μin 
+
+and vin , the output moments for a linear layer (W, b) are 
+
+μout = Wμin + b,
+
+vout = ( W ◦ W)vin , (8) where ◦ is the Hadamard product. 
+
+Probabilistic ELU Activation. For an input x ∼N (μ, σ 2), we derive the analytical moments of the ELU activation (Appendix A.5). Let Φ and ϕ denote the CDF and PDF of the standard normal distribution, respectively, and let 
+
+β = μ/σ . The expectation is 
+
+E[y] = μΦ( β)+ σϕ (β)+ α
+
+h
+
+eμ+ σ22 Φ ( −β − σ) − Φ( −β)
+
+i
+
+.
+
+(9) The second moment is 
+
+E[y2] = ( μ2 + σ2)Φ( β) + μσϕ (β)+ α2h
+
+e2μ+2 σ2
+
+Φ( −β − 2σ)
+
+− 2eμ+ σ22 Φ( −β − σ) + Φ( −β)
+
+i
+
+.
+
+(10) The output variance is vout = E[y2] − (E[y]) 2.
+
+Optimization Properties. MM is deterministic condi-tional on ot: repeated evaluations produce the same marginalized-likelihood approximation. It therefore removes finite-sample fluctuations from the likelihood ratio used for PPO clipping while retaining latent uncertainty through vout .As shown in Appendix A.4, policy-gradient noise comprises Figure 2: Overview of P 3. The left panel illustrates the VAE-based state estimator. The right panel shows two complementary estimators of the same marginalized policy: moment matching (MM) provides efficient, low-noise optimization, whereas Monte Carlo (MC) latent sampling more faithfully exposes the actor to latent uncertainty. Both operate on the same actor and can be switched without changing its architecture or parameters. the intrinsic PPO variance from trajectory sampling and ad-ditional variance from finite latent sampling. MM eliminates the latter, leaving Noise total ≈ Var( Y ) ∝ A2 da
+
+σ2 
+
+> act
+
++ vout 
+
+. (11) This reduced-noise signal is consistent with the stable, rapidly convergent optimization observed in Section 5.4. De-terminism does not remove all approximation error: by dis-carding cross-unit covariance, MM can underestimate vout ,yielding an overly narrow policy. 
+
+4.2 Latent-Sampling Estimator 
+
+The MC estimator evaluates the actor pψ at N independent samples z(i) ∼ qϕ(· | o) and averages their likelihoods: 
+
+bπMC  
+
+> θ
+
+(a | o) = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+N (a | μ(i), σ 2
+
+> act
+
+I). (12) The samples are processed in parallel by expanding the envi-ronment batch by a factor of N . As N grows, Equation (12) consistently approaches the marginalized policy without im-posing MM’s diagonal-covariance propagation approxima-tion. It captures latent-induced correlations and trains the actor across the support of qϕ, helping when observation and dynamics shifts perturb the latent representation during sim-to-real transfer (Loquercio, Segu, and Scaramuzza 2020). Accuracy comes with a direct computational cost: actor evaluation and activation memory both scale as O(N ). A small N leaves substantial ratio variance, while N ≥ 50 is reliable but expensive throughout training. 
+
+4.3 Complementary Hybrid Schedule 
+
+Because MM and MC share the same encoder and actor, switching between them simply replaces the marginal-policy 
+
+Algorithm 1 P 3 with Switchable Probability Estimators  
+
+> 1:
+
+Input: Estimator schedule {ek}, sample count N 
+
+> 2:
+
+Initialize: Actor pψ , VAE qϕ, critic Vω 
+
+> 3:
+
+for each PPO update k do  
+
+> 4:
+
+Select ek and collect PPO data D with bπek 
+
+> θold
+> 5:
+
+Obtain μz , σ2 
+
+> z
+
+← qϕ(o) 
+
+> 6:
+
+if ek = MM then  
+
+> 7:
+
+(μout , vout ) ← MM( pψ ; [ o, μz ], [0, σ2 
+
+> z
+
+])  
+
+> 8:
+
+bπek 
+
+> θ
+
+← N (μout , diag( vout ) + σ2
+
+> act
+
+I) 
+
+> 9:
+
+else  
+
+> 10:
+
+Draw z(i) ∼ qϕ(· | o) and compute μ(i) ←
+
+Actor( o, z (i); ψ) for i = 1 , . . . , N  
+
+> 11:
+
+bπek 
+
+> θ
+
+(a | o) ← 1
+
+> N
+
+PNi=1 N (a | μ(i), σ 2
+
+> act
+
+I) 
+
+> 12:
+
+end if  
+
+> 13:
+
+Compute Equation (2) using bπek 
+
+> θ
+
+and bπek 
+
+> θold
+> 14:
+
+Update ψ, ϕ, ω  
+
+> 15:
+
+end for 
+
+estimator while retaining all learned parameters. Algorithm 1 summarizes this shared training interface. Our default P 3 schedule first trains the policy with MM, whose deterministic propagation eliminates latent-sampling noise and the resulting outliers in the PPO likelihood ratio, providing a stable signal for rapid initial convergence. After the MM policy reaches its training plateau, we switch the es-timator to MC for a short Latent Sample Fine-Tuning (LSFT) phase. By propagating samples from qϕ through the nonlin-ear actor, MC more faithfully represents how the full latent distribution is transformed into the action distribution, in-cluding distributional structure that diagonal MM may omit. LSFT builds on the well-trained MM policy and further im-proves its performance and robustness to latent uncertainty. 5 Experiments 
+
+We design experiments to address the following questions: 
+
+Q1: To what extent can P 3 improve data efficiency? 
+
+Q2: What approximation error does MM add to the actor’s output distribution, and does MC-based LSFT mitigate it? 
+
+Q3: Does P 3 improve convergence and asymptotic per-formance over MC estimators and other baselines? 
+
+Q4: Does P 3 improve sim-to-sim and sim-to-real transfer? 
+
+5.1 Experimental Setup 
+
+We evaluate P 3 on a challenging locomotion task: humanoid traversal of complex terrain. Policies are trained at scale in Isaac Sim (NVIDIA 2025) using RSL-RL (Schwarke et al. 2025), then evaluated in MuJoCo (Todorov, Erez, and Tassa 2012) and on a real robot. 
+
+Network Structure We adopt an Actor-Critic framework with a VAE estimator similar to prior works (Long et al. 2025), visualized in Figure 2. The actor is an MLP that maps observation ot and latent variable zt to joint target positions at. The VAE estimator processes two inputs: proprioceptive history oHt and extero-ceptive observation oextero  
+
+> t
+
+. Specifically, the encoder employs an MLP to encode oHt (simultaneously estimating velocity 
+
+vt) and a CNN to encode oextero  
+
+> t
+
+. The decoder utilizes an MLP to reconstruct the next state ot+1 conditioned on at,while a CNN reconstructs oextero  
+
+> t
+
+from the latent space. 
+
+Baseline and Estimator Nomenclature The simplest VAE architecture (similar to (Long et al. 2025)) is adopted as the primary baseline to isolate confounding factors and focus on the improvements brought by probabilistic prop-agation. In addition to VAE, we select the following algo-rithms as baselines: SimpleActorCritic (Rudin et al. 2022), SPR (Schwarzer et al. 2021), and AutoEncoder (AE), de-tailed in Appendix B.2. For a fair comparison, all baselines are trained using PPO-clip and the same hyperparameters. The detailed hyperparameters are listed in Appendix B.3. Throughout this section, MC-only (N ) denotes training from initialization with the MC estimator and N latent samples; the VAE baseline is its single-sample case ( N = 1 ). We use 
+
+P 3-MM for the checkpoint learned with MM before LSFT, and P 3 for the complete schedule, which switches that check-point to MC with N = 15 for LSFT. 
+
+Environment and Terrain Curriculum Design Our sim-ulation environment setup is similar to (Long et al. 2025) and (Wang et al. 2025). The humanoid robot is trained for loco-motion on challenging terrains, including stepping stones, stairs, and gaps (detailed in Appendix B.4). We adopt a widely used curriculum-based training scheme with varying terrain difficulties introduced in (He et al. 2025; Rudin et al. 2022). Robots are first assigned a random terrain type, and those who successfully traverse it are promoted to the next difficulty level, while those who fail are demoted. The diffi-culty level of each terrain is tuned heuristically; for instance, the stepping stones size decreases and sparsity increases as the curriculum progresses.             
+
+> Probability Estimator Deff ↑
+> MC ( N= 1 ; VAE) 64.6% MC ( N= 5 )79.3% MC ( N= 15 )89.8% MC ( N= 50 )96.5% MM ( P3-MM) 100.0%
+
+Table 1: Data efficiency under the identical-policy diagnostic. Higher values mean fewer erroneously clipped samples. 
+
+Hardware Setup Training is conducted using NVIDIA Hopper architecture GPUs. For real-world experiments, the model inference runs on a laptop equipped with NVIDIA RTX 5090 GPU, which transmits control commands to the G1 robot in real-time. The trained policy is deployed on the 29-DoF Unitree G1 humanoid robot. Robot-centric elevation map (Miki et al. 2022; Erni et al. 2023) receives data from Fast LiDAR-Inertial Odometry (FAST-LIO) (Xu and Zhang 2021; Xu et al. 2022) for Livox mid-360 radar. 
+
+5.2 Data Efficiency Results 
+
+PPO-Clip suppresses the policy-gradient contribution of a sample once its probability ratio enters the saturated clip-ping branch. Single-sample estimation can assign different probability ratios under identical policies and observation, spuriously pushing an informative sample into this branch. We denote data efficiency (Deff ) as the fraction of samples whose estimated probability ratios remain within the clipping interval when the current and old policies are identical, 
+
+Deff = 1
+
+M
+
+> M
+
+X
+
+> i=1
+
+I[1 − ϵ ≤ ˆri ≤ 1 + ϵ] × 100% . (13) With exact marginalized-policy likelihoods, the ratio equals one for samples in this controlled setting. Any ratio outside 
+
+[1 −ϵ, 1+ ϵ] is an estimation artifact. This diagnostic measures the utilization of samples within a PPO update. As reported in Table 1, the single-sample VAE retains only 64.6% of samples within the unclipped interval, meaning that 35.4% are spuriously exposed to clipping. Increasing the number of latent samples progressively improves the MC estimate, reaching 96.5% data efficiency at N = 50 ; by contrast, MM attains Deff = 100 .0% by construction. This data efficiency loss can be traced to KL estimation error because the PPO ratio and policy KL divergence sat-isfy DKL (πθold ∥πθ ) = Ea∼πθold [− log rθ (a)] and share the same estimated marginalized-policy likelihoods. If finite-sample likelihood error drives erroneous clipping, its KL estimate should approach a stable reference as N grows. Figure 3 confirms this prediction: the single-sample VAE overestimates the stable high-sample KL value by approxi-mately a factor of three, whereas the discrepancy decreases with N and MM closely matches the estimate obtained with more than 30 samples. Together with Table 1, this result shows that single-sample KL bias causes erroneous clipping and reduces data utilization. Figure 3: KL-divergence estimates for a single-epoch up-date at epoch 1000. MC approaches a stable high-sample reference as N increases, while MM achieves comparable accuracy without latent sampling. 
+
+5.3 Action Distribution Results 
+
+We compare the action distribution approximated by MM with an empirical reference obtained by direct latent sam-pling. As illustrated in Figure 4, with further analysis in Appendix C.1, the actor’s output resembles a multivariate Gaussian distribution with non-diagonal covariance, indicat-ing linear correlations between dimensions. MM propagates diagonal first- and second-order statistics and therefore does not explicitly model cross-dimensional covariance. At the P 3-MM checkpoint, the top panel of Fig-ure 4 shows that its propagated distribution underestimates the action variance relative to the MC reference while pre-serving a closely aligned action mean. This mean fidelity provides a low-variance optimization signal for learning. After LSFT, the bottom panel shows closer agreement between the propagated and sampled distributions, indicating that LSFT mitigates MM’s variance underestimation. 
+
+5.4 Convergence Analysis 
+
+Evaluation Metrics We report curriculum difficulty , the mean terrain-curriculum level reached by the training pop-ulation, as the primary learning-progress metric. A higher value indicates reliable traversal of harder terrain. 
+
+Comparison of Probability Estimators For all curves, a successful stopping point requires a sustained near-asymptotic plateau and a terminal curriculum difficulty of at least 4.5; methods that fail this criterion remain visible through 15,000 epochs. Under this protocol, P 3 reaches a high-difficulty plateau after 7,000 epochs of MM training. The complete P 3 schedule then switches to MC with N = 15 
+
+for 1,000 epochs of LSFT. MC-only ( N = 50 ), the strongest sampling baseline, con-verges at epoch 10,000 and at a lower difficulty; P 3 therefore requires 20% fewer training epochs. MC-only ( N = 15 )converges slightly later. Neither MC-only ( N = 5 ) nor the single-sample VAE converges within the 15,000-epoch bud-get; both exhibit pronounced training instability, consistent with the high variance of their finite-sample probability es-timates. Although increasing N improves performance, it expands actor evaluation and memory cost proportionally to the sample count (Appendix C.2). 
+
+Figure 4: Action-distribution approximation in P 3. Blue points are actor outputs from direct latent sampling (the MC reference), and red points are drawn from the distribution obtained by MM propagation. The top panel uses the P 3
+
+checkpoint before LSFT; the bottom panel uses it after LSFT. This comparison isolates the roles of the two estimators: MM efficiently acquires a strong policy, after which a short MC-based LSFT phase improves robustness to latent uncer-tainty. Their combination gives P 3 a more favorable opti-mization trajectory than MC-only training. 
+
+Comparison with Other Algorithms Figure 6 compares the P 3 training trajectory with AE, SPR, and a direct Actor– Critic baseline. P 3 converges first, at epoch 8,000, and attains the highest terminal curriculum difficulty. AE is the only other method to converge, reaching a lower terminal level (approximately 4.65) at epoch 12,000; thus, P 3 requires 33% 
+
+fewer training epochs. SPR and Actor–Critic do not satisfy the criterion within 15,000 epochs. Together with the controlled clipping diagnostic in Ta-ble 1, these results link improved probability estimation to an observable optimization benefit: P 3 both reaches difficult terrain earlier and finishes at a stronger policy checkpoint than the competing estimators and architectures. 
+
+5.5 Performance Analysis 
+
+To evaluate the performance and robustness of our policy, we reconstructed the stepping stones, stairs, and gap terrains from IsaacLab within the MuJoCo physics engine. MuJoCo employs a convex optimization formulation for contact dy-namics, yielding high-precision physical interactions that dif-fer naturally from the dynamics in IsaacLab (Todorov, Erez, and Tassa 2012). This discrepancy serves as a rigorous test for the policy’s transfer capabilities. Table 2 presents a performance comparison of the different algorithms in MuJoCo. All models use either the most recent checkpoint after convergence or the 15,000-epoch result if not converged. The P 3-MM policy is evaluated at the 7,000-Figure 5: Comparison of probability estimators. Curricu-lum difficulty is plotted against PPO training epochs. Solid curves and bands denote the mean and one standard devia-tion; the dashed segment is a dedicated 1,000-epoch LSFT (N = 15 ). Open circles indicate convergence. 
+
+Figure 6: Comparison with representation-learning base-lines. Curves follow the same notation and stopping protocol as Figure 5. The P 3 trajectory comprises 7,000 epochs with MM followed by 1,000 epochs of MC-based LSFT ( N = 15 ). epoch checkpoint; the complete P 3 policy continues from that checkpoint for 1,000 epochs of LSFT with N = 15 and terminates at epoch 8,000. The deterministic AE baseline outperforms the stochas-tic VAE in both total reward (17.9 vs. 16.2) and lifetime (18.0 vs. 15.4), whereas SPR exhibits the weakest transfer performance. More importantly, P 3-MM already surpasses MC-only ( N = 50 ) on both metrics at its 7,000-epoch check-point. LSFT further increases the total reward from 18.9 to 20.1 and the lifetime from 19.7 to 20.0. Consequently, the complete P 3 achieves the best overall performance in Mu-JoCo across both metrics. Real-world experiments, as summarized in Table 3,                    
+
+> Method Total Reward ↑Lifetime ↑
+> VAE 16.2 15.4 SimpleActorCritic 13.7 18.3 AE 17.9 18.0 SPR 10.7 14.4 MC-only ( N= 50 )18.2 19.4
+> P3-MM 18.9 19.7
+> P320.1 20.0
+
+Table 2: Performance comparison in MuJoCo.                            
+
+> Method Stepping Stairs Gaps VAE 677SimpleActorCritic 023AE 477SPR 224MC-only ( N= 50 )879
+> P3-MM 779
+> P38910
+
+Table 3: Success counts in real-world deployment (10 trials). 
+
+Figure 7: Real-world evaluation. We validated the effec-tiveness of P 3 on the G1 robot in the real world. The robot successfully navigated through challenging terrains such as stepping stones and stairs. demonstrate the effectiveness of our method in deployment. Despite elevation-map drift and kinematic discrepancies, P 3
+
+attains the highest overall success counts in Figure 7. 
+
+# 6 Conclusion 
+
+This work targets a specific yet consequential bottleneck in a widely adopted robotics framework: optimizing a stochastic VAE state estimator together with PPO. We propose Prob-abilistic Policy Propagation ( P 3), enabling this architecture to retain VAE’s advantages while being optimized as a co-herent policy distribution. By removing a long-standing op-timization barrier without abandoning this proven robotics paradigm, P 3 turns VAE-based policy learning into a more reliable and scalable foundation, opening the door to its broader adoption across robots and sensing modalities. References 
+
+Akgül, A.; Haußmann, M.; and Kandemir, M. 2024. Deter-ministic uncertainty propagation for improved model-based offline reinforcement learning. Advances in Neural Informa-tion Processing Systems , 37: 70313–70348. Burgess, C. P.; Higgins, I.; Pal, A.; Matthey, L.; Watters, N.; Desjardins, G.; and Lerchner, A. 2018. Understanding Disentangling in β-VAE. arXiv:1804.03599. Cao, Z.; Zhang, Y.; Nie, B.; Lin, H.; Li, H.; and Gao, Y. 2025. Learning Motion Skills with Adaptive Assistive Curriculum Force in Humanoid Robots. arXiv:2506.23125. Castillo, G. A.; Lodha, H.; and Hereid, A. 2026. Learn-ing Terrain-Aware Bipedal Locomotion via Reduced-Dimensional Perceptual Representations. IEEE Transactions on Control Systems Technology , 34(3): 1149–1161. Castillo, G. A.; Weng, B.; Zhang, W.; and Hereid, A. 2024. Data-driven latent space representation for robust bipedal locomotion learning. In 2024 IEEE International Conference on Robotics and Automation (ICRA) , 1172–1178. IEEE. Chua, K.; Calandra, R.; McAllister, R.; and Levine, S. 2018. Deep reinforcement learning in a handful of trials using prob-abilistic dynamics models. Advances in neural information processing systems , 31. Cui, W.; Li, S.; Huang, H.; Qin, B.; Zhang, T.; Zheng, L.; Tang, Z.; Hu, C.; Yan, N.; Chen, J.; et al. 2024. Adapting humanoid locomotion over challenging terrain via two-phase training. In 8th Annual Conference on Robot Learning .Erni, G.; Frey, J.; Miki, T.; Mattamala, M.; and Hutter, M. 2023. MEM: Multi-Modal Elevation Mapping for Robotics and Learning. In 2023 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 11011–11018. IEEE. Gast, J.; and Roth, S. 2018. Lightweight probabilistic deep networks. In Proceedings of the IEEE conference on com-puter vision and pattern recognition , 3369–3378. He, J.; Zhang, C.; Jenelten, F.; Grandia, R.; Bächer, M.; and Hutter, M. 2025. Attention-based map encoding for learning generalized legged locomotion. Science Robotics , 10(105): eadv3604. Hernández-Lobato, J. M.; and Adams, R. 2015. Probabilis-tic backpropagation for scalable learning of bayesian neural networks. In International conference on machine learning ,1861–1869. PMLR. Higgins, I.; Matthey, L.; Pal, A.; Burgess, C.; Glorot, X.; Botvinick, M.; Mohamed, S.; and Lerchner, A. 2017. beta-vae: Learning basic visual concepts with a constrained vari-ational framework. In International conference on learning representations .Im Im, D.; Ahn, S.; Memisevic, R.; and Bengio, Y. 2017. De-noising criterion for variational auto-encoding framework. In 
+
+Proceedings of the AAAI conference on artificial intelligence .Ji, G.; Mun, J.; Kim, H.; and Hwangbo, J. 2022. Concur-rent training of a control policy and a state estimator for dynamic and robust legged locomotion. IEEE Robotics and Automation Letters , 7(2): 4630–4637. Kang, J.; Wang, Y.; and Xiong, X. 2024. Fast Decentralized State Estimation for Legged Robot Locomotion via EKF and MHE. IEEE Robotics and Automation Letters , 9(12): 10914– 10921. Kingma, D. P.; and Ba, J. 2015. Adam: A Method for Stochas-tic Optimization. In International Conference on Learning Representations (ICLR) .Kingma, D. P.; and Welling, M. 2014. Auto-Encoding Vari-ational Bayes. In 2nd International Conference on Learning Representations .Kumar, A.; Fu, Z.; Pathak, D.; and Malik, J. 2021. Rma: Rapid motor adaptation for legged robots. In Robotics: Sci-ence and Systems .Lee, S.; Nahrendra, I. M. A.; Lee, D.; Yu, B.; Oh, M.; Lee, H.; and Myung, H. 2025. DreamFLEX: Learning Fault-Aware Quadrupedal Locomotion Controller for Anomaly Situation in Rough Terrains. In 2025 IEEE International Conference on Robotics and Automation (ICRA) , 16001–16007. IEEE. Li, S.; Luo, S.; Wu, J.; and Zhu, Q. 2025. Move: Multi-skill omnidirectional legged locomotion with limited view in 3d environments. In 2025 IEEE International Conference on Robotics and Automation (ICRA) , 7647–7653. IEEE. Lim, S.; Lee, H.; Lee, S.; and Myung, H. 2024. Learn-ing Robust Whole-Body Control for Legged Manipulation via Learned Terrain Estimation. In 2024 24th International Conference on Control, Automation and Systems (ICCAS) ,1510–1515. IEEE. Liu, H.; Cheng, Y.; Li, R.; Hu, X.; Ye, L.; and Liu, H. 2025. MBC: Multi-Brain Collaborative Control for Quadruped Robots. In Conference on Robot Learning , 3688–3704. PMLR. Long, J.; Ren, J.; Shi, M.; Wang, Z.; Huang, T.; Luo, P.; and Pang, J. 2025. Learning Humanoid Locomotion with Percep-tive Internal Model. In 2025 IEEE International Conference on Robotics and Automation (ICRA) , 9997–10003. IEEE. Long, J.; Wang, Z.; Li, Q.; Cao, L.; Gao, J.; and Pang, J. 2024. Hybrid Internal Model: Learning Agile Legged Lo-comotion with Simulated Robot Response. In Kim, B.; Yue, Y.; Chaudhuri, S.; Fragkiadaki, K.; Khan, M.; and Sun, Y., eds., International Conference on Learning Representations ,volume 2024, 14084–14100. Loquercio, A.; Segu, M.; and Scaramuzza, D. 2020. A gen-eral framework for uncertainty estimation in deep learning. 
+
+IEEE Robotics and Automation Letters , 5(2): 3153–3160. Luo, S.; Li, S.; Yu, R.; Wang, Z.; Wu, J.; and Zhu, Q. 2024a. Pie: Parkour with implicit-explicit learning framework for legged robots. IEEE Robotics and Automation Letters .Luo, Z.; Dong, Y.; Li, X.; Huang, R.; Shu, Z.; Xiao, E.; and Lu, P. 2024b. Moral: Learning morphologically adaptive locomotion controller for quadrupedal robots on challenging terrains. IEEE Robotics and Automation Letters , 9(5): 4019– 4026. Miki, T.; Wellhausen, L.; Grandia, R.; Jenelten, F.; Homberger, T.; and Hutter, M. 2022. Elevation mapping for locomotion and navigation using gpu. In 2022 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2273–2280. IEEE. Nahrendra, I. M. A.; Yu, B.; and Myung, H. 2023. DreamWaQ: Learning Robust Quadrupedal Locomotion With Implicit Terrain Imagination via Deep Reinforcement Learning. In ICRA .NVIDIA. 2025. Isaac Sim, Version 5.1.0. https://github. com/isaac-sim/IsaacSim. Software release, October 2025. Accessed: 2026-07-21. Rudin, N.; Hoeller, D.; Reist, P.; and Hutter, M. 2022. Learn-ing to walk in minutes using massively parallel deep rein-forcement learning. In Conference on robot learning , 91– 100. PMLR. Schulman, J.; Levine, S.; Abbeel, P.; Jordan, M.; and Moritz, P. 2015. Trust region policy optimization. In International conference on machine learning , 1889–1897. PMLR. Schulman, J.; Wolski, F.; Dhariwal, P.; Radford, A.; and Klimov, O. 2017. Proximal Policy Optimization Algorithms. arXiv:1707.06347. Schwarke, C.; Mittal, M.; Rudin, N.; Hoeller, D.; and Hut-ter, M. 2025. RSL-RL: A Learning Library for Robotics Research. arXiv:2509.10771. Schwarzer, M.; Anand, A.; Goel, R.; Hjelm, R. D.; Courville, A.; and Bachman, P. 2021. Data-Efficient Reinforcement Learning with Self-Predictive Representations. In Interna-tional Conference on Learning Representations .Todorov, E.; Erez, T.; and Tassa, Y. 2012. MuJoCo: A physics engine for model-based control. In 2012 IEEE/RSJ Interna-tional Conference on Intelligent Robots and Systems , 5026– 5033. IEEE. Wang, H.; Wang, Z.; Ren, J.; Ben, Q.; Huang, T.; Zhang, W.; and Pang, J. 2025. BeamDojo: Learning Agile Humanoid Locomotion on Sparse Footholds. In Robotics: Science and Systems (RSS) .Wright, O.; Nakahira, Y.; and Moura, J. M. 2024. An ana-lytic solution to covariance propagation in neural networks. In International Conference on Artificial Intelligence and Statistics , 4087–4095. PMLR. Wu, A.; Nowozin, S.; Meeds, E.; Turner, R. E.; Hernández-Lobato, J. M.; and Gaunt, A. L. 2019. Deterministic Vari-ational Inference for Robust Bayesian Neural Networks. In 
+
+International Conference on Learning Representations .Xu, W.; Cai, Y.; He, D.; Lin, J.; and Zhang, F. 2022. Fast-lio2: Fast direct lidar-inertial odometry. IEEE Transactions on Robotics , 38(4): 2053–2073. Xu, W.; and Zhang, F. 2021. Fast-lio: A fast, robust lidar-inertial odometry package by tightly-coupled iterated kalman filter. IEEE Robotics and Automation Letters , 6(2): 3317– 3324. Yu, R.; Wang, Q.; Wang, Y.; Wang, Z.; Wu, J.; and Zhu, Q. 2024. Walking with Terrain Reconstruction: Learning to Traverse Risky Sparse Footholds. arXiv:2409.15692. Yuan, M.; Yu, T.; Song, H.; Li, B.; Jin, X.; Chen, H.; and Zeng, W. 2026. PvP: Data-Efficient Humanoid Robot Learn-ing with Proprioceptive-Privileged Contrastive Represen-tations. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 42375– 42385. Zhang, Y.; Nie, B.; and Gao, Y. 2024. Robust locomotion policy with adaptive lipschitz constraint for legged robots. 
+
+IEEE Robotics and Automation Letters .Appendix 
+
+# A Additional Theoretical Analysis 
+
+We follow the notation of the main paper: qϕ(z | o) is the VAE encoder, pψ (a | z) is the latent-conditioned actor, θ =(ϕ, ψ ) denotes their joint parameters, and N is the number of latent samples used by a Monte Carlo (MC) estimator. The effective policy is the marginalized distribution πθ (a | o) = R pψ (a | z)qϕ(z | o) dz .
+
+A.1 KL Divergence Decomposition 
+
+We analyze the decomposition of the policy KL divergence. Substituting the hierarchical policy definition πθ (a|o) = 
+
+Ez∼qϕ(z|o)[pψ (a|z)] into the standard KL divergence, we de-rive a tractable upper bound. We apply Jensen’s inequality utilizing the convexity of the function f (x) = − log( x),which implies f (E[x]) ≤ E[f (x)] . This bound becomes an equality if and only if the random variable inside the logarithm is constant almost everywhere. For compactness, let Pold (a, z |o) = pψold (a|z)qϕold (z|o) and P (a, z |o) = 
+
+pψ (a|z)qϕ(z|o). The derivation proceeds as follows: 
+
+DKL (πθold (·| o) ∥ πθ (·| o)) 
+
+≤ DKL (Pold (a, z |o) ∥ P (a, z |o)) =
+
+Z Z 
+
+Pold (a, z |o) log pψold (a|z)
+
+pψ (a|z) dz da 
+
++
+
+Z Z 
+
+Pold (a, z |o) log qϕold (z|o)
+
+qϕ(z|o) dz da 
+
+= Ez∼qϕold (·| o)[DKL (pψold (·| z) ∥ pψ (·| z))] + DKL (qϕold (·| o) ∥ qϕ(·| o)) .
+
+(14) This is the detailed form of the upper bound used in the main paper. It separates the shift of the latent estimator from the change of the actor over the full old latent distribution, rather than at only one sampled latent. 
+
+A.2 Variance of the Probability Ratio 
+
+We quantitatively analyze the variance introduced into the surrogate loss by the stochastic sampling process. We de-fine the actor policy with PPO’s exploration variance as 
+
+pψ (a|z) = N (μψ (z), σ 2
+
+> act
+
+Ida ). Consider an N -sample Monte Carlo (MC) estimator for the probability ratio: 
+
+ˆrN =
+
+> 1
+> N
+
+PNi=1 pψ (a|zi)
+
+> 1
+> N
+
+PNj=1 pψold (a|z′ 
+
+> j
+
+) . (15) Writing the numerator and denominator as the independent sample-mean estimates ¯X and ¯Y , respectively, gives ˆrN =¯X/ ¯Y . The Delta Method provides the following first-order variance approximation: Var 
+
+ ¯X
+
+¯Y
+
+
+
+≈
+
+ E[ ¯X]
+
+E[ ¯Y ]
+
+2  Var ( ¯X)
+
+E[ ¯X]2 + Var ( ¯Y )
+
+E[ ¯Y ]2
+
+
+
+. (16) Noting that Var ( ¯X) = 1 
+
+> N
+
+Var (X) and E[ˆ rN ] ≈ rtrue , we obtain: Var (ˆ rN ) ≈ r2true 
+
+N
+
+
+
+Var (pψ )
+
+E[pψ ]2
+
+| {z } 
+
+> CV 2
+> ψ
+
++ Var (pψold )
+
+E[pψold ]2
+
+| {z } 
+
+> CV 2
+> ψold
+
+ , (17) where CV denotes the coefficient of variation of the policy probability density induced by latent sampling. 
+
+A.3 Variance Formula Expansion 
+
+We derive the analytical form of CV 2 
+
+> ψ
+
+. Let z ∈ Rdz and 
+
+a ∈ Rda . The VAE latent space follows a diagonal Gaussian distribution with covariance Σvae = σ2
+
+> vae
+
+Idz . As empirically reported in the main paper’s action-distribution results, the actor’s output under latent sampling exhibits characteristics of a multivariate Gaussian distribution. This observation im-plies that the actor network behaves approximately linearly within the variance range of the latent space. We further vali-date this linearity assumption through a dedicated regression test (Section C.1), which yields an average R2 of 0.9706 across all action dimensions. These results justify the use of a first-order Taylor expansion of pψ (a|z) with respect to z
+
+around the mean ¯z:
+
+pψ (a|z) ≈ pψ (a|¯z) + ∇z pψ (a|¯z)⊤(z − ¯z). (18) The variance of pψ (a|z) induced by z is approximately: Var z (pψ ) ≈ ∇ z p⊤ 
+
+> ψ
+
+Σvae ∇z pψ = σ2
+
+> vae
+
+∥∇ z pψ ∥2. (19) Using the identity ∇z p = p∇z log p, we have CV 2 
+
+> ψ
+
+= 
+
+> Var (p)
+> E[p]2
+
+≈ σ2
+
+> vae
+
+∥∇ z log pψ ∥2. For the Gaussian pol-icy, ∇z log pψ (a|z) = ∇z
+
+
+
+− 12σ2
+
+> act
+
+∥a − μψ (z)∥2
+
+
+
+=
+
+> 1
+> σ2
+> act
+
+J⊤ 
+
+> ψ
+
+(a − μψ (z)) , where Jψ ∈ Rda×dz is the Jacobian of the actor mean μψ (z). Substituting this back, we get: 
+
+CV 2 
+
+> ψ
+
+≈ σ2
+
+> vae
+
+σ4
+
+> act
+
+(a − μψ (¯ z)) ⊤Jψ J⊤ 
+
+> ψ
+
+(a − μψ (¯ z)) . (20) Since ˆrN involves samples of actions drawn from the policy, we take the expectation of this term over a ∼ pψ (a|¯z). Using 
+
+E[( a − μ)( a − μ)⊤] = σ2
+
+> act
+
+Ida , we find: 
+
+Ea[CV 2 
+
+> ψ
+
+] ≈ σ2
+
+> vae
+
+σ4
+
+> act
+
+Tr  Jψ J⊤ 
+
+> ψ
+
+σ2
+
+> act
+
+Ida
+
+ = σ2
+
+> vae
+
+σ2
+
+> act
+
+∥Jψ ∥2 
+
+> F
+
+. (21) Substituting this back into the expression for Var (ˆ rN ), we have the scaling relation Var (ˆ rN ) ∝ r2true 
+
+N ·
+
+ σ2
+
+> vae
+
+∥Jψ ∥2
+
+> F
+
+σ2
+
+> act
+
+
+
+. (22) Near a PPO update, the current and old policies have com-parable latent variances and local actor Jacobians. Conse-quently, both coefficient-of- variation terms in Section A.2 have the same scaling; the last display absorbs their con-stant factor and retains the dependence on N , σvae , σact , and 
+
+∥Jψ ∥F emphasized in the main paper. A.4 Variance of the Gradient 
+
+We analyze how the variance in the probability ratio propa-gates to the policy gradient. Note that ∇θ rθ = ∇θ
+
+ πθ
+
+> πθold
+
+
+
+=
+
+> πθ
+> πθold
+
+∇θ log πθ = rθ ∇θ log πθ . Thus, the gradient can be written as the product of the advantage, the noisy ratio, and the score function: 
+
+ˆg ≈ A · ˆrN · ∇ θ log πθ . (23) Conditioned on a fixed state-action pair (s, a ) from the PPO rollout buffer, the term Y = A · ∇ θ log πθ is determinis-tic, while the variance of ˆrN arises solely from latent sam-pling. Conversely, the variance of Y across the batch stems from trajectory sampling, which is independent of the la-tent sampling process. Therefore, we treat X = ˆ rN and 
+
+Y as conditionally independent and apply the product vari-ance formula: Var (XY ) ≈ E[X]2Var (Y ) + E[Y ]2Var (X) + 
+
+Var (X)Var (Y ). Since E[ˆ rN ] ≈ 1, the gradient variance is 
+
+Var(ˆ g) ≈ Var( Y ) + E[Y ]2 Var(ˆ rN )+ Var(ˆ rN ) Var( Y )= Var( Y ) + Var(ˆ rN )E[∥Y ∥2].
+
+(24) Here, Var (Y ) represents the intrinsic sampling variance of the policy gradient (standard PPO variance), while the second term represents the additional noise introduced by VAE latent sampling. Under the approximately Gaussian distribution of the actor mean μψ (z) established above, the marginalized policy πθ (a) = R qϕ(z | o)pψ (a | z) dz is approximated by convolving that action-mean distribution with the actor’s Gaussian exploration noise. The second mo-ment E[∥Y ∥2] is proportional to A2E[∥∇ log pψ ∥2]. For a Gaussian policy, the trace of the Fisher information matrix is 
+
+E[∥∇ μ log pψ ∥2] = da/σ 2
+
+> act
+
+. Combining this identity with Var (ˆ rN ) from Section A.3, the latent-induced noise scales as Noise latent ∝ A2
+
+Nda
+
+σ2
+
+> act
+
+|{z} 
+
+> Score variance
+
+× σ2
+
+> vae
+
+∥Jψ ∥2
+
+> F
+
+σ2
+
+> act
+
+| {z }
+
+> Ratio variance
+
+= A2
+
+Ndaσ2
+
+> vae
+
+∥Jψ ∥2
+
+> F
+
+σ4
+
+> act
+
+.
+
+(25) 
+
+A.5 Derivation of Probabilistic Activation Moments 
+
+Moment matching represents each pre-activation by amarginal Gaussian and applies the following scalar formulas elementwise. Let x ∼ N (μ, σ 2), and let ϕ(·) and Φ( ·) denote the standard normal PDF and CDF, respectively. We define the standardized threshold β = μ/σ . We first derive the mo-ments of the ELU activation used in our experiments and then give the corresponding closed-form updates for ReLU and Leaky ReLU. 
+
+ELU The ELU activation is defined as 
+
+f (x) = 
+
+x x > 0
+
+α(ex − 1) x ≤ 0 (26) 
+
+Preliminaries We utilize the following identity for the truncated expectation of an exponential function under a Gaussian distribution. For any constant k:
+
+Z 0
+
+> −∞
+
+ekx N (x|μ, σ 2) dx = ekμ + 12 k2σ2
+
+Φ ( −β − kσ ) . (27) 
+
+Proof: Standardize x = σt + μ. The integral becomes 
+
+ekμ R −β 
+
+> −∞
+
+ekσt ϕ(t) dt . Completing the square in the exponent of the integrand yields ekσt −t2/2 = e 12 k2σ2
+
+e−(t−kσ )2/2. The remaining integral is over N (kσ, 1) up to −β, which evalu-ates to Φ( −β − kσ ).
+
+First Moment (Expectation). The expectation E[y] de-composes into linear and exponential regions: 
+
+E[y] = 
+
+Z ∞
+
+> 0
+
+xN (x|μ, σ 2) dx 
+
++ α
+
+Z 0
+
+> −∞
+
+(ex − 1) N (x|μ, σ 2) dx. 
+
+(28) 1. Linear Part ( x > 0): Using standard rectified Gaussian results: Z ∞
+
+> 0
+
+xN (x|μ, σ 2) dx = μΦ( β) + σϕ (β). (29) 2. Exponential Part ( x ≤ 0): Using Identity (27) with k = 1 
+
+and k = 0 :
+
+Z 0
+
+> −∞
+
+(ex − 1) N (x|μ, σ 2) dx = eμ+ σ22 Φ( −β − σ) − Φ( −β).
+
+(30) Combining these yields the mean: 
+
+E[y] = μΦ( β)+ σϕ (β)+ α
+
+h
+
+eμ+ σ22 Φ( −β − σ) − Φ( −β)
+
+i
+
+.
+
+(31) 
+
+Second Moment. The second raw moment E[y2] is simi-larly decomposed: 
+
+E[y2] = 
+
+Z ∞
+
+> 0
+
+x2N (x|μ, σ 2) dx 
+
++ α2
+
+Z 0
+
+> −∞
+
+(ex − 1) 2N (x|μ, σ 2) dx. 
+
+(32) 1. Linear Part: For the second moment of a rectified Gaus-sian: 
+
+Z ∞
+
+> 0
+
+x2N (x|μ, σ 2) dx = ( μ2 + σ2)Φ( β) + μσϕ (β). (33) 2. Exponential Part: Expanding (ex − 1) 2 = e2x − 2ex + 1 
+
+and applying Identity (27) for k = 2 , 1, 0:
+
+Z 0
+
+> −∞
+
+(e2x − 2ex + 1) N (x|μ, σ 2) dx 
+
+= e2μ+2 σ2
+
+Φ( −β − 2σ)
+
+− 2eμ+ σ22 Φ( −β − σ) + Φ( −β).
+
+(34) Combining these, we get: 
+
+E[y2] = ( μ2 + σ2)Φ( β) + μσϕ (β)+ α2h
+
+e2μ+2 σ2
+
+Φ( −β − 2σ)
+
+− 2eμ+ σ22 Φ( −β − σ) + Φ( −β)
+
+i
+
+.
+
+(35) The propagated variance used by the moment-matching (MM) estimator is then 
+
+Var[ y] = E[y2] − E[y]2. (36) Thus, the expressions above provide the complete determin-istic ELU update for the first two moments used by P 3-MM. 
+
+ReLU The MM estimator is not specific to ELU: it only requires an activation-specific map from input moments to output moments. To express the updates in the notation of the main paper, let μin = μ, vin = σ2, and β = μin /√vin 
+
+for vin > 0.For the ReLU activation y = max(0 , x ), the positive-half Gaussian moments give 
+
+μout = μin Φ( β) + √vin ϕ(β),vout = ( μ2 
+
+> in
+
++ vin )Φ( β) + μin 
+
+√vin ϕ(β) − μ2
+
+> out
+
+. (37) 
+
+Leaky ReLU For Leaky ReLU, y = x when x > 0 and y =
+
+λx when x ≤ 0, where λ is the negative-slope coefficient. Its propagated moments are 
+
+μout = μin 
+
+Φ( β) + λΦ( −β)
+
++ (1 − λ)√vin ϕ(β),vout = ( μ2 
+
+> in
+
++ vin )Φ( β) + λ2Φ( −β)
+
++ (1 − λ2)μin 
+
+√vin ϕ(β) − μ2
+
+> out
+
+.
+
+(38) Setting λ = 0 recovers the ReLU formulas in Equation (37), while λ = 1 recovers the identity map. Hence, the layer-wise MM construction extends directly to these common piecewise-linear activations. When vin = 0 , each update is understood in the deterministic limit, μout = f (μin ) and 
+
+vout = 0 . We use ELU in the reported experiments to keep the actor architecture fixed across all comparisons, rather than because P 3 requires a particular activation function. 
+
+# B Additional Experimental Setup 
+
+B.1 Network Architecture Details 
+
+We use the same Actor–Critic framework with a VAE state estimator described in the main paper. The actor maps the current observation ot and latent variable zt to joint target positions at. The VAE combines an MLP for proprioceptive history oHt with a CNN for exteroceptive observation oextero  
+
+> t
+
+.Its MLP decoder reconstructs the next proprioceptive state conditioned on at, and its CNN decoder reconstructs the exteroceptive observation. The detailed hyperparameters are listed in Table 4. All networks use ELU activations, for which the MM propagation rule is derived in Section A.5. Module Parameter Value Actor/Critic Units [512 , 256 , 128] 
+
+Activation ELU Proprio. Encoder (MLP) Units [256 , 256] 
+
+Latent Dim 10 
+
+Extero. Encoder (CNN) Channels [4 , 8] 
+
+Kernels [3 , 3] 
+
+Strides [2 , 2] 
+
+FC Dim 128 
+
+Latent Dim 100 
+
+Proprio. Decoder (MLP) Units [256 , 256] 
+
+Recon. Dim 96 
+
+Extero. Decoder (CNN) FC Dim 128 
+
+Channels [8 , 4] 
+
+Kernels [3 , 3] 
+
+Strides [2 , 2] 
+
+β-VAE β 0.1
+
+Table 4: Network architecture used by the VAE baseline, MC-only estimators, and all P 3 variants. 
+
+B.2 Baseline Details 
+
+SimpleActorCritic SimpleActorCritic is the direct Actor– Critic baseline in the main paper. It operates without an encoder and directly takes the current proprioception oproprio 
+
+> t
+
+and exteroception oextero  
+
+> t
+
+as input. Because providing the full observation history oHt to this uncompressed baseline sub-stantially slows convergence, SimpleActorCritic is config-ured to process single-step observations only. 
+
+Self-Predictive Representations (SPR) The SPR baseline cited in the main paper constitutes a dynamics modeling approach that cultivates predictive latent representations by mandating consistency between predicted latent states and encoded future observations over multiple time steps. The loss function for SPR is rigorously defined as: 
+
+LSPR =
+
+> K
+
+X
+
+> k=1
+
+∥f (k) 
+
+> θ
+
+(zt, a t:t+k−1) − sg (gϕ(ot+k)) ∥22, (39) where sg (·) signifies the stop-gradient operation. Here, fθ
+
+functions as the online dynamics model, recursively com-puting zt+1 = fθ (zt, a t). Distinctly, gϕ serves as the target dynamics model, with its parameters evolving via an expo-nential moving average (EMA) of the online model’s param-eters to stabilize the learning target. The loss coefficient 0.5
+
+and prediction steps 3 are selected based on hyperparameter search. SPR takes oproprio  
+
+> t
+
+and exteroception oextero  
+
+> t
+
+as input. 
+
+AutoEncoder The AutoEncoder (AE) baseline removes latent-space stochasticity from the VAE while keeping the encoder, decoder, actor, critic, and all other architectural el-ements identical. It therefore isolates the optimization effect of a deterministic representation from the probabilistic prop-agation introduced by P 3.B.3 PPO Optimization and Training Protocol 
+
+We adopt the PPO-clip algorithm for policy optimization. Unless stated otherwise, all training sessions utilize an adap-tive learning rate mechanism. This approach dynamically scales the learning rate αt in response to the aggregate KL divergence, serving as a critical stabilizer for the training process. 
+
+αt+1 =
+
+
+
+max  10 −5, αt
+
+> 1.5
+
+ if ¯DKL > 2Ddesired KL 
+
+min  10 −2, 1.5αt
+
+ if 0 < ¯DKL < Ddesired KL 
+
+> 2
+
+αt otherwise (40) Without this adaptation, some algorithms suffer from abrupt collapse during the later stages of training. The optimizer is Adam. The selected hyperparameters align with stan-dard configurations employed in contemporary reinforce-ment learning research for robotic locomotion control. Parameter Value Discount Factor γ 0.99 
+
+GAE Parameter λ 0.95 
+
+Number of Epochs 5
+
+Number of Mini-batches 4
+
+Entropy Coefficient 0.01 
+
+Clip Range ϵ 0.2
+
+Value Loss Coefficient 1.0
+
+Learning Rate Adaptive Desired KL for Adaptive LR 0.02 
+
+Table 5: Hyperparameters for PPO training. The estimator names and schedules follow the main paper. 
+
+MC-only (N ) trains from initialization with N latent sam-ples, and the VAE baseline is its N = 1 case. P 3-MM denotes the checkpoint obtained after 7,000 epochs of deterministic MM training. The complete P 3 schedule starts from that checkpoint and performs 1,000 additional epochs of MC-based Latent Sample Fine-Tuning (LSFT) with N = 15 .Other methods are trained until their convergence criterion is met or until the 15,000-epoch budget is exhausted. A run is marked as converged only after reaching a sustained near-asymptotic plateau with terminal curriculum difficulty of at least 4.5. 
+
+B.4 Environment and Terrain Details 
+
+We use 4096 parallel environments and collect 24 simulation steps from each environment per PPO epoch. The simulation frequency is 200 Hz, while the policy is trained and deployed at 50 Hz. Figure 8 shows the terrains used in our experiments. To improve the robustness of the policy and facilitate suc-cessful sim-to-real transfer, we extensively randomize the physical properties and observations during training. The randomization ranges are summarized in Table 6. 
+
+# C Additional Experimental Results 
+
+C.1 Action-Distribution Diagnostics 
+
+We select a model at epoch 1,000, well before the P 3-MM checkpoint reaches its plateau at epoch 7,000 and within 
+
+Figure 8: Terrain design. Terrain difficulty increases from top to bottom. From left to right, the terrains are pyramid stairs, inverted pyramid stairs, stairs, gaps, dual- and single-row stepping stones, and sparse stones. Parameter Range / Value 
+
+Dynamics 
+
+Friction [0 .3, 1.0] 
+
+Restitution [0 .0, 0.1] 
+
+Added Mass (Torso) [−1.0, 3.0] kg CoM Displacement (Torso) x, y ∈ ±0.05 m; z ∈±0.01 mPush Velocity (Interval 5–10 s) 
+
+x, y ∈ [−0.5, 0.5] m/s 
+
+Observation Noise (Uniform) 
+
+Base Angular Velocity ±0.05 rad/s Projected Gravity ±0.05 
+
+Joint Position ±0.01 rad Joint Velocity ±0.1 rad/s Height Scanner ±0.01 mTable 6: Domain randomization settings. the common 15,000-epoch training budget. This early check-point lets us test whether the policy already exhibits the dis-tributional properties required by latent-space sampling and the local linearity assumption used in the theoretical analysis. Notably, we observed that models from later training stages demonstrate even stronger linearity and an action mean dis-tribution that more closely approximates a Gaussian. 
+
+Shapiro-Wilk Test To quantify the marginal Gaussianity of the action-mean distribution, we perform a Shapiro–Wilk test separately on each action dimension using action means sampled from 4096 environments over 500 steps in Isaac Sim. The results, averaged across action dimensions and shown in Table 7, yield a Shapiro-Wilk W statistic of 0.9995 and a p-value of 0.422. Furthermore, with a significance level of 
+
+α = 0 .05 , the pass rate is 85.39% for action dimensions, which strongly supports the hypothesis that the distribution is approximately Gaussian. 
+
+Cross-Dimensional Correlation Test We observe that the actor’s output exhibits distinct correlation patterns across dif-ferent time steps. To visualize these correlations, we present the covariance matrix of the action dimensions for a randomly selected time step in Figure 9. The matrix reveals strong lin-ear correlations among the action dimensions, explaining why the diagonal moment-matching (MM) approximation Metric W Statistic p-value Pass Rate (α = 0 .05 )Value 0.9995 0.422 85.39% Table 7: Shapiro–Wilk test results for the action-mean dis-tribution. 
+
+Figure 9: Correlation matrix of action dimensions 1–29 con-ditioned on latent samples at randomly selected states. Red and blue denote positive and negative correlation, respec-tively, over the range [−1, 1] ; the reported statistics are aver-aged over 4096 environments and 500 steps. underestimates variance in our setting. 
+
+Latent Linearity Test To empirically validate the first-order Taylor approximation used in our gradient variance analysis (Section A.3), we assess the linearity of the actor network’s response to latent perturbations. Specifically, for each action dimension, we randomly sample 100 directions in the latent space and evaluate the actor’s output along 50 uniformly spaced points in 2σ range in each direction. We then compute the coefficient of determination ( R2) of a linear regression fit to quantify the linearity of the mapping. As shown in Figure 10, the overall average R2 across all action dimensions is 0.9706, indicating that the actor network exhibits strong linear behavior with respect to la-tent variations. This result directly supports the validity of the first-order Taylor expansion employed in our theoretical analysis. 
+
+C.2 Computational Cost 
+
+We report the computational resource consumption of the estimators and baselines in Table 8. Memory usage is mea-sured in MB. The time entries report only the policy-learning time per PPO epoch in seconds; they exclude environment interaction and data collection. In end-to-end training, wall-clock time is dominated by data collection rather than policy 
+
+Figure 10: Latent linearity test across all action dimensions, showing the R2 of a linear regression fit to the actor network’s output along random directions in the latent space. The green and orange dashed lines mark thresholds of 0.95 and 0.80, respectively. learning, so these values are provided only as a reference for relative policy-learning overhead. The MC-only rows train with the indicated sample count from initialization; P 3-MM uses the deterministic MM estimator before LSFT. Marginalized-Policy Estimators Metric MC-only (N =5 )MC-only (N =15 )MC-only (N =50 ) P 3-MM Memory (MB) 14875 18457 31851 15138 Time (s) 0.86 0.98 1.22 0.96 Other Methods Metric SimpleActor Critic SPR AE VAE Memory (MB) 13055 17541 13108 13438 Time (s) 0.20 0.60 0.70 0.85 Table 8: Memory usage and policy-learning time per PPO epoch for MC-only estimators, P 3-MM, and other baselines.
