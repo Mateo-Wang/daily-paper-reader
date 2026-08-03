@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-02</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-03</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>11</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-02 20:42:53 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-03 20:55:50 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读7篇、速读12篇，共19篇论文，重点聚焦驾驶行为与跨实体动作理解。</p>
-<p>最值得看：DriveDNA（9.0）提出大规模多模态自然驾驶数据集与驾驶风格识别基准；ContactFlow（9.0）实现跨形态视频动作条件迁移。</p>
-<p>下一步建议：优先深入这两个高分方向，速读中将KAI、IMPRINT等作为场景化补充拓展。</p>
+<p>今日精读11篇、速读12篇，共梳理23篇机器人学习与操作相关论文。最值得关注两篇满分精读：三臂视觉运动模仿学习框架，以及基于潜在空间强化学习的移动操作流模型。普通读者可优先了解多臂协作与移动操作结合强化学习的最新进展，把握具身智能落地趋势。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DriveDNA: A Large-Scale Multimodal Naturalistic Driving Dataset and Benchmark for Driving Style Identification">DriveDNA: A Large-Scale Multimodal Naturalistic Driving Dataset and Benchmark for Driving Style Identification</span></li><li><span class="dpr-home-dashboard-paper-title" title="ContactFlow: A video action conditioning that transfers across embodiments">ContactFlow: A video action conditioning that transfers across embodiments</span></li><li><span class="dpr-home-dashboard-paper-title" title="Cross-Embodiment Transfer via Behavior-Aligned Representations">Cross-Embodiment Transfer via Behavior-Aligned Representations</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Tri-Manual Visuomotor Imitation Learning of Robot Policies">Tri-Manual Visuomotor Imitation Learning of Robot Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="RLMM-Flow: A Flow-based Mobile Manipulation Framework with Latent-Space Reinforcement Learning">RLMM-Flow: A Flow-based Mobile Manipulation Framework with Latent-Space Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="ST-WAM: Semantic-Temporal World Action Model for Robust Manipulation under Visual Distribution Shifts">ST-WAM: Semantic-Temporal World Action Model for Robust Manipulation under Visual Distribution Shifts</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -66,7 +64,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="KAI: A Kinematic-Aware Interface for Data-Efficient Articulated Object Manipulation">KAI: A Kinematic-Aware Interface for Data-Efficient Articulated Object Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="IMPRINT: Image-Conditioned Query Enrichment for Long-Tail Object Goal Navigation">IMPRINT: Image-Conditioned Query Enrichment for Long-Tail Object Goal Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Decompose and Reorganize: Planning with Primitives and Visuomotor Policies Learned from Demonstrations">Decompose and Reorganize: Planning with Primitives and Visuomotor Policies Learned from Demonstrations</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Data Pyramid for Embodied Manipulation">Data Pyramid for Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="S2A2: Audio-Visual Imitation Learning for Manipulation Tasks Using Acoustic Spatial Information">S2A2: Audio-Visual Imitation Learning for Manipulation Tasks Using Acoustic Spatial Information</span></li><li><span class="dpr-home-dashboard-paper-title" title="HeteroPROPMT: A Real-time and Privacy-Preserving Heterogeneous Collaborative Perception Framework">HeteroPROPMT: A Real-time and Privacy-Preserving Heterogeneous Collaborative Perception Framework</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
