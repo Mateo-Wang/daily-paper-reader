@@ -1,0 +1,798 @@
+Title: PRISM: Privileged Probabilistic Latent Supervision for End-to-End Autonomous Driving Motion Planning
+
+URL Source: https://arxiv.org/pdf/2608.01201v1
+
+Published Time: Tue, 04 Aug 2026 01:38:27 GMT
+
+Number of Pages: 8
+
+Markdown Content:
+# PRISM: Privileged Probabilistic Latent Supervision for End-to-End Autonomous Driving Motion Planning 
+
+Volodymyr Havrylov 1,2, Faris Janjoˇ s2, Andreas Look 2,3, J¨ urgen Mathes 2, and Andreas Geiger 1,4
+
+1University of T¨ ubingen 2Bosch Center for Artificial Intelligence 3Coburg University 4T¨ ubingen AI Center 
+
+Abstract — End-to-end autonomous driving (E2E AD) sys-tems integrate perception, prediction, and planning into asingle differentiable architecture. While these models show great promise, their standard training often relies on output-only supervision, which can lead to weak gradients for the hidden layers of increasingly complex models. Recent works have integrated vision-language model (VLM) supervision for latent features to address this, yielding substantial empirical gains, yet leaving the underlying theoretical mechanisms poorly understood. Our investigation into this methodology reveals that the resulting performance gains stem not from VLM reasoning capabilities, as previously assumed, but rather from the latent connections forged between the E2E AD model and ground-truth (GT) data during training. Building on this insight, we propose a probabilistic deep supervision framework that regularizes intermediate latent representations directly from GT data. By treating model latents as reparameterizable distri-butions, we optimize the architecture via the Evidence Lower Bound (ELBO). Our evaluations conducted on the nuScenes dataset demonstrate that supervising trajectory-related latents with future GT paths consistently improves planning perfor-mance. Using identical training data and E2E architectures, our method achieves an 8% reduction in planning L2 error and a 3% decrease in collision rates compared to competitive vec-torized baselines, all while incurring negligible computational overhead. The code is released at link-available-soon .
+
+I. INTRODUCTION Autonomous driving (AD) represents a transformative machine learning application that aims to fundamentally reshape global transportation by mitigating the human error responsible for the vast majority of traffic accidents [1]. Simultaneously, it offers substantial economic and environ-mental benefits through optimized logistics networks that improve cost efficiency and reduce carbon footprints [2, 3]. Over the past decade, AD research has pivoted from traditional modular pipelines, which decompose the task into perception, prediction, and planning [4, 5, 6], to end-to-end (E2E) learning approaches [7, 8, 9, 10, 11]. Modular systems, while interpretable, are notoriously susceptible to error propagation across modules. E2E models address this by unifying the stack into a single differentiable network, aiming to capture the full complexity of driving with joint optimization of all components toward the final objective. While architectural innovations have been extensively studied, training paradigms for E2E AD models remain relatively underexplored. Most existing approaches rely on supervised learning with large-scale datasets of human driv-ing (Fig. 1, left). Typically, the model is optimized to map raw sensory inputs directly to either low-level control commands (e.g., steering, throttle, braking) [12, 13, 14] or For paper For paper           
+
+> GT Data GT Data
+> yy
+> Text Text
+> Encoder Encoder
+> FFtarget target
+> ❄❄
+> MLP MLP
+> 🔥 🔥
+> Predefined Template for Ego / Agents / Lanes. Predefined Template for Ego / Agents / Lanes.
+> Ego Ego &&Agent Agent GT Trajectories GT Trajectories
+> Nav. cmd Nav. cmd
+> Lane Lane GT Coordinates GT Coordinates
+> One-hot One-hot
+> Encoder Encoder
+> cat cat Traj Enc Traj Enc
+> 🔥 🔥
+> Lane Enc Lane Enc
+> 🔥 🔥
+> NN
+> MM
+> FFego ego FFagents agents
+> NN
+> FFlanes lanes
+> MM
+> (Batch: 1 ego, N agents, M lanes) (Batch: 1 ego, N agents, M lanes)
+> cat cat
+> Ego Ego GT Trajectory GT Trajectory
+> Nav. cmd Nav. cmd One-hot One-hot
+> Encoder Encoder
+> cat cat Traj Enc Traj Enc
+> 🔥 🔥 QQego ego
+> Prompt Prompt
+> Generator Generator
+> ZZtarg targ
+> ❄❄
+> sample from posterior sample from posterior
+> sample f sample f
+
+Conventional Training Conventional Training Deep Supervision Deep Supervision                               
+
+> ppyy||xx(())
+> PRISM - Probabilistic PRISM - Probabilistic
+> Model Model
+> Prediction -Prediction -ˆˆyy
+> LLyy,,((yy))
+> GT -GT -yy
+> Learn Learn
+> xx
+> Encoder Encoder
+> yy
+> Decoder Decoder
+> yy
+> Text Text
+> Encoder Encoder
+> Latents Latents --zzLLcontrastive contrastive
+> Input -Input -xx
+> zz
+> xx
+> Encoder Encoder
+> Decoder Decoder
+> GT GT
+> Encoder Encoder
+> LLELBO ELBO
+> yy
+> NN𝜇 𝜇 ,,𝛴 𝛴 ((zzzz))
+> ∼∼
+> NN𝜇 𝜇 ,,𝛴 𝛴 ((ˆˆzzˆˆzz))
+> ˆˆzz
+> xx
+> ppzz||xx(())Learn Learn
+> VLP - Deterministic VLP - Deterministic Supervised Learning Supervised Learning
+> GT used only at the output level GT used only at the output level
+> Potentially sparse supervision signal Potentially sparse supervision signal
+> LLyy,,((yy))
+> yy
+> Additional learning signal for latens Additional learning signal for latens
+> TEs are resource-intensive TEs are resource-intensive
+> yy
+> LLyy,,((yy))
+> yy
+> Theoretically justified alignment objective Theoretically justified alignment objective
+> Simpler GT encoder — no TEs needed! Simpler GT encoder — no TEs needed!
+> Hand-crafted textual prompts and objectives Hand-crafted textual prompts and objectives
+> Generative model for free Generative model for free
+> ∼∼
+> training only training only
+> training only training only
+> training only training only
+
+Fig. 1. High-level comparison of conventional supervised (left) and deep supervision (middle and right) training paradigms. Our proposed deep supervision approach PRISM captures the interplay between a context x and ground-truth future y into a probabilistic representation without requiring expensive text encoders. 
+
+high-level waypoints [8, 9, 15]. In these setups, loss functions are applied solely at the output level. Although effective, this paradigm may provide a weak supervision signal for learning robust and generalizable representations. As a result, the model may fail to capture the rich intermediate structures necessary for solving complex driving tasks. A promising direction to address this limitation is to intro-duce additional supervision signals through deep supervision 
+
+— feature-space regularization applied to intermediate model components. While variants of deep supervision have shown success in other domains [16, 17], their application in AD is largely unexplored. Moreover, leveraging GT annotations meaningfully at the feature level, rather than exclusively at the output, is a nontrivial challenge. A notable recent advancement in this direction is Vision Language Planning (VLP) [18], which introduced the use of a frozen text encoder (TE) to regularize the latent space of E2E AD (Fig. 1, middle). While VLP demonstrates the significant benefits of latent-space guidance with such an encoder, it operates largely in an implicit manner. Building upon this work, our study seeks to provide a formal the-oretical perspective on why this training method succeeds, and how it can be generalized to convert available GT data into meaningful latent-space regularization signals. We note that, despite prior framing, the encoder used in VLP (CLIP) is a contrastively-trained VLM rather than a decoder-style large language model (LLM). We adopt the more precise 
+
+© 2026 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media, including reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to servers or lists, or reuse of any copyrighted component of this work in other works. arXiv:2608.01201v1 [cs.RO] 2 Aug 2026 Detailed description of LLM-based decoder                                                                                 
+
+> ytraining inference
+> qz|y𝜙 ()
+> log p y |x⩾Elog py|x,z-Dqz|x,y‖pz|x()qz|x,y𝜙 ()[𝜃 ()] KL [𝜙 ()𝜃 ()]
+> ZqN𝜇 ,𝛴 (𝜓 𝜓 )Z'q
+> Encoder
+> Driving Input
+> x
+> GT Data
+> y
+> GT Encoder
+> Decoder
+> Prediction
+> training inference
+> Lprediction
+> GT Trajectory
+> 🔥 🔥
+> 🔥
+> py|x,z𝜃 ()
+> pz|x𝜃 ()
+> qz|x,y𝜙 ()
+> Zp
+> Zq
+> 🔥
+> N𝜇 ,𝛴 (𝜃 𝜃 )
+> ∼
+> Z'p
+> DKL
+> ∼
+> N𝜇 ,𝛴 (𝜙 𝜙 )Z'q
+> Prior:
+> Posterior:
+> MLP
+> MLP
+> 🔥
+> Encoder Driving Input
+> x
+> GT Data
+> y
+> GT Encoder
+> Decoder
+> Prediction
+> training inference
+> Lprediction
+> GT Trajectory
+> 🔥 🔥
+> py|x𝜃 ()
+> 🔥
+
+NOT USED                          
+
+> py|x,z𝜃 ()
+> pz|x𝜃 ()
+> qz|y𝜙 ()
+> Zp
+> Zq
+> 🔥
+> N𝜇 ,𝛴 (𝜃 𝜃 )
+> ∼
+> Z'p
+> DKL
+> 𝜓
+> 🔥
+> ∼
+> N𝜇 ,𝛴 (𝜙 𝜙 )Z'q
+> Prior:
+> Postrior:
+> GT Data
+> y
+> Text Encoder
+> Ztarget
+> ❄
+> Prompt Generator MLP
+> 🔥
+> Pre-defined Template for Ego / Agents / Lanes.
+> This object is {class}. Its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. Its future trajectory will be {[[x1, y1]...[xt, yt]]}.
+
+Fig. 2. Proposed probabilistic deep supervision framework. PRISM models target latent features as distributions and follows an ELBO-based training objective. GT encoder has an MLP-based architecture, omiting using text encoders. 
+
+terminology throughout this work. Our analysis reveals that VLP’s methodology function-ally, albeit implicitly, optimizes a simplified version of the Evidence Lower Bound (ELBO), using Dirac distributions as a deterministic approximation of the posterior. Crucially, we demonstrate that VLP’s success is driven primarily by this implicit distribution alignment between the prior and posterior (i.e., tying model latents to GT future trajectories), rather than the semantic knowledge encoded by the TE. By formalizing this underlying mechanism, we show how to ex-tract rich regularization signals directly from GT data, greatly streamlining the training process. Our study is conducted on the nuScenes dataset [19] with the VAD-Tiny [9] architecture under a shortened training schedule. The main contributions of the work are summarized as follows:  
+
+> •
+
+Building upon the success of VLP, we conduct a sys-tematic analysis of key design choices for effective deep supervision in AD, isolating the mechanisms that drive performance.  
+
+> •
+
+We introduce a novel probabilistic deep supervision framework for E2E AD (Fig. 1, right). In this frame-work, encoded latents are modeled as reparameterizable distributions to capture uncertainty and are optimized directly via an ELBO objective.  
+
+> •
+
+Under this design, our method consistently reduces planning L2 error and collision rate compared to strong E2E baselines on the nuScenes dataset [19] ( ≈ 8% 
+
+lower L2 and ≈ 3% lower collision rate). II. RELATED WORK 
+
+A. End-to-End Models 
+
+The advancement of AD has historically diverged into two fundamental paradigms: modular and end-to-end architec-tures. The modular approach, exemplified by early systems like VaMoRs [4], decomposes driving into standalone tasks (e.g., perception, prediction, planning). While this offers in-terpretability and a parallel development workflow, it suffers from error accumulation and lacks a global optimization objective. Conversely, E2E learning, initially showcased by ALVINN [7] and PilotNet [11], maps sensor inputs directly to control signals. This allows the model to learn complex feature interactions but traditionally resulted in ”black-box” systems that are difficult to debug and fail to generalize in complex traffic scenarios. To bridge this gap, modern architectures have evolved toward structured E2E pipelines that implicitly model driving sub-tasks while remaining fully differentiable. BEV-Former [20] establishes the utility of mapping multi-view images into a unified top-down feature grid, commonly referred to as a bird’s-eye view (BEV) representation. Build-ing on this, UniAD [8] introduces the first unified, query-driven framework where perception and planning modules are jointly optimized, utilizing learnable queries to facilitate inter-module communication. While constructing dense BEV representations has become a crucial yet computationally demanding task, subsequent works have focused on effi-ciency and scalability: VAD [9] and SparseDrive [10] replace dense rasterized grids with sparse vectorized representations, drastically reducing computational overhead. Most recently, the field has moved beyond deterministic regression toward generative modeling. GenAD [21] formulates driving as a future scene generation problem, utilizing latent trajectory spaces to capture the multi-modal uncertainty inherent in dynamic environments. 
+
+B. Deep supervision 
+
+Deep supervision enhances gradient flow, stabilizes optimization, and promotes robust intermediate features by adding auxiliary constraints to intermediate network layers. Originating with pioneering architectures like GoogleNet [22] and DSN [16], this paradigm initially fo-cused on mitigating vanishing gradients. Over time, however, its scope has expanded well beyond traditional supervised scenarios, finding new applications in self-supervised learn-ing [23] and architecture-agnostic feature regularization [17]. Transitioning to the domain of AD, deep supervision naturally emerges as a mechanism to support interpretable E2E stacks through intermediate tasks. For instance, frame-works like UniAD [8] and VAD [9] utilize shared BEV representations trained via multiple joint heads. Taking a slightly different path, SparseDrive [10] applies separate heads to sparse scene representations. Rather than relying on these rule-specific auxiliary tasks, alternative methods like DTCP [24] explicitly regularize internal features, employing a feature-diversity loss to yield sparser, localized activations that ultimately improve closed-loop performance. Most recently, a compelling evolution of this concept has emerged: language-driven feature regularization, which supervises internal representations using text semantics. A prime example is VLP [18], which converts GT annotations into context-rich text and embeds them via a frozen TE to regularize core latent components. This approach achieves consistent improvements in long-tail performance and gen-eralization, adding only minimal training overhead and no inference cost. Building directly on this premise, VLM-AD [25] elevates the process by leveraging a VLM with structured prompts and auxiliary heads to more effectively distill contextual knowledge into the AD model. Yet, despite the potential of these language-driven methods, identifying Motion 
+
+Prediction    
+
+> BEV Features Multi-view
+> Vision-only Input Prediction
+> Vectorized Scene Learning
+> Agent Queries
+> Map Queries
+> Ego-Agent
+> Interaction Ego-Map
+> Interaction
+> Ego Query
+> Ego-Agent
+> Query Ego-Map
+> Query
+> Planning via Query Interaction
+> MLP
+> Head
+
+Mapping 
+
+> Backbone
+
+Fig. 3. VAD [9] architecture. The image backbone lifts multi-view inputs into BEV features. A vectorized scene-learning stage then encodes salient scene components (lanes, road boundaries, dynamic agents) as queries. These queries condition an ego-vehicle query via an interaction mechanism, which is subsequently optimized for the planning objective. 
+
+theoretically-grounded and optimal ways to leverage GT for latent feature regularization remains an open challenge. 
+
+C. Probabilistic Learning and CVAEs 
+
+While standard supervised training relies on Empirical Risk Minimization (ERM) to provide deterministic point es-timates [26], this approach struggles to capture the structured uncertainty inherent in real-world environments. Probabilis-tic learning frameworks, in contrast, establish a theoretical foundation for learning predictive distributions that capture the spread of likely outcomes, moving beyond the limitations of deterministic residuals. In the context of AD, the future trajectory of a vehicle depends on unobserved factors, such as driver intentions and occluded agents, that underlie the data-generating process. To address this, latent variable models (LVMs) explicitly introduce unobserved variables to encode this hidden structure, allowing them to naturally model aleatoric uncertainty rather than just parameter (epistemic) uncertainty [27, 28]. However, exact inference in classical LVMs is compu-tationally intractable for deep learning. Conditional Varia-tional Autoencoders (CVAEs) resolve this bottleneck through amortized inference [29]. Instead of optimizing per-sample parameters, CVAEs utilize an inference network with global parameters ϕ that conditions on both the input observation x
+
+(e.g., sensor data) and the target y (e.g., ground-truth future trajectories). This allows the model to approximate the true posterior p(z | x, y) by maximizing the conditional ELBO. This objective fundamentally balances two goals: recon-struction accuracy (the expected log-likelihood) and regu-larization toward a learned conditional prior via the Kull-back–Leibler (KL) divergence [30]. By leveraging the repa-rameterization trick [31] to backpropagate through stochastic sampling, CVAEs provide a scalable, gradient-based method to align predictive distributions. We formally adapt this CVAE formulation and its specific parameterization for E2E AD in Section III. III. METHOD Building on the empirical successes of VLP [18], we aim to formalize latent feature regularization in E2E AD models as a practical training framework for AD pipelines. First, we outline the E2E baseline architecture (VAD [9]) and its theoretical learning paradigm. Next, we detail the VLP text-driven supervision paradigm to show how it regular-izes the latent space. Finally, we introduce our generalized VAD VAD 
+
+Motivation of Ablation Experiments Motivation of Ablation Experiments 
+
+ELBO formulation ELBO formulation   
+
+> BEV Features BEV Features
+> Backbone Backbone Multi-view Multi-view
+> Vision-only Input Vision-only Input
+> Ego Queries Ego Queries
+> Prediction Prediction
+> training only training only
+> inference inference Aggregated Aggregated
+> BEV Subsets BEV Subsets
+> Ego Ego FG FG Lanes Lanes
+
+Text Encoder Text Encoder 
+
+> Text Features Text Features
+
+LLalp alp 
+
+> Ego Ego
+> Prompt Prompt
+> FG FG
+> Prompt Prompt
+> Lane Lane
+> Prompt Prompt
+> Agent-wise Agent-wise
+> ALP ALP
+> Source Queries Source Queries
+
+LLslp slp 
+
+> Text Features Text Features
+> Planning Planning
+> Prompt Prompt
+> Sample-wise Sample-wise
+> SLP SLP
+
+Task-specific Task-specific 
+
+Modules Modules     
+
+> Ego-car prompt: Ego-car prompt: This is the self-driving car. It is {class}, and its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. It is currently {command}. This is the self-driving car. It is {class}, and its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. It is currently {command}.
+> Its future trajectory will be {[[x1, y1]…[xn, yn]]}. Its future trajectory will be {[[x1, y1]…[xn, yn]]}.
+> Foreground prompt: Foreground prompt: This object is {class}. Its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. Its future trajectory will be {[[x1, y1]…[xt, yt]]}. This object is {class}. Its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. Its future trajectory will be {[[x1, y1]…[xt, yt]]}.
+> Lane prompt: Lane prompt: This lane belongs to a {lane-label}. The label belongs to {thing/stuff} class. Its 2D bounding box on the BEV map is {[cx, cy, w, h]}. This lane belongs to a {lane-label}. The label belongs to {thing/stuff} class. Its 2D bounding box on the BEV map is {[cx, cy, w, h]}.
+> Planning prompt: Planning prompt: The self-driving car is driving in an urban area. It is currently {command}. The future trajectory of the car for the next P timestamps The self-driving car is driving in an urban area. It is currently {command}. The future trajectory of the car for the next P timestamps
+> will be {[[x1, y1]…[xp, yp]]}. will be {[[x1, y1]…[xp, yp]]}.
+
+Planner Planner 
+
+Motion Motion 
+
+Prediction Prediction    
+
+> BEV Features BEV Features Multi-view Multi-view
+> Vision-only Input Vision-only Input Prediction Prediction
+> Vectorized Scene Learning Vectorized Scene Learning
+> Agent Queries Agent Queries
+> Map Queries Map Queries
+> Ego-Agent Ego-Agent
+> Interaction Interaction Ego-Map Ego-Map
+> Interaction Interaction
+> Ego Query Ego Query
+> Ego-Agent Ego-Agent
+> Query Query Ego-Map Ego-Map
+> Query Query
+> Planning via Query Interaction Planning via Query Interaction
+> MLP MLP
+> Head Head
+
+Mapping Mapping 
+
+> Backbone Backbone
+
+Encoder Encoder 
+
+> Driving Input Driving Input
+
+xx
+
+> GT Data GT Data
+
+yy
+
+GT GT 
+
+Encoder Encoder 
+
+Decoder Decoder                   
+
+> Prediction Prediction
+> training training
+> inference inference
+> LLprediction prediction
+> GT Trajectory GT Trajectory
+> 🔥 🔥 🔥 🔥
+> 🔥 🔥
+> Original model: Original model:
+> ZZpp
+> LLalign align
+> ZZqq
+> ppzz||xx𝜃 𝜃 (())
+> qqzz||yy𝜙 𝜙 (())
+> ppyy||xx,,zz𝜃 𝜃 (())
+> ppyy||xx𝜃 𝜃 (())
+
+Encoder Encoder 
+
+> Driving Input Driving Input
+
+xx
+
+> GT Data GT Data
+
+yy
+
+GT GT 
+
+Encoder Encoder 
+
+Decoder Decoder                    
+
+> Prediction Prediction
+> training training
+> inference inference
+> LLprediction prediction
+> GT Trajectory GT Trajectory
+> 🔥 🔥 🔥 🔥
+> 🔥 🔥
+> Original model: Original model:
+> ZZpp
+> LLalign align
+> ZZqq
+> ppzz||xx𝜃 𝜃 (())
+> qqzz||xx,,yy𝜙 𝜙 (())
+> ppyy||xx,,zz𝜃 𝜃 (())
+> ppyy||xx𝜃 𝜃 (())
+> 11
+> 22
+
+Fig. 4. Description of VLP [18] framework. During training, GT annotations are represented as structured prompts, encoded by a frozen text encoder and aligned with internal visual features via a contrastive objective. ALP supervises agent-centric BEV regions, and SLP supervises the ego-vehicle queries used for planning. 
+
+probabilistic deep supervision framework, transitioning from deterministic feature alignment to probabilistic modeling. 
+
+A. VAD: E2E Baseline 
+
+We adopt VAD [9] as our base E2E architecture. As illustrated in Fig. 3, VAD processes multi-view images x
+
+to extract BEV features. A vectorized scene-learning stage then encodes salient scene components, such as lanes, road boundaries, and dynamic agents, into distinct queries. These queries interact with a learned ego-vehicle query which is subsequently optimized to output the final planning way-points y.Theoretically, VAD fundamentally operates under the paradigm of discriminative learning. It models the condi-tional distribution pθ (y | x), where θ represents the network parameters. The model is optimized via ERM, where the training objective relies purely on the output loss with respect to the GT trajectories. The deterministic baseline optimization objective can be summarized as: 
+
+LVAD = LERM = E(x,y)∼D [− log pθ (y | x)] . (1) Here, D represents the distribution of image-trajectory pairs (x, y). While effective for point-to-point prediction, this approach treats feature distributions as deterministic point estimates and struggles to capture the structured un-certainty inherent in driving environments. 
+
+B. VLP: Deterministic Deep Supervision 
+
+To regularize the intermediate representations extracted by VAD, Vision Language Planning (VLP) [18] introduces a training-only deep supervision paradigm. As shown in Fig. 4, GT scene annotations are converted into natural-language prompts, encoded by a frozen text encoder E, and aligned with internal visual features via a contrastive objective. VLP consists of two components: the Agent-centric Learning Paradigm (ALP) for BEV feature regularization, and the Self-driving-car-centric Learning Paradigm (SLP) for planning-query regularization. The language branch is discarded at inference, adding no runtime overhead. 1) Agent-centric Learning Paradigm (ALP): ALP focuses supervision on semantically relevant regions of the BEV representation by grouping agents into three categories: 
+
+ego vehicle, foreground objects , and lane/map elements –
+
+k ∈ {ego , fg , lane }. Using GT annotations, it extracts local BEV subsets Ak 
+
+> bev
+
+via 3D bounding box cropping (for 
+
+ego and fg ) or panoptic segmentation (for map elements), followed by a pooling operator to standardize spatial dimen-sions. Simultaneously, target agent-expectation features Ak
+
+> exp
+
+are generated by passing category-specific text prompts Tk
+
+through the frozen encoder E and a trainable MLP adapter 
+
+Fbev : Ak 
+
+> bev
+
+= Pool(Crop /Seg(BEV , GT k)) , (2) 
+
+Ak 
+
+> exp
+
+= Fbev (E(Tk[yk])) . (3) The per-sample features are concatenated into batch-level tensors Abev , Aexp ∈ RNB ×C , where NB is the total number of agents in the batch and C is the channel dimension. ALP employs a symmetric contrastive loss Lalp to maximize the cosine similarity between corresponding visual-text pairs while minimizing it for all other pairs in the batch, effec-tively forcing the BEV features to align with the semantic expectations derived from GT data. Specifically, after applying ℓ2 normalization to the fea-tures, a pairwise similarity matrix Spred is computed and scaled by a learnable logit parameter αalp . Taking the identity matrix INB as the target to enforce one-to-one alignment, the model minimizes a bidirectional cross-entropy loss: 
+
+Spred = αalp ( ˆAbev ˆA⊤
+
+> exp
+
+), where ˆA = A
+
+∥A∥2
+
+Lalp = 12
+
+> 1
+
+X
+
+> d=0
+
+LCE (Spred , INB , dim = d).
+
+(4) 
+
+2) Self-driving-car-centric Learning Paradigm (SLP): 
+
+While ALP stabilizes the global scene representation, SLP shifts the focus to the decision-making bottleneck: the ego-vehicle query. In VAD, ego-vehicle query is constructed as follows. Queries from dedicated modules {Aquery }{k} are passed through an interaction module Minter to aggregate full-scene context into a refined ego-centric feature Efeat ego .This feature serves as the latent input for the planning decoder Mplan to predict future waypoints yplan pred :
+
+Efeat ego = M inter (Aego query , Afg query , Alane query ) ∈ RB×C ,
+
+yplan pred = M plan (Efeat ego ) ∈ RB×P ×2.
+
+(5) Following the contrastive logic of ALP, a planning prompt 
+
+Eprompt is constructed from the GT high-level command and the future ego trajectory yplan . The model is optimized via a bidirectional contrastive loss Lslp to align the latent ego-query with this language-based expectation. Ultimately, the VLP objective modifies the baseline ERM by appending these latent contrastive penalties: 
+
+LVLP = LERM + λalp Lalp + λslp Lslp . (6) Crucially, in this formulation, the latent space is regularized without any prior distributional assumptions. Furthermore, the use of a TE to generate zprompt is secondary to the overarching theoretical architecture. It primarily serves as a heuristic of choice for deep supervision. The underlying effectiveness, as we will show, stems from the forced con-nection between the latent query and the GT future. 
+
+C. Probabilistic Deep Supervision Framework 
+
+To provide a theoretically grounded mechanism for latent regularization in this setting and, potentially, for capturing uncertainty inherent in dynamic driving environments, we transition from deterministic point estimates to a principled probabilistic formulation, as depicted in Fig. 2. We conceptu-alize the base AD network as a conditional generative model 
+
+pθ (y | x), parameterized by θ.We introduce intermediate latent variables z (representing the regularized ego queries) and model them as Gaussian distributions with diagonal covariance. To properly formalize this as a CVAE, the overall architecture is decomposed into a decoder pθ (y | x, z), which generates planning waypoints from sampled latents alongside the input condition, and a conditional prior pψ (z | x), parameterized by independently learned parameters ψ to model the latent distribution based solely on sensory inputs. Concurrently, GT data y is encoded into a target approximate posterior distribution qϕ(z | x, y)
+
+by an auxiliary inference network parameterized by ϕ.Rather than relying on the contrastive loss which lacks distributional assumptions, we optimize the network by maximizing the conditional ELBO objective JCVAE . This fundamentally aligns the model’s predictive distribution with the underlying data-generating process: 
+
+JCVAE (θ, ϕ, ψ) = Ez∼qϕ(z|x,y)[log pθ (y | x, z)] 
+
+− β D KL (qϕ(z | x, y) ∥ pψ (z | x)) .
+
+(7) During training, latents are sampled from qϕ via the reparameterization trick [31] to compute the expected recon-struction loss, while the β-scaled KL divergence regularizes the conditional prior pψ toward the GT-informed posterior. Crucially, at inference, the posterior encoder is discarded. Latents are instead sampled from the prior pψ , adding zero computational overhead to the baseline E2E model. Ultimately, our core architectural contribution is two-fold: replacing a deterministic contrastive loss with a principled probabilistic framework, and shifting from a reliance on text encoders to an efficient, MLP-based encoding. Further implementation specifics and detailed architectural parame-terizations are provided in Sec. IV, with additional encoding comparisons and network details documented in Appendix A and Appendix B. IV. EXPERIMENTS 
+
+Implementation Details. We evaluate our framework on the nuScenes dataset [19] using the VAD-Tiny configu-ration. All models are trained with a global batch size of 8 distributed across 2 ×NVIDIA A100 GPUs. Given the substantial computational cost (60 epochs require ≈ 12 
+
+days), we limit training to 35 epochs. Intermediate validation confirms that performance stabilizes sufficiently at this stage TABLE I 
+
+QUANTITATIVE EVALUATION OF THE PROBABILISTIC FRAMEWORK .
+
+Model / Configuration L2 (m) ↓ Col. Rate (%) ↓
+
+1s 2s 3s 1s 2s 3s 
+
+VAD [9] 0.44 ±0.03 0.77 ±0.06 1.17 ±0.10 0.74 ±0.13 0.84 ±0.24 1.10 ±0.29 
+
+Probabilistic Framework (VAD-VLP, SLP-Only) 
+
+Deterministic SLP 0.33 ±0.01 0.57 ±0.01 0.88 ±0.02 0.21 ±0.13 0.29 ±0.13 0.46 ±0.13 
+
+Probabilistic ELBO ( S = 1 ) 0.37 ±0.03 0.63 ±0.04 0.95 ±0.05 0.28 ±0.03 0.27 ±0.02 0.42 ±0.01 
+
+Probabilistic ELBO (S = 2 ) 0.29 ±0.01 0.52 ±0.01 0.84 ±0.02 0.13 ±0.02 0.26 ±0.02 0.66 ±0.13 
+
+Values report the mean ± standard deviation of models evaluated at epoch 35. The VAD baseline is averaged over three runs. Our ELBO-based probabilistic formulation ( S = 2 samples) outperforms the optimized deterministic SLP baseline, achieving the strongest overall planning performance and the lowest L2 errors across all temporal horizons. 
+
+to reliably evaluate design variations. To stabilize the proba-bilistic training, we apply gradient isolation, cutting gradients flowing to the prior features from the GT-encoder branch, and use a KL weighting factor of β = 0 .1. We report L2 trajectory error (m) and Collision Rate (%) across 1s, 2s, and 3s planning horizons. Our codebase builds upon the official VAD implementation 1. As the official VLP codebase is not publicly available, we utilized a partial release provided by the authors [18]. However, because this version did not sup-port direct reproduction of the reported results, we performed extensive refactoring and added missing components prior to conducting our experiments. Our re-implementation suc-cessfully reproduces the reported L2 planning performance, though we observed a performance gap in Collision Rate compared to the VLP baseline. This appears to be a known issue with an underlying VAD codebase, reported by other users. 
+
+A. Baseline Reproduction and Training Dynamics 0.2          
+
+> 0.3
+> 0.4
+> 0.5
+> 0.6
+> 0.7
+> L2 (m)  1s
+> 0.5
+> 0.6
+> 0.7
+> 0.8
+> 0.9
+> 1.0
+> 1.1
+> L2 (m)  2s
+> 0.8
+> 1.0
+> 1.2
+> 1.4
+> 1.6
+> 1.8
+> L2 (m)  3s
+> 10 20 30
+> Epoch
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Collision Rate (%)  1s
+> 10 20 30
+> Epoch
+> 0.0
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> Collision Rate (%)  2s
+> 10 20 30
+> Epoch
+> 0.2
+> 0.4
+> 0.6
+> 0.8
+> 1.0
+> 1.2
+> Collision Rate (%)  3s
+> VAD VAD-SLP Deterministic VAD-SLP Probabilistic (S = 1) VAD-SLP Probabilistic (S = 2)
+
+Fig. 5. Learning curves comparing original deterministic VLP and our probabilistic extension over 35 epochs. Thick lines denote the mean over two independent runs, with shaded regions indicating ±1 standard deviation. We use only the SLP branchs. S denotes the number of samples used to evaluate the reconstruction loss term. The probabilistic approach matches deterministic baseline performance and yields modest gains when the ELBO reconstruction term is optimized with S = 2 samples from latents. 
+
+Training E2E AD models is inherently complex, com-putationally intensive, and highly stochastic. Nevertheless, results in the literature are commonly reported as single-point estimates [9, 10, 18, 20], without details on result selection, convergence behavior, or performance variability. The absence of such information limits our understanding 
+
+> 1
+
+https://github.com/hustvl/VAD 
+
+of the training dynamics, leaving the community vulnerable to selective reporting and making the distinction between genuine progress and random variance increasingly opaque. To address this, we systematically reproduce the VAD and VLP baselines and actively report learning curves and uncertainty estimates throughout this work. As shown in Fig. 5, visualizing the mean and standard deviation over multiple independent runs reveals significant variance, partic-ularly in collision rates. By explicitly reporting these curves, we provide a more transparent and rigorous foundation for analyzing architectural modifications, representing a critical methodological step for proper model analysis. Due to the high variance in observed collision rates, we rely primarily on the L2 error for robust model comparison. 
+
+B. Iterative Architectural Search 
+
+To build a generalized and highly efficient framework, we first conduct a systematic ablation study on the deterministic VLP baseline. Our goal is to isolate the true drivers of its performance, eliminate redundant complexities, and establish a streamlined foundation for our probabilistic extension. 
+
+1) Isolating Spatial and Query-Level Supervision (ALP vs. SLP): In the original formulation, deep supervision is applied both to semantically relevant regions of the BEV representation (ALP) and to the interaction queries prior to the planning stage (SLP). As detailed in Table II, adding ALP to SLP yields only marginal performance improve-ments while significantly increasing architectural complexity, specifically regarding the aggregation of salient BEV regions and the handling of variable numbers of scene elements. Furthermore, SLP-only training exhibits smoother conver-gence and lower variance across runs. Given the increased computational overhead and less stable convergence of the combined approach, we omit ALP alignment in favor of SLP-only supervision, streamlining the architecture with no substantial loss in performance. 
+
+2) The Role of the Text Encoder in GT Encoding: The baseline framework heavily relies on a frozen TE (CLIP) to encode GT scene annotations into structured textual prompts. To evaluate whether these linguistic priors are strictly nec-essary, we replace the TE and its adapter with a simple, fully trainable MLP-based encoder that directly processes GT attributes (e.g., ego trajectories and driving commands). TABLE II                                     
+
+> ALP VS . SLP A BLATION .
+> Model / Configuration L2 (m) ↓Col. Rate (%) ↓
+> 1s 2s 3s 1s 2s 3s
+> VAD 0.44 ±0.03 0.77 ±0.06 1.17 ±0.10 0.74 ±0.13 0.84 ±0.24 1.10 ±0.29
+> VAD–VLP
+> ALP 0.31 ±0.02 0.54 ±0.03 0.84 ±0.05 0.49 ±0.21 0.53 ±0.25 0.71 ±0.30
+> SLP 0.32 ±0.02 0.56 ±0.02 0.87 ±0.02 0.19 ±0.11 0.27 ±0.11 0.44 ±0.11
+> ALP + SLP 0.31 ±0.03 0.55 ±0.05 0.87 ±0.06 0.40 ±0.13 0.35 ±0.11 0.43 ±0.09
+> Entries denote the mean ±standard deviation over three independent runs (35 epochs). SLP-only training exhibits smoother convergence and lower collision rates. Adding ALP yields only marginal improvements while introducing additional complexity from salient BEV region aggregation.
+
+As shown in Table III, the fully MLP-based encoder matches or slightly surpasses the CLIP-based configuration. This strongly suggests that the performance gains stem from the regularizing effect of the GT injection itself, rather than from the abstract linguistic representations. Consequently, we replace the frozen TE with this MLP-based encoding, further reducing computational overhead.                               
+
+> TABLE III
+> GT E NCODER ABLATION .
+> Model / Configuration L2 (m) ↓Col. Rate (%) ↓
+> 1s 2s 3s 1s 2s 3s
+> VAD 0.44 ±0.03 0.77 ±0.06 1.17 ±0.10 0.74 ±0.13 0.84 ±0.24 1.10 ±0.29
+> VAD–VLP
+> CLIP text encoder 0.31 ±0.03 0.55 ±0.05 0.87 ±0.06 0.40 ±0.13 0.35 ±0.11 0.43 ±0.09
+> MLP encoder 0.29 ±0.02 0.53 ±0.03 0.84 ±0.03 0.28 ±0.25 0.35 ±0.24 0.50 ±0.18
+> Entries report mean ±standard deviation over three runs (35 training epochs). The fully MLP-based encoder matches, and slightly improves on, the CLIP-based setup, suggesting the frozen text encoder is not the primary source of VLP gains.
+
+3) Alignment Objectives and Temporal Injection Hori-zons: Beyond structural components, we ablate the opti-mization objective and the temporal horizons of the injected GT signals. First, while the baseline utilizes a symmetric contrastive objective for feature alignment, our experiments show that a standard Mean Squared Error (MSE) loss serves as a highly competitive and simpler alternative, with the con-trastive loss providing only minor improvements. Second, we investigate the temporal bounds of the injected ego trajectory. Providing the model with past trajectories yields a negligible learning signal. Conversely, injecting future ego trajectories provides the largest performance gains. Extending this future trajectory to longer temporal horizons offers additional, but strictly marginal, improvements. 
+
+C. Proposed Architecture and Quantitative Comparison 
+
+We utilize the simplified SLP-only configuration, paired with a fully MLP-based encoder and future-trajectory GT injection, as the efficient foundation for our probabilistic framework. Building on the mechanistic insights from our previous ablations, we evaluate our principled probabilistic extension against both the base VAD architecture and deter-ministic VLP baseline (Table I). We observe that aggregating multiple posterior samples for the ELBO reconstruction term is critical for stabilization and performance. Drawing multiple samples is a well-established technique in VAE literature to tighten the ELBO bound and reduce estimator variance. In our framework, it adds only a negligible computational overhead. As detailed in Table I and Fig. 5, when drawing S = 2 samples during training, the probabilistic framework consistently outperforms the deterministic VLP baseline. Across the planning horizons, this yields an ≈ 8% average reduction in L2 error and achieves the lowest collision rates at the 1s and 2s horizons. This performance gain is theoretically well-grounded. Our analysis suggests that the original VLP framework can be viewed as an implicit ELBO optimization that utilizes a degenerate Dirac distribution as its variational posterior. By contrast, our framework adopts a broader family of approximating distributions — specifically, a reparameteri-zable Gaussian. By transitioning from a point-estimate to a distributional posterior, we significantly tighten the gap between the variational approximation and the true posterior. While both remain approximations, our approach provides an additional expressivity intended to capture the complex alignments between latent features and GT trajectories. 
+
+D. Analysis of the Learned Generative Model 
+
+Despite the quantitative improvements in planning accu-racy, an analysis of the generative behavior revealed a col-lapse toward uni-modal distributions. When multiple samples were drawn from the prior at inference time, the resulting trajectories were nearly identical, indicating the network failed to learn the full multi-modal diversity of driving maneuvers. In its current form, we therefore understand the main practical benefit of the probabilistic formulation to be stronger latent regularization and improved planning accu-racy, rather than richer multi-modal generation. Its potential for uncertainty modeling remains to be demonstrated. We attribute this lack of diversity to two primary factors. First, the structural constraints of the underlying VAD archi-tecture inherently limit expressivity. VAD treats trajectory generation as a deterministic selection over independent heads rather than a continuous, multi-modal predictive space. Second, while the simple MLP-based posterior encoder pro-vides a theoretically grounded target, it may lack the depth to capture the high-dimensional interactions between dynamic agents. Crucially, however, this limitation is not unique to our approach. Our earlier analysis suggests that the far more complex, frozen CLIP text encoders in VLP likewise serve as high-quality point-estimates rather than diverse generative priors. By replacing the ”black-box” text-encoder backbone with a transparent MLP, we achieve superior planning per-formance while making these latent dynamics, such as mode collapse, explicitly measurable. Ultimately, these findings offer a vital perspective on the current state-of-the-art, within the scope of the single dataset and architecture studied here. Our ELBO-based formulation moves the field beyond heuristic contrastive losses toward a setup where model behavior is theoretically interpretable. Even in the presence of mode collapse, the framework serves as a more powerful regularizer for planning accuracy than its deterministic counterparts. It establishes a foundation for future work, providing both a high-performance baseline and a principled diagnostic tool for the next generation of truly generative driving architectures. V. CONCLUSION AND DISCUSSION This work systematically demystifies deep supervision for E2E AD and establishes a formal probabilistic foundation for latent feature regularization. Through rigorous ablations, we demonstrated that the benefits of recent methods like VLP arise not from the reasoning capabilities of the complex text encoders they employ, but from some form of implicit deterministic alignment between model latents and GT dis-tributions. This suggests that much of the current state-of-the-art relies on effective point-estimate regularization rather than the semantic priors often credited. Leveraging these insights, we introduced a probabilistic framework that replaces heuristic contrastive alignment with a principled Variational Inference objective. Specifically, we model latent representations as reparameterizable distribu-tions trained via the ELBO. Evaluated on the nuScenes dataset, our framework consistently outperforms competitive baselines in planning accuracy while incurring zero inference overhead. Within the scope of this work, the results indicate that incorporating structured GT signals into latent spaces is a promising and theoretically grounded blueprint for training lower-error AD models. To address the observed uni-modal collapse, future work can focus on integrating this ELBO-based training paradigm with inherently multi-modal, gen-erative E2E architectures (e.g., GenAD [21]). Furthermore, improving the expressivity of the posterior encoder, such as through attention mechanisms, could prevent early KL collapse and capture richer agent-map interactions. Finally, expanding this generalized framework to incorporate diverse GT modalities presents an exciting avenue for developing scalable, interpretable, and safe AD systems. REFERENCES [1] S. Singh, “Critical reasons for crashes investigated in the national motor vehicle crash causation survey,” DOT HS , 2015. [2] C. Lee, K. Dalmeijer, P. V. Hentenryck, and P. Zhang, “Optimizing autonomous transfer hub networks: Quantifying the potential impact of self-driving trucks,” EURO J. Transp. Logist. , vol. 13, p. 100141, 2024. [3] E. Gjere, “Challenges of autonomous driving trucks and the impact on logistics,” 2023, accessed: 2025-08-30. [Online]. Available: https://www.theseus.fi/handle/10024/806084 [4] E. Dickmanns and A. Zapp, “Autonomous high speed road vehicle guidance by computer vision,” IFAC Proceedings Volumes , vol. 20, no. 5, Part 4, pp. 221–226, 1987, 10th Triennial IFAC Congress on Automatic Control - 1987 Volume IV, Munich, Germany, 27-31 July. [5] C. Urmson, J. Anhalt, D. Bagnell, C. Baker, R. Bittner, M. Clark, J. Dolan, D. Duggins, T. Galatali, C. Geyer, et al. , “Autonomous driving in urban environments: Boss and the urban challenge,” Journal of Field Robotics , vol. 25, no. 8, pp. 425–466, 2008. [6] E. Yurtsever, J. Lambert, A. Carballo, and K. Takeda, “A survey of autonomous driving: Common practices and emerging technologies,” 
+
+IEEE Access , vol. 8, pp. 58 443–58 469, 2020. [7] D. Pomerleau, “ALVINN: an autonomous land vehicle in a neural network,” in Advances in Neural Information Processing Systems 1, [NIPS Conference, Denver, Colorado, USA, 1988] . Morgan Kaufmann, 1988, pp. 305–313. [8] Y. Hu, J. Yang, L. Chen, K. Li, C. Sima, X. Zhu, S. Chai, S. Du, T. Lin, W. Wang, L. Lu, X. Jia, Q. Liu, J. Dai, Y. Qiao, and H. Li, “Planning-oriented autonomous driving,” in IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2023, Vancouver, BC, Canada, June 17-24, 2023 . IEEE, 2023, pp. 17 853–17 862. [9] B. Jiang, S. Chen, Q. Xu, B. Liao, J. Chen, H. Zhou, Q. Zhang, W. Liu, C. Huang, and X. Wang, “VAD: vectorized scene representation for efficient autonomous driving,” in IEEE/CVF International Conference on Computer Vision, ICCV 2023, Paris, France, October 1-6, 2023 .IEEE, 2023, pp. 8306–8316. [10] W. Sun, X. Lin, Y. Shi, C. Zhang, H. Wu, and S. Zheng, “Sparsedrive: End-to-end autonomous driving via sparse scene representation,” 
+
+CoRR , vol. abs/2405.19620, 2024. [11] M. Bojarski, C. Chen, J. Daw, A. Degirmenci, J. Deri, B. Firner, B. Flepp, S. Gogri, J. Hong, L. D. Jackel, Z. Jia, B. J. Lee, B. Liu, F. Liu, U. Muller, S. Payne, N. K. N. Prasad, A. Provodin, J. Roach, T. Rvachov, N. Tadimeti, J. E. van Engelen, H. Wen, E. Yang, and Z. Yang, “The NVIDIA pilotnet experiments,” CoRR ,vol. abs/2010.08776, 2020. [12] S. Hecker, D. Dai, and L. V. Gool, “Learning accurate, comfortable and human-like driving,” CoRR , vol. abs/1903.10995, 2019. [13] H. Xu, Y. Gao, F. Yu, and T. Darrell, “End-to-end learning of driving models from large-scale video datasets,” in 2017 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2017, Honolulu, HI, USA, July 21-26, 2017 . IEEE Computer Society, 2017, pp. 3530– 3538. [14] M. Bojarski, D. D. Testa, D. Dworakowski, B. Firner, B. Flepp, P. Goyal, L. D. Jackel, M. Monfort, U. Muller, J. Zhang, X. Zhang, J. Zhao, and K. Zieba, “End to end learning for self-driving cars,” 
+
+CoRR , vol. abs/1604.07316, 2016. [15] A. Prakash, K. Chitta, and A. Geiger, “Multi-modal fusion transformer for end-to-end autonomous driving,” in IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2021, virtual, June 19-25, 2021 .Computer Vision Foundation / IEEE, 2021, pp. 7077–7087. [16] C. Lee, S. Xie, P. W. Gallagher, Z. Zhang, and Z. Tu, “Deeply-supervised nets,” in Proceedings of the Eighteenth International Con-ference on Artificial Intelligence and Statistics, AISTATS 2015, San Diego, California, USA, May 9-12, 2015 , vol. 38. JMLR.org, 2015. [17] W.-B. Kou, G. Zhu, Y. Jin, S. Wang, M. Tang, and Y.-C. Wu, “iMacHSR: intermediate multi-access heterogeneous supervision and regularization scheme toward architecture-agnostic training,” CoRR ,2025. [18] C. Pan, B. Yaman, T. Nesti, A. Mallik, A. G. Allievi, S. Velipasalar, and L. Ren, “VLP: vision language planning for autonomous driving,” in IEEE/CVF Conference on Computer Vision and Pattern Recogni-tion, CVPR 2024, Seattle, WA, USA, June 16-22, 2024 . IEEE, 2024, pp. 14 760–14 769. [19] H. Caesar, V. Bankiti, A. H. Lang, S. Vora, V. E. Liong, Q. Xu, A. Krishnan, Y. Pan, G. Baldan, and O. Beijbom, “nuscenes: A multimodal dataset for autonomous driving,” in 2020 IEEE/CVF Conference on Computer Vision and Pattern Recognition, CVPR 2020, Seattle, WA, USA, June 13-19, 2020 . Computer Vision Foundation / IEEE, 2020, pp. 11 618–11 628. [20] Z. Li, W. Wang, H. Li, E. Xie, C. Sima, T. Lu, Y. Qiao, and J. Dai, “Bevformer: Learning bird’s-eye-view representation from multi-camera images via spatiotemporal transformers,” in Computer Vision - ECCV 2022 - 17th European Conference, Tel Aviv, Israel, October 23-27, 2022, Proceedings, Part IX , vol. 13669. Springer, 2022, pp. 1–18. [21] W. Zheng, R. Song, X. Guo, C. Zhang, and L. Chen, “Genad: Generative end-to-end autonomous driving,” in Computer Vision -ECCV 2024 - 18th European Conference, Milan, Italy, September 29-October 4, 2024, Proceedings, Part LXV , vol. 15123. Springer, 2024, pp. 87–104. [22] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. E. Reed, D. Anguelov, D. Erhan, V. Vanhoucke, and A. Rabinovich, “Going deeper with convolutions,” in IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2015, Boston, MA, USA, June 7-12, 2015 . IEEE Computer Society, 2015, pp. 1–9. [23] S. Ren, F. Wei, S. Albanie, Z. Zhang, and H. Hu, “DeepMIM: deep supervision for masked image modeling,” in IEEE/CVF Winter Conference on Applications of Computer Vision, WACV 2025, Tucson, AZ, USA, February 26 - March 6, 2025 . IEEE, 2025, pp. 879–888. [24] M. Mirzaie and B. Rosenhahn, “Interpretable decision-making for end-to-end autonomous driving,” CoRR , vol. abs/2508.18898, 2025. [25] Y. Xu, Y. Hu, Z. Zhang, G. P. Meyer, S. K. Mustikovela, S. Srinivasa, E. M. Wolff, and X. Huang, “VLM-AD: end-to-end autonomous driving through vision-language model supervision,” CoRR , vol. abs/2412.14446, 2024. [26] V. Vapnik, “An overview of statistical learning theory,” IEEE Trans. Neural Networks , vol. 10, no. 5, pp. 988–999, 1999. [27] C. M. Bishop, Pattern Recognition and Machine Learning . Springer, 2006. [28] K. P. Murphy, Machine learning - a probabilistic perspective , ser. Adaptive computation and machine learning series. MIT Press, 2012. [29] S. Gershman and N. D. Goodman, “Amortized inference in proba-bilistic reasoning,” in Proceedings of the 36th Annual Meeting of the Cognitive Science Society, CogSci 2014, Quebec City, Canada, July 23-26, 2014 . cognitivesciencesociety.org, 2014. [30] S. Kullback and R. A. Leibler, “On information and sufficiency,” 
+
+Annals of Mathematical Statistics , vol. 22, no. 1, pp. 79–86, 1951. [31] D. P. Kingma and M. Welling, “Auto-encoding variational bayes,” in 2nd International Conference on Learning Representations, ICLR 2014, Banff, AB, Canada, April 14-16, 2014, Conference Track Pro-ceedings , 2014. 
+
+APPENDIX 
+
+A. GT D ATA ENCODERS GT Data            
+
+> y
+> Text Encoder
+> Ztarget
+> ❄
+> Prompt Generator MLP
+> 🔥
+> Pre-defined Template for Ego / Agents / Lanes.
+> This object is {class}. Its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. Its future trajectory will be {[[x1, y1]...[xt, yt]]}.
+> GT Data
+> y
+> Text Encoder
+> Ftarget
+> ❄
+> MLP
+> 🔥
+> Predefined Template for Ego / Agents / Lanes.
+> Ego &Agent GT Trajectories
+> Nav. cmd
+> Lane GT Coordinates
+> One-hot Encoder
+> cat Traj Enc
+> 🔥
+> Lane Enc
+> 🔥
+> N
+> M
+> Fego Fagents
+> N
+> Flanes
+> M
+> (Batch: 1 ego, N agents, M lanes)
+> cat
+> Ego GT Trajectory
+> Nav. cmd One-hot Encoder
+> cat Traj Enc
+> 🔥 Qego-agent
+> Prompt Generator
+
+(a) GT Data 
+
+y
+
+Text Encoder 
+
+> Ztarget
+
+❄ 
+
+> Prompt Generator MLP
+> 🔥
+> Pre-defined Template for Ego / Agents / Lanes.
+> This object is {class}. Its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. Its future trajectory will be {[[x1, y1]...[xt, yt]]}.
+> GT Data
+
+y
+
+Text Encoder 
+
+> Ftarget
+
+❄          
+
+> MLP
+> 🔥
+> Predefined Template for Ego / Agents / Lanes.
+> Ego &Agent GT Trajectories
+> Nav. cmd
+> Lane GT Coordinates
+> One-hot Encoder
+> cat Traj Enc
+> 🔥
+> Lane Enc
+> 🔥
+> N
+> M
+> Fego Fagents
+> N
+> Flanes
+> M
+> (Batch: 1 ego, N agents, M lanes)
+> cat
+> Ego GT Trajectory
+> Nav. cmd One-hot Encoder
+> cat Traj Enc
+> 🔥 Qego-agent
+> Prompt Generator
+
+(b) GT Data 
+
+y
+
+Text Encoder 
+
+> Ztarget
+
+❄ 
+
+> Prompt Generator MLP
+> 🔥
+> Pre-defined Template for Ego / Agents / Lanes.
+> This object is {class}. Its 3D bounding box is {[cx, cy, w, l, cz, h, sin, cos, vx, vy]}. Its future trajectory will be {[[x1, y1]...[xt, yt]]}.
+> GT Data
+
+y
+
+Text Encoder 
+
+> Ftarget
+
+❄          
+
+> MLP
+> 🔥
+> Predefined Template for Ego / Agents / Lanes.
+> Ego &Agent GT Trajectories
+> Nav. cmd
+> Lane GT Coordinates
+> One-hot Encoder
+> cat Traj Enc
+> 🔥
+> Lane Enc
+> 🔥
+> N
+> M
+> Fego Fagents
+> N
+> Flanes
+> M
+> (Batch: 1 ego, N agents, M lanes)
+> cat
+> Ego GT Trajectory
+> Nav. cmd One-hot Encoder
+> cat Traj Enc
+> 🔥 Qego
+> Prompt Generator
+
+(c) Fig. 6. Overview of GT data encoders that transform input data into target features for regularization. (a) Text-based encoder employed in the original VLP framework [18]. (b) and (c) MLP-based encoders proposed in this work for the ALP and SLP components of VLP, respectively. 
+
+This section describes GT data encoders that map input annotations to target features for deep supervision within the VLP framework [18] (Fig. 6). We discuss the original text-based encoder (TE) and our proposed MLP-based alternative. 
+
+1) Text-based Encoder: Fig. 6a illustrates the TE encoder used as the default in VLP. GT data are first formatted into text prompts following a predefined template that differs between ALP and SLP (an example is shown in Fig. 4). The prompt is processed by a frozen TE ( CLIP/RN50x64 ), after which two trainable MLP layers project the text features to the required shape. In ALP, each scene agent (including the ego) and each lane instance are encoded into separate feature vectors. In SLP, the same mechanism is used to produce 
+
+ego-agent and ego-map interaction queries. 
+
+2) MLP encoder: Figs. 6b and 6c show our MLP-based encoders for ALP and SLP, respectively. In the ALP encoder, GT agents and lanes are transformed into per-element feature vectors. Ego and agent trajectories are concatenated with a one-hot navigation command and then passed through a trajectory encoder consisting of a small stack of trainable MLP layers. To semantically distinguish trajectories from lane geometry, lane coordinates are processed by a separate MLP prior to concatenation with the navigation command. In the simplest configuration, we use two layers for both encoders. Notably, we remove the frozen TE and omit 3D bounding-box attributes for agents, which we empirically found to be non-critical in this setting. SLP follows the same principle, combining the ego trajectory with the one-hot navigation command via a compact trajectory encoder. B. D ETAILED NETWORK ARCHITECTURES 
+
+Figure 2 summarizes the probabilistic reformulation. In the original deterministic setup, SLP regularizes both the 
+
+ego-agent and ego-map interaction queries. However, in the VAD pipeline the ego-map query is predicted from the ego-agent query. To avoid redundant supervision and reduce coupling, we regularize only the ego-agent query. 
+
+3) Prior and posterior queries: We denote the query produced by the original encoders as the prior query . To construct a distributional target, we generate a corresponding 
+
+posterior query from GT annotations while condition-ing on the prior query . The posterior encoder is a fully MLP-based module (conceptually related to Fig. 6c): 
+
+• Embedding heads (prior branch). The 
+
+prior query is processed by two independent MLP heads to produce features used for the mean and covariance paths, respectively. Each head consists of linear layers with hidden dimensions [D, 2D, D] .
+
+• GT path. The future GT trajectory, concatenated with a one-hot driving command, is passed through two iden-tical MLP heads (for mean and covariance paths), each with linear layers [D/2, D, 2D, 2D, D, D] .
+
+• Feature fusion and projection. Corresponding fea-tures from the prior and GT branches (mean-to-mean, covariance-to-covariance) are concatenated and pro-jected by two independent MLPs to produce the final parameters. The projection stack uses Linear layers 
+
+[2D, 2D+D/2, 2D+D/2, 2D, D, D] .
+
+• Stable covariance parameterization. We use adiagonal covariance parameterization, predicting per-dimension log-variance and computing the standard deviation as std = torch.exp(0.5 *log var) . The diagonal entries are then assembled into a lower-triangular scale matrix to instantiate 
+
+torch.distributions.MultivariateNormal .
+
+4) Source (prior) distribution: For the prior query →
+
+prior distribution (our source distribution in the ELBO), we employ two independent MLP heads — for the mean and for the covariance. Each head is a stack of linear layers with dimensions [D, 2D, 2D, D] .
+
+5) Implementation notes: We implement all modules in 
+
+PyTorch , using linear layers with ReLU activations, and 
+
+LayerNorm . Hidden dimension is set to D = 256 .

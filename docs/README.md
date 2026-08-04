@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-03</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-04</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 23 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 24 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>11</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-03 20:55:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-04 21:54:32 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读11篇、速读12篇，共梳理23篇机器人学习与操作相关论文。最值得关注两篇满分精读：三臂视觉运动模仿学习框架，以及基于潜在空间强化学习的移动操作流模型。普通读者可优先了解多臂协作与移动操作结合强化学习的最新进展，把握具身智能落地趋势。</p>
+<p>今日24篇论文中精读12篇，聚焦自动驾驶VLM推理与机器人强化学习两大方向。最值得关注的是《Outcome-Guided Distillation》以9.0分居首，提出师生框架提升驾驶推理；《WCM》则用世界评论家模型优化视觉-语言-动作学习。普通读者可顺带浏览速读中的反事实动作覆盖与腿部感知导航，对机器人数据效率与社交导航有直接启发。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">11 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Tri-Manual Visuomotor Imitation Learning of Robot Policies">Tri-Manual Visuomotor Imitation Learning of Robot Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="RLMM-Flow: A Flow-based Mobile Manipulation Framework with Latent-Space Reinforcement Learning">RLMM-Flow: A Flow-based Mobile Manipulation Framework with Latent-Space Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="ST-WAM: Semantic-Temporal World Action Model for Robust Manipulation under Visual Distribution Shifts">ST-WAM: Semantic-Temporal World Action Model for Robust Manipulation under Visual Distribution Shifts</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Outcome-Guided Distillation: A Teacher-Student Framework to Advance VLM Reasoning in Autonomous Driving">Outcome-Guided Distillation: A Teacher-Student Framework to Advance VLM Reasoning in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="WCM: A World Critic Model for Vision-Language-Action Reinforcement Learning">WCM: A World Critic Model for Vision-Language-Action Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Latent-Centroid Steering: Single-Pass Classifier-Free Guidance for Command-Aligned Autonomous Driving">Latent-Centroid Steering: Single-Pass Classifier-Free Guidance for Command-Aligned Autonomous Driving</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>6</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,7 +64,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Data Pyramid for Embodied Manipulation">Data Pyramid for Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="S2A2: Audio-Visual Imitation Learning for Manipulation Tasks Using Acoustic Spatial Information">S2A2: Audio-Visual Imitation Learning for Manipulation Tasks Using Acoustic Spatial Information</span></li><li><span class="dpr-home-dashboard-paper-title" title="HeteroPROPMT: A Real-time and Privacy-Preserving Heterogeneous Collaborative Perception Framework">HeteroPROPMT: A Real-time and Privacy-Preserving Heterogeneous Collaborative Perception Framework</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="It&#x27;s Not Just More Demos: Counterfactual Action Sensitivity Coverage for Data-Efficient Robust Robot Imitation">It&#x27;s Not Just More Demos: Counterfactual Action Sensitivity Coverage for Data-Efficient Robust Robot Imitation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Social Robot Navigation By Sensing Human Legs">Learning Social Robot Navigation By Sensing Human Legs</span></li><li><span class="dpr-home-dashboard-paper-title" title="QuantWAMs: Calibrating at the Right Granularity for World Action Models">QuantWAMs: Calibrating at the Right Granularity for World Action Models</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
