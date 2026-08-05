@@ -1,0 +1,527 @@
+Title: ChainVLA: Chaining Vision-Language-Action Queries through a Unified Execution State for Long-Horizon Manipulation
+
+URL Source: https://arxiv.org/pdf/2608.02326v2
+
+Published Time: Wed, 05 Aug 2026 01:12:29 GMT
+
+Number of Pages: 13
+
+Markdown Content:
+# ChainVLA: Chaining Vision-Language-Action Queries through a Unified Execution State for Long-Horizon Manipulation 
+
+# Yuzhi Huang 1∗, Weijue Bu 2∗, Ziyi Xiong 3, Jie Wu 1, Fanding Huang 1, Jingyan Jiang 3†, Zhi Wang 1†
+
+> 1
+
+Shenzhen International Graduate School, Tsinghua University 
+
+> 2
+
+China University of Mining and Technology 
+
+> 3
+
+Shenzhen Technology University 
+
+Abstract 
+
+Humans perform long-horizon manipulation by retaining knowledge of what earlier actions have established while con-tinuously adapting the motion underway. By contrast, action-chunked vision-language-action (VLA) policies repeatedly re-plan from the current input at each query. Existing methods preserve either long-term task evidence through memory or short-term motion through action reuse and ensembling, leav-ing the cross-query handoff incomplete. We introduce Chain-VLA, a 1.2B-parameter VLA policy that chains successive queries through a joint and revisable execution state. Progress Context combines a recurrent Working State with sparse event memory to carry observation-derived task progress, while Motion Tail feeds the preceding prediction’s unexecuted con-tinuation into state construction and action generation. To-gether, the two components condition a decoder that regener-ates each action horizon under the latest observation, allowing the carried state to guide the next prediction without fixing it. ChainVLA reaches 62.8% average success on RMBench and 98.8% across four LIBERO suites, while removing Mo-tion Tail or Progress Context reduces RMBench success to 11.2% and 3.0%, respectively. These asymmetric ablations are consistent with motion continuity helping preserve the observation stream from which task progress is inferred. 
+
+Project page — https://muqy1818.github.io/chainvla-web/ 
+
+# 1 Introduction 
+
+Long-horizon manipulation unfolds as a continuous execu-tion in which each decision depends on both the progress es-tablished by earlier actions and the movement already under-way. When a person places several objects in their designated locations, deciding what to handle next depends on what has already been completed, while completing the current place-ment requires the ongoing movement to be maintained and revised. These two requirements are supported by prior work on serial behavior (Lashley 1951; Miller, Galanter, and Pri-bram 1960) and sensorimotor control (Wolpert, Ghahramani, and Jordan 1995), and they correspond to task progress and motion continuation in Figure 1(b). In contrast to this continuous organization, action-chunked vision-language-action (VLA) policies execute long tasks 
+
+> ∗
+
+These authors contributed equally. 
+
+> †
+
+Corresponding authors. 
+
+through repeated receding-horizon queries, each of which predicts a finite action horizon, executes a strict prefix, and then replans (Zhao et al. 2023; Chi et al. 2025; Black et al. 2025; Physical Intelligence et al. 2025; Zheng et al. 2026). Although consecutive queries are adjacent in time, each action chunk is generated anew from the current observa-tion, proprioceptive state, and instruction, without an explicit handoff of either the task progress inferred at the preceding query or the unfinished continuation of its prediction. Fig-ure 1(a) shows how this missing handoff creates ambiguity at two coupled levels. At the task level, earlier task evidence may no longer be recoverable from the current view, as illus-trated by RMBench’s Put Back Block task, in which the same observation and instruction can follow different histories and therefore require different next decisions (Chen et al. 2026a). At the motion level, replanning discards the preceding pre-diction’s unexecuted continuation, so the newly predicted prefix can disagree with the motion it replaces even when the current pose appears similar. Because the motion executed after one query shapes the observation stream available at the next, motion continuity also helps preserve the observa-tions needed to update task progress, suggesting that the two components operate consecutively rather than independently. To recover the cross-query continuity lost by this de-sign, existing attempts follow two complementary lines, with memory-augmented policies retaining recurrent state, selected observations, or compressed task history without preserving the preceding prediction’s unexecuted continu-ation (Shi et al. 2026b; Chen et al. 2026b; Yang et al. 2026; Huang et al. 2026). A second line based on Temporal Ensemble, real-time execution, or native continuation pre-serves short-term motion by combining or reusing actions, yet it cannot retain task evidence from much earlier in the episode (Zhao et al. 2023; Black, Galliker, and Levine 2025; Liu et al. 2026a). This dilemma raises a central question: 
+
+how can a VLA policy chain task progress and motion con-tinuation across queries while keeping each new prediction responsive to the latest observation? 
+
+To answer this question, we introduce ChainVLA ,a 1.2B-parameter VLA policy that connects successive queries through a joint and revisable execution state (Fig-ure 1(c)). The state comprises Progress Context , which car-ries observation-derived task progress by combining a re-current Working State with evidence retrieved from a sparse arXiv:2608.02326v2 [cs.RO] 4 Aug 2026 Figure 1: Motivation and design of ChainVLA. (a) At each query boundary, earlier task evidence may be absent from the current view, while replanning discards the preceding prediction’s unexecuted continuation. (b) Human execution couples established task progress with a feedback-revised motor prediction, while executed motion shapes the observation stream used for subsequent progress estimation. (c) Inspired by this, ChainVLA carries both components across queries in a joint, revisable execution state comprising Progress Context gk and Motion Tail uk, which together condition each new action horizon. event memory, and Motion Tail , which carries the preceding prediction’s unexecuted continuation into state construction and action generation. At each query, this joint state is read, updated, and passed forward, turning separately decoded ac-tion chunks into a cross-query chain. Together, the two com-ponents condition each new action horizon, while the decoder regenerates every horizon position under the latest observa-tion so that the carried state remains a revisable prior rather than a fixed plan (Figure 2). With both components chained across queries, ChainVLA reaches 62.8% average success on RMBench and 98.8% across four LIBERO suites, whereas removing Motion Tail or Progress Context reduces RMBench success to 11.2% and 3.0%, respectively. Based on this formulation and evaluation, our contribu-tions are 
+
+• We identify task progress and unfinished motion as two complementary components of cross-query execution state. Their asymmetric removal effects are consistent with motion continuity preserving the observation stream that informs task-progress inference. 
+
+• We introduce ChainVLA, a 1.2B-parameter policy that chains queries through a joint, revisable state of Progress Context and Motion Tail, regenerating each horizon under the latest available observation. 
+
+• We validate ChainVLA on RMBench and four LIBERO suites. Matched removals leave both partial states far be-low the complete model; observation history, temporal ensembling, and post-decoding smoothing also fall short. 
+
+# 2 Related Work 
+
+Task progress under partial observability. Partially ob-servable control represents interaction history through a be-lief state or another recursively updated statistic (Åström 1965; Smallwood and Sondik 1973; Kaelbling, Littman, and Cassandra 1998), and RMBench and RoboMME make the need explicit for manipulation, where an initial layout, hidden object, or completed subtask can stay relevant after it leaves the current observation (Chen et al. 2026a; Dai et al. 2026). Recent VLA systems preserve this observation-derived evi-dence through episodic, object-centric, prospective, or multi-scale memory (Chung et al. 2026; Hu et al. 2026; Guo et al. 2026; Torne et al. 2026; Zeng et al. 2026b). Memo-ryVLA reads and writes a perceptual-cognitive bank at every timestep, then consolidates adjacent entries at capacity (Shi et al. 2026b), whereas sparse alternatives select which ob-servations become long-range records (Chen et al. 2026b; Zeng et al. 2026a; Yang et al. 2026), and recurrent queries and bounded caches propagate local state between calls (Li et al. 2026; Sun et al. 2026a; Lei et al. 2026; Tan, Li, and Jing 2026). All of these statistics are derived from observations, so none carries what the policy itself last intended. 
+
+Action chunks across policy queries. Action-chunking poli-cies predict short horizons and repeatedly replan (Zhao et al. 2023; Chi et al. 2025). Temporal ensembling combines sepa-rately decoded overlapping horizons at execution time (Zhao et al. 2023), guided test-time sampling improves agreement during decoding (Liu et al. 2024; Malhotra, Liu, and Finn Figure 2: Overall query-transition architecture of ChainVLA. At query k, Progress Context combines live execution tokens from the recurrent Working State with event evidence retrieved from Sparse Event Memory. Motion Tail carries the preceding prediction’s unexecuted suffix into state construction and action generation. The decoder regenerates the full horizon under the latest query input; prefix execution then advances task progress, and the newly predicted suffix becomes uk+1 for the next query. 2025), and real-time flow execution and native continuation reuse overlap during execution or generation (Black, Gal-liker, and Levine 2025; Liu et al. 2026a). These target local action coordination rather than evidence from much earlier in the episode, so what distinguishes ChainVLA is not prior-conditioned generation alone but combining prediction-derived continuation with observation-derived task evidence in one per-query state update. Long-horizon planners and world models instead decompose subgoals or imagine latent state (Liu et al. 2026b; Shi et al. 2026a; Sun et al. 2026b), while ChainVLA chains calls to one horizon-based policy without requiring a separate planner. 
+
+# 3 Method 
+
+3.1 Incomplete State Handoff 
+
+ChainVLA considers history-dependent control in the strict-prefix receding-horizon regime, 1 ≤ hexec < H. At query k, the policy receives an observation ok, proprio-ceptive state rk, and language instruction ℓ, grouped as 
+
+xk = ( ok, r k, ℓ ). It predicts a horizon-H action sequence 
+
+Ak = ( ak, 1, . . . , a k,H ) and executes the first hexec actions before querying again (Zhao et al. 2023; Chi et al. 2025). Thus, each new query observes the scene produced by the executed prefix while replacing a nonempty suffix of the preceding prediction. Let Hk and H′ 
+
+> k
+
+denote two interaction histories before query k, with induced current inputs xk and x′
+
+> k
+
+. The current input is decision-insufficient when identical inputs admit no shared optimal next executed prefix: 
+
+xk = x′
+
+> k
+
+, E∗(Hk) ∩ E ∗(H′
+
+> k
+
+) = ∅, (1) where E∗(H) is the set of optimal length-hexec prefixes. This criterion identifies histories whose difference matters to the next committed control decision. The task-scale case arises when an initial layout, completed subtask, or earlier displace-ment remains decision-relevant after leaving view (Chen et al. 2026a; Dai et al. 2026; Chen et al. 2026b). The current input also omits prediction-side context. Be-cause only a prefix of Ak−1 was executed, its remaining suffix specifies where the preceding query proposed to take the unfinished motion, which is neither completed behavior nor a fixed command, and may need revision once the new observation arrives. A mismatch there extends beyond one boundary: a sharp change in the newly decoded command alters the executed state that contributes to xk+1 , giving re-peated mismatches a route into later queries. We use execution state for the policy-side context that spans queries, distinct from the physical scene state in xk,and write it as sk = ( gk, u k). Its retrospective half is Progress Context gk = Fuse( Lk, Z ek ), recomputed at each query by combining live execution tokens Lk with evidence Zek re-trieved from the carried Working State and Sparse Event Memory. Its prospective half is Motion Tail uk, the preceding prediction’s unexecuted suffix, which crosses the boundary directly. Chaining the queries means recursively maintaining this state while approximating history-conditioned genera-tion, 
+
+Πθ (· | xk, s k) ≈ Π∗(· | H k), sk+1 = Fθ (sk, x k), (2) where Πθ is the learned policy, Π∗ an optimal history-conditioned policy over action horizons, and Fθ the query transition specified in Eq. 3. A belief state summarizes his-tory through executed actions and observations, so it covers only gk, whereas uk carries actions that have not occurred and thus has no counterpart there. Both halves remain con-ditional inputs to a new prediction under xk.
+
+3.2 The Execution State 
+
+ChainVLA turns the incomplete handoff into one read, up-date, and write transition, while keeping every carried signal revisable under the newest observation. Figure 2 follows this transition from query k to query k +1 . Query k reads the cur-rent input xk, recent executed actions Dk, previous Working State Wk−1, Sparse Event Memory Ck, and incoming Mo-tion Tail uk. The encoder maps xk to multimodal tokens Xk.Learned working queries then produce live tokens Lk and an execution summary ¯Wk. The summary retrieves event evi-dence Zek from Ck, and policy-facing fusion forms Progress Context gk = Fuse( Lk, Z ek ). The incoming Motion Tail acts as a continuation prior through two model-side routes, where its tokens condition the Working State and remain in the de-coder condition bundle, while its aligned trajectory initializes action generation. The two halves differ in temporal cover-age rather than update frequency, since Progress Context can carry evidence across many queries whereas Motion Tail connects only the immediately preceding prediction. The conditional-flow decoder consumes Xk and samples 
+
+Ak ∼ Πθ (· | xk, g k, u k) with a DiT backbone, so ChainVLA changes the decoder’s cross-query context and initialization rather than the action-generator family. The query transition is 
+
+(Ak, W k, C k+1 ) = Fθ (xk, D k, W k−1, C k, u k),uk+1 = Tail( Ak), (3) where Fθ denotes the query transition and Tail( Ak) =(ak,h exec +1 , . . . , a k,H ) denotes the predicted but unexecuted suffix. This equation describes the transition shared by or-dered training and rollout, and during training the carried suffix is detached before it conditions the next query. After prefix execution, the controller appends the executed actions to form Dk+1 and commits the event candidate only when the dataset-specific write rule fires. The next query reads 
+
+(Dk+1 , W k, C k+1 , u k+1 ) as its carried state. The entire car-ried state is cleared between episodes. 
+
+3.3 Carrying Task Progress 
+
+Progress Context can carry task evidence across multiple queries, including evidence that remains decisive after it leaves the current view. It combines a recurrent Working State for the current query with a retrievable Sparse Event Memory for sparse earlier milestones. 
+
+Recurrent Working State. The Working State summa-rizes the current execution and uses that summary to retrieve evidence from earlier queries. Before query k, the recurrent state is Wk−1 = ( Lk−1, B k−1), where Lk−1 are the previ-ous live tokens and Bk−1 is a bounded cache of earlier live tokens. The update produces Wk = ( Lk, B k) together with a pooled retrieval summary ¯Wk.Let τk be the query-time encoding. The executed his-tory and incoming tail are encoded as Pk = ϕP (Dk) and 
+
+Uk = ϕU (uk). Learned working queries attend to the cur-rent multimodal tokens and incorporate the preceding live state: 
+
+ηk = MLP [ ϕr (rk), Pool( Pk), Pool( Uk), τ k] ,
+
+eLk = CrossAttn( QW + ηk, X k),Lk = LN 
+
+eLk + mlive  
+
+> k−1
+
+CrossAttn( eLk, L k−1)
+
+
+
+,
+
+¯Wk = Pool([ Lk, B k−1, P k, U k]) ,
+
+(4) where QW denotes the learned working-query bank, ϕr de-notes the proprioception encoder, ηk is the pooled condition-ing vector, eLk is the current-input update before recurrence, 
+
+mlive  
+
+> k−1
+
+∈ { 0, 1} is the recurrence-validity mask, and LN de-notes layer normalization. The mask is zero at episode start and one otherwise. Terms separated by commas inside brack-ets are concatenated as tokens. Pooled action summaries form the working-query context, while the full encoded sequences contribute to ¯Wk. The bounded cache admits the most re-cent live tokens, evicts the oldest slot, and is cleared between episodes. The live tokens Lk enter the policy-facing fusion directly, whereas ¯Wk drives event retrieval and, when used, stage estimation. After retrieval, fusion of Lk and Zek forms the policy-facing Progress Context. 
+
+Sparse Event Memory and Retrieval. Working State updates every query, whereas the Sparse Event Memory changes only on a triggered write. At query k, it is the ordered sequence Ck = {(κi, E i, b i)}Nk
+
+> i=1
+
+, where Nk is the number of stored events. The body Ei = [ Vi, S i, T i] stores learned visual features, Stage Info, and temporal features, while bi
+
+records the query at which the event was written for age en-coding. Learned projections of the current visual features, Working State summary, and query-time encoding produce the candidate Ek = [ Vk, S k, T k] and its retrieval key κk.The first valid query is retained as an anchor, after which task-stage transitions determine later writes on stage-annotated data, whereas annotation-free data use a pe-riodic query-time rule. Retrieval is then conditioned on the current execution estimate rather than recency alone. For stage-annotated data, the stage head yields πk =softmax( hs( ¯Wk)) and the current Stage Info summary is 
+
+¯sk = πk. Without stage annotations, ¯sk = Pool( Sk). The retrieval query is qek = ϕq ( ¯Wk, ¯sk, τ k), and each record re-ceives the age-aware score 
+
+ρk,i = cos(LN( qek), LN( κi + Emb age (clip( k − bi)))) ,
+
+(5) where cos( ·, ·) denotes cosine similarity, clip bounds the event age to the supported range, and Emb age maps that age to an embedding. The anchor and the highest-scoring non-anchor records are retrieved. Cross-attention fuses their event bodies into readout tokens Zek , which are then fused with Lk
+
+to form Progress Context, and this read leaves the recurrent state unchanged until its next update. 
+
+3.4 Carrying Unfinished Motion 
+
+Motion Tail carries prediction-derived continuation from the immediately preceding query. After prefix execution, Chain-VLA caches the predicted but unexecuted suffix of Ak as 
+
+uk+1 . This suffix gives the next query a reference for how the preceding motion was expected to continue. Full-horizon execution leaves no unexecuted suffix but defers observation-conditioned replanning until the horizon ends. Motion Tail instead operates in the strict-prefix regime, carrying the un-finished continuation while retaining frequent replanning. We use motion intent for this action-space continuation pro-posal, not for a separate symbolic plan or latent goal. These actions have not occurred, since Dk records executed behav-ior, whereas Motion Tail records the continuation proposed by the preceding decoder and imposes no fixed action on the next output. Unlike post-decoding aggregation, Motion Tail is available while the next state and horizon are being formed, before any new output exists. At query k + 1 , the incoming tail follows the two model-side routes shown in Figure 2. Action-space normalization and a learned projection encode uk+1 as tail tokens Uk+1 
+
+for the Working State. For action generation, I aligns the normalized suffix with the full-horizon action representation. The conditional initialization is 
+
+μk+1 = I(uk+1 ),ϵk+1 ∼ N (0, I),
+
+eA(0)  
+
+> k+1
+
+= μk+1 + σuϵk+1 ,
+
+(6) where eA(0)  
+
+> k+1
+
+denotes the initial full-horizon decoder state, 
+
+μk+1 is its tail-aligned mean, ϵk+1 is standard Gaussian noise, σu > 0 sets the noise scale, and I is the identity matrix. Equivalently, eA(0)  
+
+> k+1
+
+| uk+1 ∼ N (μk+1 , σ 2
+
+> u
+
+I). The conditional-flow decoder regenerates every horizon position from this state using the latest observation, Progress Context, and tail tokens. Within the decoder, no horizon position is copied or frozen, so the current query may revise any action. After decoding, the controller linearly blends overlapping steps of the regenerated plan and incoming suffix before execution. This post-decoding operation is an execution-side handoff, separate from the two model-side routes. At episode start, the tail path is masked, so the decoder uses its standard noisy initialization without a continuation prior. 
+
+3.5 Training 
+
+Training unrolls the same execution-state transition used at rollout and follows episode query order. During this unroll, the next query may use the detached suffix predicted by its predecessor, and when that tail is not applied, the tail path is masked and the decoder uses its standard noisy initialization. At every step, the model updates the Working State, retrieves Progress Context, predicts an action horizon, conditionally writes an event, and passes its detached Motion Tail forward to directly condition the next query. When task-stage annotations are available, ground-truth transitions supervise the stage estimate and training-time write targets, although the labels never enter the action de-coder. At rollout, the predicted stage distribution supplies event semantics and triggers writes, whereas annotation-free domains use the same periodic query-time write rule during both training and rollout phases. Training combines the standard conditional-flow action objective with stage supervision where annotations are avail-able and an overlap-consistency regularizer for Motion Tail handoff. The regularizer penalizes disagreement over the temporally aligned overlap of consecutive predicted hori-zons. The preceding prediction is detached, encouraging a coherent handoff without fixing actions in the new horizon. This training objective is distinct from the three-step overlap RMSE used only as a deployment diagnostic. The recurrent and event states follow inference order, and rollout carries only the model-predicted suffix across the boundary. 
+
+# 4 Experiments 
+
+Our experiments ask three questions. Does chaining execu-tion state across queries support memory-dependent and gen-eral manipulation (Section 4.2)? What happens when each component is removed (Section 4.3)? And what is the rela-tionship between motion continuity and memory-dependent task performance (Sections 4.4–4.5)? 
+
+4.1 Setup 
+
+Benchmarks and comparisons. RMBench targets memory-dependent manipulation, where the current ob-servation may be insufficient without earlier task-relevant states, and its five tasks require initial-state recall, target and order memory, return-location memory, or earlier-stage decisions (Chen et al. 2026a). We train one task-adapted model per task, evaluate 100 rollout episodes, and use RMBench as the primary diagnostic setting. LIBERO covers the Spatial, Object, Goal, and Long suites and serves as a breadth check, with one model finetuned per suite and 50 episodes per task (Liu et al. 2023). Comparisons cover action-chunk and pretrained policies together with benchmark and recent memory systems (Chi et al. 2025; Zhao et al. 2023; Black et al. 2025; Physical Intelligence et al. 2025; Zheng et al. 2026; Kim et al. 2024; Qu et al. 2025; Pertsch et al. 2025; NVIDIA et al. 2025; Li et al. 2025; Chen et al. 2026a; Sridhar et al. 2025; Shi et al. 2026b; Tan, Li, and Jing 2026; Hu et al. 2026; Liu et al. 2026b). 
+
+Protocol. All internally trained conditions share the Florence-2-large backbone (Xiao et al. 2024) and conditional-flow decoder, the same task data with 50 demon-strations per task, 20,000 optimization steps at batch size 4, and the same evaluation protocol, where Full has 1.2B parameters. Queries stay in episode order during training, and every variant receives executed-action history separately from Motion Tail, so a removal withholds carried state rather than access to past actions. The appendix specifies each inter-vention, the boundary-metric definitions, and the remaining training and rollout hyperparameters. 
+
+Metrics. The primary metric is task success rate over 100 episodes per RMBench task and 50 per LIBERO task. RM-Bench macro averages include only methods with complete five-task coverage, and LIBERO uses an unweighted four-suite average while retaining Long separately. To inspect what happens at a query boundary, we adapt four lower-is-better diagnostics from prior work on action-chunk transitions (Black, Galliker, and Levine 2025; Liu et al. 2026a; Zhan et al. 2026), where position and ori-entation command discontinuity ( CD p, CD R) measure the pose gap at replanning, boundary second difference ( B2 ) the command-velocity change across it, and three-step overlap RMSE ( RMSE 3) the disagreement between the preceding plan’s unexecuted suffix and the next plan. The first three read executed commands and the last compares plans, and none measures physical smoothness or accumulated state deviation. We pair Full and w/o Motion Tail rollouts under matched scenes on Put Back Block (20 pairs), Rearrange Blocks (30), and Swap Blocks (30), and pool task means by RMBench                                                                                                                
+
+> Policy Obs. Rearr. Put B. Swap B. Swap T. Avg. DP 10011 20 6.4 ACT 129 0226.8
+> π0.5(2.6B+0.3B) 913 11 24 15 14.4 X-VLA (0.9B) 913 18 16 3 11.8 MemER 717 014 79.0 MemoryVLA (7B+0.3B) 022 50 17 9 19.6 Mem-0 (8B+2B) 489 90 67 14 52.8 MemoAct 498 41 –55 –PAM –29 30 15 ––Goal2Skill 838 ––––
+> ChainVLA (1.2B) 11 93 96 74 40 62.8 LIBERO
+> Policy Spatial Object Goal Long Avg. OpenVLA (7B) 84.7 88.4 79.2 53.7 76.5 SpatialVLA (3.5B) 88.2 89.9 78.6 55.5 78.1
+> π0-FAST (3B) 96.4 96.8 88.6 60.2 85.5 GR00T-N1 (2.2B) 94.4 97.6 93.0 90.6 93.9
+> π0(3.3B) 96.8 98.8 95.8 85.2 94.2
+> π0.5+ KI 98.0 97.8 95.6 85.8 94.3 PAM 86.1 97.0 94.5 84.7 90.6 MemoryVLA (7B+0.3B) 98.4 98.4 96.4 93.4 96.7 CronusVLA (7B) 97.3 99.6 96.9 94.0 97.0 X-VLA (0.9B) 98.2 98.6 97.8 97.6 98.1
+> ChainVLA (1.2B) 98.4 99.4 99.2 98.2 98.8
+
+Table 1: Success rates (%) on RMBench and LIBERO. Comparison rows follow the cited references. Parenthetical parameter counts give the stated configuration size where directly available, the ‘+’ symbol separates components reported individually, and missing counts are not inferred. Best and second-best listed values are bold and underlined. RMBench averages are omitted for methods without complete five-task coverage on that benchmark. pair count. The appendix gives the formulas and all per-task values for these matched rollout conditions. 
+
+4.2 Main Results 
+
+On RMBench, ChainVLA reaches 62.8 average success at 1.2B parameters, ahead of the strongest listed method with complete five-task coverage (Mem-0, 52.8, at 8B+2B), and it is best or second-best on every task (Table 1). Methods with-out complete coverage are excluded from the average. The gap is largest where a subtask must be repeated or reversed: Put Back Block requires returning a block to a pad that is no longer identifiable in the current view, and ChainVLA reaches 96 against 90 for Mem-0 and 50 for MemoryVLA. On LIBERO the policy averages 98.8 with every suite above 98, including 98.2 on LIBERO-Long. LIBERO is near ceil-ing for recent policies, so it establishes breadth rather than separating designs, and the analysis below therefore uses RMBench, where all conditions are trained and evaluated under the same matched protocol. 
+
+4.3 Ablation Analysis 
+
+Table 2 removes each half of the carried state while keeping the other, and neither partial state approaches the complete one, since task progress without motion continuation gives 11.2, motion continuation without task progress gives 3.0, and removing both gives 1.6, against 62.8 for Full. Two halves scoring in the single digits to low teens do not add up to 62.8, so these are not two independent improvements over a working policy, and an incomplete state performs close to no state at all. Because each removal withdraws a pathway’s inputs, training term, and deployment handling together, the numbers measure system dependence rather than isolating the effect of any single mechanism. Partial removals interpolate as expected. Dropping either Progress Context input alone, live tokens at 47.2 and event readout at 32.2, costs far less than dropping both, and the event readout matters most on Put Back Block, which falls from 96 to 25, the task whose decisive evidence leaves the                                                           
+
+> Configuration Obs. Rearr. Put B. Swap B. Swap T. Avg.
+> ▼Task-progress side (motion continuation kept) w/o Stage Ann. 10 84 78 61 34 53.4 w/o Live Tokens 10 78 72 48 28 47.2 w/o Event Readout 965 25 38 24 32.2 w/o Progress Ctx. 640143.0
+> ▼Motion-continuation side (task progress kept) w/o Tail Tokens 878 78 58 38 52.0 w/o Traj. Init. 760 45 45 33 38.0 w/o Motion Tail 124 0229 11.2
+> ▼No carried state, and a substitute
+> w/o Both 400041.6 FIFO Hist. + TE 858 47 40 25 35.6
+> ChainVLA (Full) 11 93 96 74 40 62.8
+
+Table 2: Ablations on RMBench (100 episodes per task). Best non-Full values are underlined. “w/o Stage Ann.” writes events every three queries instead. “w/o Both” keeps the cur-rent observation and executed actions. “FIFO Hist. + TE” replaces the carried state with fixed-length observation his-tory and post-decoding temporal ensembling. view earliest. On the motion side, trajectory initialization is the more load-bearing route (38.0) than the tail tokens (52.0), but neither alone accounts for the fall to 11.2. Fixed three-query writes still reach 53.4, so the chain does not depend on stage annotations to write useful events. The substitute control is the informative one. FIFO His-tory + Temporal Ensemble supplies observation history be-fore decoding and smooths overlapping predictions after it, which is how existing systems approximate both halves with-out carrying state. It reaches 35.6, below Full on every task and 27.2 points below overall. Past observations and agree-ment between consecutive outputs thus recover part of what the chain provides, but not the part requiring the previous prediction to condition the next one before it is generated. Figure 3: Illustrative Put Back Block boundary from paired-scene rollouts. Frames overlay the pre-boundary arm contour, and curves show right end-effector offsets from the t = 0 
+
+anchor. This single case has 0.66/17.32 mm position CD for Full/w/o Motion Tail. Figure 4 gives aggregate results. 
+
+Figure 4: Boundary errors for Full and w/o Motion Tail. PB/RB/SB denote Put Back, Rearrange, and Swap Blocks, and Pool weights their 20/30/30 rollout pairs. Lower is better. Panels (a–c) use executed commands and (d) final plans. 
+
+4.4 Motion Continuity and Memory 
+
+RMBench is a memory benchmark, so the size of the motion-side effect needs explaining: removing motion continuation leaves the memory pathway fully intact, yet success falls from 62.8 to 11.2. The likely reason is that the two halves act as consecutive links rather than parallel abilities. When each horizon is sampled without reference to the one it re-places, consecutive commands can disagree at the boundary: on one matched Put Back Block boundary, the position gap is 17.32 mm without Motion Tail against 0.66 mm with it (Figure 3). Across all 80 matched pairs, Full lowers every measure, with pooled reductions of 56.6%, 40.4%, 57.4%, and 43.1% for CD p, CD R, B2 , and RMSE 3 (Figure 4). A displacement of this size repeated at every boundary moves the arm along poses the demonstrations never visit, and re-covering from them costs additional replanning queries. That recovery is what reaches the memory pathway. Progress Context is built from observations, so the sequence                      
+
+> Put Back Block Swap Blocks Method Succ. CD pSucc. CD p
+> w/o Motion Tail 05.90 210.06 Linear Cont. 02.09 23.72 Temporal Ens. 03.57 07.52
+> Full 96 2.69 74 3.49
+
+Table 3: Post-decoding controls. Success uses 100 episodes per task, while position CD (mm, lower is better) uses 20 Put Back and 30 Swap pairs. The appendix reports the other boundary measures. of viewpoints the arm visits is its input. An episode spent recovering visits different viewpoints, in a different order, than the demonstrations that trained the retrieval, so evidence needed later may never be written or may be retrieved against an off-distribution query. Motion continuity therefore ap-pears to support reliable task-progress estimation rather than to act as a competing objective, which is also consistent with the asymmetry in Table 2. Removing task progress leaves a policy that moves coherently toward the wrong subgoal and fails cleanly at 3.0, whereas removing motion continuation degrades the very input the surviving memory pathway reads. Because the paired policies diverge within matched scenes, these boundary measurements establish an association rather than component-level causation. 
+
+4.5 Post-Decoding Smoothing Controls 
+
+If the gain came from smoother boundaries, then produc-ing smooth boundaries by any means should recover it. It does not. Linear Continuation reaches boundary values be-low Full on all four Put Back Block measures and three of four on Swap Blocks, yet succeeds in 0% and 2% of episodes against 96% and 74% for Full (Table 3). Temporal Ensemble also reduces every measure relative to w/o Motion Tail and succeeds in 0% of episodes on both tasks. The comparison isolates when the suffix is used rather than whether it is used at all. Full also blends overlapping steps after decoding, and Linear Continuation is exactly Full with that blend retained and the model-side conditioning removed, so the blend is held fixed and 96% against 0% is attributable to the pathway that differs. Smoothing acts on already-decoded commands, so it can only interpolate between a plan and the motion it replaces, and the plan is fixed by the time it applies. Carrying the suffix into state construction and generation instead changes what is decoded. The boundary metrics are therefore diagnostics, not objectives: Full is not the smoothest condition here, yet the smoothest conditions still fail to recover task success. 
+
+# 5 Conclusion 
+
+ChainVLA carries observation-derived task progress and the preceding prediction’s revisable suffix across otherwise in-dependent receding-horizon queries. In our fixed-rate eval-uation, neither partial state approaches the complete policy on RMBench, and their asymmetry is consistent with motion continuity preserving task-progress observations. References 
+
+Åström, K. J. 1965. Optimal Control of Markov Processes with Incomplete State Information. Journal of Mathematical Analysis and Applications , 10: 174–205. Black, K.; Galliker, M. Y.; and Levine, S. 2025. Real-Time Execution of Action Chunking Flow Policies. arXiv:2506.07339. Black, K.; et al. 2025. π0: A Vision-Language-Action Flow Model for General Robot Control. In Proceedings of Robotics: Science and Systems .Chen, T.; Wang, Y.; Li, M.; Qin, Y.; Shi, H.; Li, Z.; Hu, Y.; Zhang, Y.; Wang, K.; Chen, Y.; et al. 2026a. RMBench: Memory-Dependent Robotic Manipulation Benchmark with Insights into Policy Design. arXiv:2603.01229. Chen, Y.; et al. 2026b. Non-Markovian Long-Horizon Robot Manipulation via Keyframe Chaining. arXiv:2603.01465. Chi, C.; Xu, Z.; Feng, S.; Cousineau, E.; Du, Y.; Burchfiel, B.; Tedrake, R.; and Song, S. 2025. Diffusion Policy: Visuomo-tor Policy Learning via Action Diffusion. The International Journal of Robotics Research , 44(10–11): 1684–1704. Chung, N.; et al. 2026. Rethinking Progression of Memory State in Robotic Manipulation: An Object-Centric Perspec-tive. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, 3407–3415. Dai, Y.; Fu, H.; Lee, J.; Liu, Y.; Zhang, H.; Yang, J.; Finn, C.; Fazeli, N.; and Chai, J. 2026. RoboMME: Benchmarking and Understanding Memory for Robotic Generalist Policies. In Proceedings of the International Conference on Machine Learning . Oral presentation. Guo, X.; et al. 2026. Chameleon: Control-Indexed Prospective Memory for Visuomotor Manipulation. arXiv:2603.24576. Hu, Q.; Qiu, Z.; Xu, Z.; Zhang, K.; Bu, X.; Sun, Z.; Zhang, B.; Zhao, J.; Gan, Z.; and Ding, W. 2026. Resolving State Ambi-guity in Robot Manipulation via Adaptive Working Memory Recoding. IEEE Robotics and Automation Letters , 11(7): 8439–8446. Huang, Y.; Wu, J.; Bu, W.; Xiong, Z.; Jiang, G.; Li, Y.; Ji, K.; Xie, S.; Huang, Y.; Wu, C.; Jiang, J.; and Wang, Z. 2026. RoboStream: Weaving Spatio-Temporal Reason-ing with Memory in Vision-Language Models for Robotics. arXiv:2603.12939. Kaelbling, L. P.; Littman, M. L.; and Cassandra, A. R. 1998. Planning and Acting in Partially Observable Stochastic Do-mains. Artificial Intelligence , 101(1–2): 99–134. Kim, M. J.; et al. 2024. OpenVLA: An Open-Source Vision-Language-Action Model. In 8th Annual Conference on Robot Learning .Lashley, K. S. 1951. The Problem of Serial Order in Behav-ior. In Jeffress, L. A., ed., Cerebral Mechanisms in Behavior: The Hixon Symposium , 112–136. New York: Wiley. Lei, Y.; et al. 2026. VPWEM: Non-Markovian Vi-suomotor Policy with Working and Episodic Memory. arXiv:2603.04910. Li, H.; Yang, S.; Chen, Y.; Chen, X.; Yang, X.; Tian, Y.; Wang, H.; Wang, T.; Lin, D.; Zhao, F.; and Pang, J. 2025. CronusVLA: Towards Efficient and Robust Manipu-lation via Multi-Frame Vision-Language-Action Modeling. arXiv:2506.19816. Li, H.; et al. 2026. ReMem-VLA: Empowering Vision-Language-Action Model with Memory via Dual-Level Re-current Queries. arXiv:2603.12942. Liu, B.; Zhu, Y.; Gao, C.; Feng, Y.; Liu, Q.; Zhu, Y.; and Stone, P. 2023. LIBERO: Benchmarking Knowledge Trans-fer for Lifelong Robot Learning. In Advances in Neural Information Processing Systems .Liu, Y.; Ibn Hamid, J.; Xie, A.; Lee, Y.; Du, M.; and Finn, C. 2024. Bidirectional Decoding: Improving Action Chunking via Guided Test-Time Sampling. arXiv:2408.17355. Liu, Y.; Yu, H.; Zhao, J.; Li, B.; Zhang, D.; Li, M.; Wu, W.; Hu, Y.; Xie, J.; Guo, J.; Wang, D.; and Gao, Y. 2026a. Learning Native Continuation for Action Chunking Flow Policies. arXiv:2602.12978. Liu, Z.; et al. 2026b. Goal2Skill: Long-Horizon Manipulation with Adaptive Planning and Reflection. arXiv:2604.13942. Malhotra, R.; Liu, Y.; and Finn, C. 2025. Self-Guided Action Diffusion. arXiv:2508.12189. Miller, G. A.; Galanter, E.; and Pribram, K. H. 1960. Plans and the Structure of Behavior . New York: Holt, Rinehart and Winston. NVIDIA; Bjorck, J.; Castaneda, F.; Cherniadev, N.; Da, X.; Ding, R.; Fan, L.; et al. 2025. GR00T N1: An Open Foundation Model for Generalist Humanoid Robots. arXiv:2503.14734. Pertsch, K.; Stachowicz, K.; Ichter, B.; Driess, D.; Nair, S.; Vuong, Q.; Mees, O.; Finn, C.; and Levine, S. 2025. FAST: Efficient Action Tokenization for Vision-Language-Action Models. arXiv:2501.09747. Physical Intelligence; Black, K.; Brown, N.; Darpinian, J.; Dhabalia, K.; Driess, D.; et al. 2025. π0.5: A Vision-Language-Action Model with Open-World Generalization. In 9th Annual Conference on Robot Learning . Oral presen-tation. Qu, D.; Song, H.; Chen, Q.; Yao, Y.; Ye, X.; Ding, Y.; Wang, Z.; Gu, J.; Zhao, B.; Wang, D.; and Li, X. 2025. SpatialVLA: Exploring Spatial Representations for Visual-Language-Action Model. arXiv:2501.15830. Shi, H.; Li, W.; Xie, B.; Wang, Y.; Zhou, R.; Wang, T.; Zhang, X.; Luo, P.; and Huang, G. 2026a. MemoryVLA++: Temporal Modeling via Memory and Imagination in Vision-Language-Action Models. arXiv:2606.09827. Shi, H.; et al. 2026b. MemoryVLA: Perceptual-Cognitive Memory in Vision-Language-Action Models for Robotic Manipulation. In The Fourteenth International Conference on Learning Representations .Smallwood, R. D.; and Sondik, E. J. 1973. The Optimal Control of Partially Observable Markov Processes over a Finite Horizon. Operations Research , 21(5): 1071–1088. Sridhar, A.; Pan, J.; Sharma, S.; and Finn, C. 2025. MemER: Scaling Up Memory for Robot Control via Experience Re-trieval. arXiv:2510.20328. Sun, J.; et al. 2026a. TempoFit: Plug-and-Play Layer-Wise Temporal KV Memory for Long-Horizon Vision-Language-Action Manipulation. arXiv:2603.07647. Sun, X.; Zhang, R.; Cao, C.; Sun, Y.; Chen, J.; Xu, Z.; Chen, B.; Chen, H.; Yang, Z.; Zhu, J.; Hong, Y.; Xu, J.; Pang, J.; Yuan, M.; and Chen, J. 2026b. HiMem-WAM: Hierarchical Memory-Gated World Action Models for Robotic Manipu-lation. arXiv:2606.10363. Tan, L.; Li, J.; and Jing, G. 2026. MemoAct: Atkinson– Shiffrin-Inspired Memory-Augmented Visuomotor Policy for Robotic Manipulation. arXiv:2603.18494. Torne, M.; Pertsch, K.; Walke, H.; Vedder, K.; Nair, S.; Ichter, B.; Ren, A. Z.; Wang, H.; Tang, J.; Stachowicz, K.; Dhabalia, K.; Equi, M.; Vuong, Q.; Springenberg, J. T.; Levine, S.; Finn, C.; and Driess, D. 2026. MEM: Multi-Scale Embodied Mem-ory for Vision Language Action Models. arXiv:2603.03596. Wolpert, D. M.; Ghahramani, Z.; and Jordan, M. I. 1995. An Internal Model for Sensorimotor Integration. Science ,269(5232): 1880–1882. Xiao, B.; Wu, H.; Xu, W.; Dai, X.; Hu, H.; Lu, Y.; Zeng, M.; Liu, C.; and Yuan, L. 2024. Florence-2: Advancing a Unified Representation for a Variety of Vision Tasks. In Proceed-ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , 4818–4829. Yang, G.; Tu, Z.; Yang, Y.; Mao, S.; Dong, J.; Chen, T.; Peng, J.; Xiong, J.; Cao, J.; Dai, J.; Zhou, W.; Mu, Y.; and Wang, T. 2026. EventVLA: Event-Driven Visual Evidence Memory for Long-Horizon Vision-Language-Action Poli-cies. arXiv:2606.20092. Zeng, Y.; Ye, M.; Chen, Y.; Shentu, Y.; Wu, P.; Yan, Z.; and Li, Z. 2026a. KEMO: Event-Driven Keyframe Memory for Long-Horizon Robot Manipulation with VLA Policies. arXiv:2606.23589. Zeng, Z.; Ding, F.; Yang, H.; and Li, X. 2026b. HELM: Harness-Enhanced Long-horizon Memory for Vision-Language-Action Manipulation. arXiv:2604.18791. Zhan, D.; Xu, X.; Li, J.; and Tang, J. 2026. SEAM: Smooth Execution of Action-Chunked Motion for Vision-Language-Action Policies. arXiv:2607.04609. Zhao, T. Z.; Kumar, V.; Levine, S.; and Finn, C. 2023. Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware. In Proceedings of Robotics: Science and Systems XIX .Zheng, J.; et al. 2026. X-VLA: Soft-Prompted Trans-former as Scalable Cross-Embodiment Vision-Language-Action Model. In The Fourteenth International Conference on Learning Representations .A Query Transition and Rollout Details 
+
+At query k, ChainVLA reads the current multimodal input 
+
+xk, executed-action history Dk, preceding Working State 
+
+Wk−1, Sparse Event Memory Ck, and incoming Motion Tail uk. It updates the Working State, retrieves task-relevant event evidence, and conditions a full-horizon prediction on Progress Context and Motion Tail. After executing a prefix, the controller appends the executed actions to form Dk+1 ,may commit an event according to the dataset-specific write rule, and carries the predicted but unexecuted suffix forward as uk+1 :
+
+(Ak, W k, C k+1 ) = Fθ (xk, D k, W k−1, C k, u k),uk+1 = Tail( Ak), (A1) where Fθ denotes the query transition and Tail( Ak) =(ak,h exec +1 , . . . , a k,H ) is the unexecuted suffix. This tran-sition is shared by ordered training and rollout, with the carried suffix detached before it conditions the next query during training. All carried states and validity masks reset between episodes, and Algorithm 1 states the induced loop. 
+
+A.1 Working State 
+
+Table A1 summarizes the cross-query execution-state com-ponents. The Working State Wk = ( Lk, B k) contains the current live tokens and their bounded FIFO cache, while executed-action tokens and tail tokens are constructed sep-arately from Dk and uk. Eight learned queries attend to the current multimodal tokens and recurrently update the live tokens, which enter Progress Context directly. A pooled summary of the live, FIFO, executed-action, and tail tokens contributes to the event-retrieval query. 
+
+A.2 Sparse Event Memory and Stage Info 
+
+Each stored event comprises 64 visual, 8 Stage Info, and 8 temporal tokens, together with a retrieval key and write-query index. Executed-action and tail tokens contribute to event construction through the retrieval summary ¯Wk but are not stored as separate fields in the event record. The first valid event is retained as an anchor. On RMBench, stage transitions supervise training writes, while rollout writes re-quire a predicted stage change with confidence at least 0.55; stage labels do not enter the action decoder. Retrieval uses 32 clipped age buckets to read the anchor and the two highest-scoring non-anchor records. Cross-attention fuses their event bodies into readout tokens without overwriting the Working State. 
+
+A.3 Motion Tail and Ordered Training 
+
+Motion Tail follows two model-side routes: the incoming suf-fix is encoded into tail tokens that condition Working State construction (Table A1), while an aligned action-space rep-resentation initializes the full horizon with additive noise. Motion intent denotes this continuation proposal rather than a symbolic plan or latent goal. The decoder uses both routes but regenerates every position under the current observation and Progress Context. After decoding, the controller linearly blends overlapping steps of the regenerated plan and incom-ing suffix before execution. This execution-side handoff is 
+
+Algorithm 1 ChainVLA rollout for one episode                                                                                             
+
+> 1: W−1←∅,C0←∅,D0←∅,u0←∅
+> 2: k←0
+> 3: while episode not terminated do
+> 4: observe xk= ( ok, r k, ℓ )and encode to Xk
+> 5: Wk,¯Wk←UpdateWorking (Xk, W k−1, D k, u k)
+> 6: ¯sk←StageSummary ( ¯Wk)
+> 7: Zek←Retrieve (Ck,¯Wk,¯sk, τ k)
+> 8: gk←Fuse( Lk, Z ek)
+> 9: Ak∼Πθ(· | xk, g k, u k)▷every position regenerated 10: Ak←BlendOverlap (Ak, u k)▷execution-side handoff 11: execute prefix (ak, 1, . . . , a k,h exec )
+> 12: Dk+1 ←Append (Dk,executed prefix )
+> 13: Ck+1 ←MaybeWriteEvent (Ck, W k)
+> 14: uk+1 ←Tail( Ak)▷carried as a revisable prior 15: k←k+ 1
+> 16: end while
+
+separate from the two model-side routes, and the first query uses standard initialization instead. Training processes queries in episode order. During this unroll, each eligible query uses its predecessor’s detached predicted tail with probability 0.5; otherwise, the tail path is masked and standard noisy initialization is used. The overlap-consistency loss has weight 0.2 when Motion Tail is enabled and is distinct from deployment overlap RMSE. 
+
+# B Evaluation and Intervention Details 
+
+Common training and rollout protocol. All internally trained conditions share the protocol in Table A2 and the same evaluation protocol. Every boundary leaves a six-step unexecuted suffix as Motion Tail. Queries remain ordered, and every variant receives executed-action history separately from Motion Tail, so a removal withholds carried state rather than access to past actions. RMBench stage labels supervise training where enabled and rollouts use predicted stages, while w/o Stage Annotation and annotation-free LIBERO write every three queries during training and rollout. 
+
+RMBench. The five RMBench tasks are bimanual and re-quire several placements in sequence, so a single episode passes through multiple stages and therefore multiple query boundaries. Each internally evaluated condition uses 100 rollout episodes per task. Figure A1 illustrates the intended terminal configuration for each task. 
+
+LIBERO. LIBERO serves as a breadth check over the Spa-tial, Object, Goal, and Long suites, with one model finetuned per suite. We evaluate all 10 tasks in each suite with 50 rollout episodes per task. The suites carry no stage labels, so writes follow the annotation-free schedule and the event chain grows on the fixed three-query interval in both training and rollout. 
+
+Optimization and infrastructure. Every condition trains from a single random seed with the learning rates, schedule, hardware, and framework listed in Table A2. 
+
+Matched interventions. Matched controls cover all five RMBench tasks under the evaluation protocol above. w/o Live Tokens retains the Working State for retrieval, w/o Component Contents Persistence Live tokens 8 current plus 24 prior tokens in a three-slot FIFO Recurrently updated every query Executed-action tokens Pk
+
+4 tokens encoded from the 8 most recent actions in Dk Re-encoded from Dk at each query Tail tokens Uk 4 tokens encoded from the incoming Motion Tail uk Re-encoded from uk at each query; zeroed at episode start Event record 64 visual + 8 Stage Info + 8 temporal tokens, retrieval key, write-query index Capacity 16, oldest non-anchor evicted 
+
+Table A1: Cross-query execution-state components at a glance. 
+
+Item Setting Vision-language backbone Florence-2-large Action decoder Conditional flow Demonstrations per task / steps 50 / 20,000 Batch size 4Horizon H / executed prefix 
+
+hexec 
+
+30 / 24 Full parameters 1.2B Learning rates Backbone 1 × 10 −5, decoder and memory 1 × 10 −4
+
+Learning-rate schedule Cosine annealing Training hardware 4× NVIDIA L20 GPUs Random seed / framework 42 (single seed) / PyTorch under Linux 
+
+Table A2: Shared training and rollout protocol for all inter-nally trained conditions. Event Readout removes retrieved evidence, and the Motion Tail controls remove either its Working State tokens or its trajectory initialization. w/o Progress Context also removes its stage objective. Table A3 gives the complete intervention semantics. 
+
+Boundary rollouts and output-level controls. We pair Full and w/o Motion Tail rollouts under the same scenes on Put Back Block (20 pairs), Rearrange Blocks (30), and Swap Blocks (30), pooling task means by pair count. On Put Back Block and Swap Blocks, Linear Continuation retains only the execution-side overlap blend without Motion Tail’s model-side conditioning, while Temporal Ensemble aggre-gates decoded actions over time. Their success rates use 100 episodes per task and method, and boundary means use the paired rollouts. For compactness, the boundary tables use 
+
+no-tail for w/o Motion Tail. 
+
+# C Boundary Diagnostics and Results 
+
+C.1 Diagnostic Definitions 
+
+For a valid boundary b and arm a ∈ { 1, 2}, let (p−
+
+> b,a
+
+, R −
+
+> b,a
+
+)
+
+be the final executed Cartesian pose command before re-planning, and let (p+
+
+> b,j,a
+
+, R +
+
+> b,j,a
+
+) denote the command at post-boundary index j. Averaging over the two arms, position CD, orientation CD, and translational boundary second difference 
+
+Configuration Change from Full w/o Stage Annotation Periodic writes; no stage supervision or stage-triggered writes w/o Live Tokens No live tokens in Progress Context; Working State still supports retrieval w/o Event Readout No retrieved event readout; recurrent live tokens retained w/o Progress Context No live tokens, event readout, or stage supervision; Motion Tail retained w/o Tail Tokens No tail tokens in Working State; tail-aligned initialization retained w/o Trajectory Init. Standard rather than tail-aligned initialization; tail tokens retained w/o Motion Tail No model-side tail routes, overlap training, or overlap blending; Progress Context retained w/o Both No Progress Context or Motion Tail; current observation, action history, and standard initialization retained FIFO History + TE FIFO observations, standard initialization, and Temporal Ensemble replace both carried contexts 
+
+Table A3: Matched interventions relative to Full. TE denotes Temporal Ensemble. are 
+
+CD p(b) = 12
+
+> 2
+
+X
+
+> a=1
+
+∥p+ 
+
+> b, 0,a
+
+− p−
+
+> b,a
+
+∥2,
+
+CD R(b) = 12
+
+> 2
+
+X
+
+> a=1
+
+angle 
+
+
+
+(R−
+
+> b,a
+
+)⊤R+
+
+> b, 0,a
+
+
+
+,
+
+B2( b) = 12
+
+> 2
+
+X
+
+> a=1
+
+(p+ 
+
+> b, 1,a
+
+− p+
+
+> b, 0,a
+
+) − (p+ 
+
+> b, 0,a
+
+− p−
+
+> b,a
+
+) 2 ,
+
+(A2) where angle( R) denotes the SO(3) geodesic angle and the two finite differences in B2 denote consecutive command increments. We report CD p and B2 in millimeters and CD R
+
+in degrees. All three use the executed high-level command stream. A boundary counts as valid when the preceding query con-tributed at least one executed command and the following query contributed at least two, since B2 needs two consecu-tive post-boundary increments. The first query of an episode has no predecessor and therefore contributes no boundary, Figure A1: RMBench task overview. Each row shows seven snapshots from one successful trajectory, ordered from the initial scene to the terminal state. and an episode that terminates immediately after replanning contributes none at that seam. Both configurations are scored by the same rule on the same scenes, so the two arms of each pair see the same set of admissible seams up to where their rollouts diverge. For consecutive final plans, let pold  
+
+> b,j,a
+
+and pnew  
+
+> b,j,a
+
+denote the preceding suffix and new-plan positions over three aligned steps: 
+
+RMSE 3(b) = 
+
+vuut 16
+
+> 2
+
+X
+
+> j=0 2
+
+X
+
+> a=1
+
+pold  
+
+> b,j,a
+
+− pnew 
+
+> b,j,a
+> 22
+
+, (A3) where j ∈ { 0, 1, 2} and a ∈ { 1, 2} index the aligned steps and arms. Boundary values are averaged within each rollout and then across rollouts within each task. Let c denote Full or no-tail (w/o Motion Tail). For metric m, the pooled mean and relative reduction are 
+
+¯mc 
+
+> pool
+
+= 20 ¯ mc 
+
+> Put
+
++ 30 ¯ mc 
+
+> Rearr .
+
++ 30 ¯ mc
+
+> Swap
+
+80 ,
+
+∆rel = 100 1 − ¯mFull 
+
+> pool
+
+¯mno-tail 
+
+> pool
+
+!
+
+%,
+
+(A4) where ¯mct denotes the rollout-averaged task mean and ∆rel 
+
+denotes the pooled relative reduction from no-tail to Full. 
+
+Task Config. CD p CD R B2 RMSE 3
+
+Put Back no-tail 5.900 0.842 5.930 9.660 
+
+Full 2.694 0.433 2.037 6.206 Rearrange no-tail 6.032 0.746 5.247 7.738 
+
+Full 3.417 0.517 2.893 5.864 Swap Blocks no-tail 10.060 0.963 8.110 14.490 
+
+Full 3.486 0.548 3.127 6.314 Pooled no-tail 7.510 0.851 6.491 10.751 
+
+Full 3.262 0.508 2.767 6.118 
+
+Reduction (%) 56.6 40.4 57.4 43.1 
+
+Table A4: Full/no-tail boundary results over 20, 30, and 30 rollout pairs. Position CD, boundary second difference, and overlap RMSE use millimeters. Orientation CD uses degrees. Pooled means are count-weighted. Lower is better. 
+
+C.2 Full versus w/o Motion Tail 
+
+Full is lower on all four diagnostics for every task in Ta-ble A4. After count-weighted pooling, the reductions are 56.6%, 40.4%, 57.4%, and 43.1% for position CD, orienta-tion CD, boundary second difference, and overlap RMSE, respectively. C.3 Post-Decoding Controls 
+
+Linear Continuation applies the execution-side overlap blend without Tail tokens or Tail-aligned initialization, while Tem-poral Ensemble aggregates actions over time. These controls test whether reducing an output seam can replace Motion Tail’s model-side conditioning.                                
+
+> Method Succ. CD pCD RB2 RMSE 3
+> ▼Put Back Block
+> no-tail 05.900 0.842 5.930 9.660 Linear Cont. 02.090 0.391 1.660 5.170
+> Temporal Ens. 03.570 0.604 3.400 5.340
+> Full 96 2.694 0.433 2.037 6.206
+> ▼Swap Blocks
+> no-tail 2 10.060 0.963 8.110 14.490 Linear Cont. 23.720 0.426 1.380 4.190
+> Temporal Ens. 07.520 0.731 6.510 8.210
+> Full 74 3.486 0.548 3.127 6.314
+
+Table A5: Handoff controls. Success uses 100 episodes per task and method. Boundary means use 20 Put Back and 30 Swap Blocks pairs. Units follow Table A4. Lower is better. CD and B2 use executed commands; RMSE compares plans. These metrics do not measure accumulated state de-viation or fixed-frequency smoothness. Linear Continuation has the lowest seam values but only 0–2% success (Table A5). 
+
+# D Scope and Limitations 
+
+Evaluation regime and statistical scope. All reported re-sults come from fixed-rate simulation on RMBench and LIBERO, so the boundary diagnostics describe the com-manded stream rather than physical trajectories under actu-ation limits. We do not evaluate on hardware or vary the control rate, and the reported margins should not be read as predictions for asynchronous or real-time deployment. Each internally trained condition uses a single random seed, so we report no seed variability or significance tests. The re-ported success rates and boundary means should therefore be interpreted as point estimates under this protocol. 
+
+Interpretation of interventions and diagnostics. Each ablation withdraws a pathway from training and deployment together, so it measures dependence of the assembled sys-tem on that pathway rather than isolating an internal mech-anism. Likewise, Table A4 compares policies that diverge within matched scenes; it establishes an association between lower boundary diagnostics and higher success, not causa-tion. The asymmetry between the two state components is consistent with motion continuity protecting the observation sequence, but we do not claim a measured causal chain. All four diagnostics are local to a seam and do not score whole-episode trajectory quality, accumulated state deviation, or fixed-frequency physical smoothness. Success rate remains the criterion for task completion. 
+
+External baseline comparability. The source-reported comparison rows in the main paper were not rerun under our protocol and may differ in backbone, demonstration count, optimization budget, and success criterion. Only the inter-nally trained conditions share the settings listed above, so the ablation contrasts are matched while the external comparison is not. We use the external rows for positioning and base the mechanism claims on the matched interventions. 
+
+Fixed design choices. Horizon and prefix lengths, the memory capacity of 16 records, the write-confidence thresh-old of 0.55, the fixed three-query write interval, and the overlap-consistency weight of 0.2 were each fixed once and reused across all conditions. We did not search these values, so we cannot report sensitivity to them.

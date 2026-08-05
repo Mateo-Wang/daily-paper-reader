@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-04</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-05</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 24 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-04 21:54:32 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-05 22:10:21 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日24篇论文中精读12篇，聚焦自动驾驶VLM推理与机器人强化学习两大方向。最值得关注的是《Outcome-Guided Distillation》以9.0分居首，提出师生框架提升驾驶推理；《WCM》则用世界评论家模型优化视觉-语言-动作学习。普通读者可顺带浏览速读中的反事实动作覆盖与腿部感知导航，对机器人数据效率与社交导航有直接启发。</p>
+<p>今日精读13篇、速读12篇，聚焦机器人灵巧操作与云端协同大模型。</p>
+<p>最值得关注的两篇高分精读：DexMani（9.0）提出人类示教引导的灵巧旋转操控，Latency-Tolerant（9.0）解决云端视觉-语言-动作模型的延迟问题。</p>
+<p>建议普通读者优先跟进灵巧操作与低延迟模型协作方向，可关注后续多任务泛化与仿真测试进展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">13 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Outcome-Guided Distillation: A Teacher-Student Framework to Advance VLM Reasoning in Autonomous Driving">Outcome-Guided Distillation: A Teacher-Student Framework to Advance VLM Reasoning in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="WCM: A World Critic Model for Vision-Language-Action Reinforcement Learning">WCM: A World Critic Model for Vision-Language-Action Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Latent-Centroid Steering: Single-Pass Classifier-Free Guidance for Command-Aligned Autonomous Driving">Latent-Centroid Steering: Single-Pass Classifier-Free Guidance for Command-Aligned Autonomous Driving</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DexMani: Human-Derived Manipulability Guidance for Dexterous Rotation">DexMani: Human-Derived Manipulability Guidance for Dexterous Rotation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Latency-Tolerant Cloud-Edge Collaborative Vision-Language-Action Models via Emergent Representational Specialization">Latency-Tolerant Cloud-Edge Collaborative Vision-Language-Action Models via Emergent Representational Specialization</span></li><li><span class="dpr-home-dashboard-paper-title" title="Hermite Curves as Trajectory Priors for Vision-Language-Action Models">Hermite Curves as Trajectory Priors for Vision-Language-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>6</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,9 +66,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="It&#x27;s Not Just More Demos: Counterfactual Action Sensitivity Coverage for Data-Efficient Robust Robot Imitation">It&#x27;s Not Just More Demos: Counterfactual Action Sensitivity Coverage for Data-Efficient Robust Robot Imitation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Social Robot Navigation By Sensing Human Legs">Learning Social Robot Navigation By Sensing Human Legs</span></li><li><span class="dpr-home-dashboard-paper-title" title="QuantWAMs: Calibrating at the Right Granularity for World Action Models">QuantWAMs: Calibrating at the Right Granularity for World Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TRACT: Temporally Routed Action Chunks with Chronological Phase Authority for Contact-Rich Manipulation">TRACT: Temporally Routed Action Chunks with Chronological Phase Authority for Contact-Rich Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Temporal Policy: History-Initialized Action Generation for Robotic Learning from Demonstration">Temporal Policy: History-Initialized Action Generation for Robotic Learning from Demonstration</span></li><li><span class="dpr-home-dashboard-paper-title" title="WM-Cov: Test Adequacy for Interactive World-Model-Style Autonomous Driving Simulation">WM-Cov: Test Adequacy for Interactive World-Model-Style Autonomous Driving Simulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 </div>
 
