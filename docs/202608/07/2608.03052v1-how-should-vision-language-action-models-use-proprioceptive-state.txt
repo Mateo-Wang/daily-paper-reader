@@ -1,0 +1,670 @@
+Title: How Should Vision-Language-Action Models Use Proprioceptive State?
+
+URL Source: https://arxiv.org/pdf/2608.03052v1
+
+Published Time: Wed, 05 Aug 2026 00:25:44 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# How Should Vision-Language-Action Models Use Proprioceptive State? 
+
+Yiren Zhao 1,3 , Ziyang Chen 1,3 , Ziyang Rao 1,3 ,Pengteng Li 1,3 , He Zhang 1,3 , Weiyu Guo 2,3* , Yandong Guo 3, Rushi Dai 1* 
+
+> 1
+
+The Hong Kong University of Science and Technology (Guangzhou) 
+
+> 2
+
+Multimedia Laboratory (MMLab), The Chinese University of Hong Kong 
+
+> 3
+
+AI 2 Robotics X-Lab 
+
+Abstract 
+
+Recent Vision–Language–Action (VLA) models almost universally take robot proprioceptive state as input, yet wire it in incompatible ways—serialized into text prompts, projected into the vision–language prefix, or fed directly to the action expert—and almost always as a single current frame. Three questions remain open: (1) whether, and on which tasks, current state actually im-proves closed-loop control; (2) how much state history helps, and whether its benefit reflects genuine tempo-ral variation rather than added conditioning capacity; and (3) where state should enter the model—the vi-sion–language backbone or the action-generation mod-ule. We answer these questions through controlled exper-iments on a flow-matching VLA, fixing the backbone, training data, action representation, and evaluation pro-tocol throughout. We implement five representative in-terfaces—discrete state prompt, VLM prefix, action pre-fix, state expert, and feature modulation—under matched implementation details, and evaluate them on 45 atomic tasks spanning three task families plus 20 composite tasks; we then sweep the state-history length from 1 to 96 frames to examine how historical state informa-tion affects model performance. The experiments yield systematic answers to all three questions, distilled into testable design principles for state-aware VLAs. 
+
+## 1 Introduction 
+
+Trained on increasingly large-scale robot demonstrations, recent Vision-Language-Action (VLA) models can execute hundreds of manipulation tasks with a single set of weights and generalize across objects and scenes (Intelligence et al. 2025; Bjorck et al. 2025; Chen et al. 2026). Inspired by bi-ological motor control—animals rely on proprioception to produce smooth, coordinated, and robust movement—it is natural to expect the robot’s proprioceptive state (joint an-gles, end-effector pose, gripper aperture) to play a similar role in a VLA (Guo et al. 2026): smoother control, more stable motion phases, and more precise contact-rich manip-ulation. Yet a gap remains. Vision and language have been pretrained at scale inside the VLM. Proprioceptive state has no such pretraining. As a result, proprioception remains the least examined and least understood input in VLAs. Precisely because no consensus exists, current VLAs use state in strikingly diverse ways. At the representation level, 
+
+> *
+
+Corresponding authors. 
+
+𝜋 0.5 (Intelligence et al. 2025) discretizes the state into text to-kens appended to the language prompt, whereas OpenVLA-OFT (Kim et al. 2025a) and GR00T N1 (Bjorck et al. 2025) project it continuously into embeddings. At the injection 
+
+level, some designs feed the state into the VLM, where it joins images and language in multimodal context modeling, while others send it directly to the action expert to condition action generation. At the temporal level, the vast majority of meth-ods use only the current single frame, and few examine the temporal evolution of state (Guo et al. 2026). Moreover, these design differences are entangled with the backbone, pretrain-ing, data, and action representation, making them mutually incomparable. This makes a basic yet unanswered question especially important: with everything else held fixed, in what form should robot state be represented, where should it be injected, and how much history is needed for it to genuinely improve a VLA’s decision making? 
+
+Contributions. We address these open questions through controlled experimental analysis. Concretely, we take a rep-resentative flow-matching VLA as our testbed and build a unified experimental framework that fixes the backbone net-work, training data, action representation, and evaluation pro-tocol; evaluation follows a layered protocol built on Robo-Casa365 (Nasiriany et al. 2026), whose atomic tasks we pre-partition by control semantics into three families (pick-and-place, articulated-object interaction, and precise actuation), paired with 20 in-distribution composite tasks. Under this setup, the only thing that varies between systems is how the state is integrated, so any performance difference can be at-tributed to the state design itself. On this controlled basis, we make the following contributions along the three design axes. First, for the representation question, we compare discrete and continuous state representations under matched condi-tions: the same state is either quantized and serialized into text tokens or projected into continuous embeddings, and we characterize whether, and on which tasks, each form of the current state helps. Second, for the temporal question, we sweep the state history from 1 to 96 frames and, with a slot-matched repeat-current control, test whether history gains require genuine temporal content—how much history helps, and when more starts to hurt. Finally, for the interface question, we distill five represen-tative state interfaces from prior work (Figure 1)—a discrete state prompt ( sp ), a VLM prefix ( vp ), an action prefix ( ap ), a state expert ( se ), and feature modulation ( fm )—implement 1arXiv:2608.03052v1 [cs.RO] 4 Aug 2026 them in one scaffold, and compare injecting the same state into the VLM side versus the action side, showing that the preferred entry point is not fixed but switches with the tem-poral budget. Distilling the evidence along all three axes, we offer testable design guidelines and a reusable evaluation protocol for future state-aware VLAs. 
+
+## 2 Related Work 
+
+State-conditioned robot policies. Classic visuomotor policies concatenate robot state with visual features or condi-tion the action decoder on a learned embedding (Zhao et al. 2023; Chi et al. 2025). VLA systems inherit this input but disagree on how it is encoded, where it enters, and what role it plays (Kim et al. 2024; Black et al. 2024; Intelligence et al. 2025; Bjorck et al. 2025); Section 3.2 surveys these designs. Because each design ships inside a different system, reported numbers confound the state interface with pretraining, back-bone, data, and evaluation protocol. No prior study moves the same state signal across interfaces, history depths, and injection routes with everything else fixed; that controlled comparison is the role of this paper. 
+
+Temporal context in imitation learning. Observation his-tories reduce partial observability and support multi-stage control, with recurrent modules, memory tokens, and com-pressed latents as alternatives to raw frame stacks (Bula-tov et al. 2022; Dai et al. 2026; Shi et al. 2025; Li et al. 2026a). The same histories, however, invite shortcuts: be-havioral cloning can copy its own recent trajectory instead of attending to the scene (De Haan et al. 2019; Wen et al. 2020). A depth sweep alone cannot separate temporal content from the extra conditioning slots that come with it, so we pair ev-ery history model with a repeat-current control that fixes slot count and interface while removing temporal change. 
+
+Empirical studies of VLA components. Recent work iso-lates individual VLA design choices through controlled abla-tion, covering latent-action supervision, geometric features, and memory interfaces (Lin et al. 2026; Yang et al. 2026; Dai et al. 2026). We bring this methodology to proprioception and hold to one discipline throughout: every claim about a design rests on independently trained systems compared under one protocol, so that a difference in success rate can be attributed to the state design rather than to a perturbation of a single checkpoint. 
+
+## 3 Preliminaries 
+
+3.1 Vision–Language–Action Policies 
+
+This paper studies VLA policies that are jointly conditioned on vision, language, and robot proprioceptive state. At deci-sion time 𝑡 , the robot receives a visual observation 𝑜 𝑡 ∈ O ,a language instruction ℓ ∈ L , and an ordered state window over the most recent 𝐾 steps, 
+
+𝑆 (𝐾 ) 
+
+> 𝑡
+
+= (𝑠 𝑡 −𝐾 +1, . . . , 𝑠 𝑡 ) , 𝑠 𝑡 ∈ R𝑑 𝑠 , (1) where 𝑠 𝑡 describes the robot’s current kinematic configura-tion, such as end-effector pose, base pose, and gripper state; 
+
+𝐾 =1 means that only the current step is used. Conditioned on these inputs, the policy 𝜋 𝜃 generates a continuous action chunk of length 𝐻 ,
+
+ˆa𝑡 :𝑡 +𝐻 −1 = 𝜋 𝜃 
+
+
+
+𝑜 𝑡 , ℓ, 𝑆 (𝐾 )
+
+> 𝑡
+
+
+
+∈ R𝐻 ×𝑑 𝑎 , (2) where 𝑑 𝑎 is the per-step action dimension. The model is trained on a dataset of demonstration trajectories D =
+
+{( 𝑜 (𝑖 ) 
+
+> 𝑡
+
+, ℓ (𝑖 ) , 𝑆 (𝑖,𝐾 ) 
+
+> 𝑡
+
+, a(𝑖 ) 
+
+> 𝑡 :𝑡 +𝐻 −1
+
+)} with an action-generation ob-jective Lact that matches the predicted action chunk to the expert action sequence. Crucially, state interfaces do not dif-fer in this prediction target; they differ in how the state win-dow 𝑆 (𝐾 ) 
+
+> 𝑡
+
+is represented and in how it is injected into the vision–language backbone or the action-generation module. 
+
+3.2 Robot Proprioception and Its Use in VLAs 
+
+Robot proprioception—joint angles, end-effector pose, grip-per state, and base or whole-body configuration—is the only policy input that lives in the same continuous physical space as the output actions, and current VLAs wire it in strikingly different ways: 𝜋 0.5 serializes it into discrete text tokens in the VLM prompt (Intelligence et al. 2025), OpenVLA-OFT projects it continuously into the language-model sequence (Kim et al. 2025a), and GR00T N1 feeds a state embedding directly to the action head (Bjorck et al. 2025). Around these designs, a rapidly growing line of work explores what else state can do: as alignment supervision or a contrastive regu-larizer for representation learning (Wen et al. 2025; Kim et al. 2025b; Zhang et al. 2026), as tokenized input that actively guides visual reasoning or routes a dedicated expert stream (Wang et al. 2026; Yu et al. 2026), as a normalized represen-tation for cross-embodiment and whole-body control (Davies et al. 2025; Bai et al. 2026), as a continuously evolving signal for long-horizon manipulation and memory (Qi et al. 2026; Wang et al. 2025; Shi et al. 2025), and as a cue for estimat-ing execution risk and detecting false completion (Zhai et al. 2026; Li et al. 2026b). At the same time, several studies warn in the opposite direction: naively fused state can dominate vision, letting a policy “complete” a task from its internal progress while ignoring visual failure (Li et al. 2026b), can suppress visual learning around motion-phase transitions (Lu et al. 2026), and can serve as an action-correlation shortcut in behavioral cloning (De Haan et al. 2019; Wen et al. 2020). The community has thus explored many ways of using state, and the evidence pulls in both directions—but these findings come from different backbones, data, and protocols, which is precisely why this paper compares state interfaces, his-tory depths, and injection routes under a single controlled scaffold. 
+
+## 4 Methodology 
+
+4.1 Problem Setup 
+
+We adopt 𝜋 0.5 (Intelligence et al. 2025)—a VLM coupled with a flow-matching action expert (Lipman et al. 2023)—as 21 State Representation 
+
+> “Current State Prompt”
+> Discretize
+> Discrete State Tokens
+> Robot State
+> Encoder
+> Temporal State Tokens
+
+...  
+
+> Temporal State
+> A Rearrangement
+> pick -and -place · PickPlace → microwave
+> B Articulate
+> door / drawer / hinge · OpenFridge
+> C Precision
+> knob / switch · TurnOnSinkFaucet
+> Composite
+> multi -stage · 3 chained atomic stages
+> 2VLA Backbone
+
+Vision -Language -Model Action 
+
+Expert   
+
+> Image &Language
+
+...      
+
+> 3State Interface Systems
+> VLM -side interfaces Action -side interfaces
+> State Prompt
+> VLM
+> Discrete State Tokens
+> VLM Prefix
+> VLM
+> Temporal State Tokens
+> Action Prefix
+> VLM Action
+> Expert
+> State Expert
+> VLM State
+> Expert
+> Action
+> Expert
+> Feature Modulation
+> VLM Action
+> Expert
+> ...
+> Temporal State Tokens
+> ...
+> Temporal State Tokens
+> ...
+> Temporal State Tokens
+> ...
+> α, β
+> State Processing Module
+
+Where & How? Figure 1: Overview of the state design space and evaluation suite. (1) State representation: robot state is represented either as a discrete current-state prompt or as continuous temporal tokens. (2) Shared VLA scaffold: multi-view observations and the task instruction enter the vision–language backbone, whose context conditions the action expert. (3) State interfaces: we compare a discrete state prompt, a continuous VLM prefix, a dedicated state expert, an action prefix, and feature modulation. The systems are evaluated on rearrangement (A), articulation (B), precision knob/switch control (C), and multi-stage composite tasks. the base policy for the entire study, instantiating the policy class of Section 3.1. Proprioceptive state can enter this ar-chitecture at different points and in different forms; holding everything else fixed, we turn the three questions posed in the introduction into three controlled variables: the repre-sentation of state (discrete or continuous, and through which interface), the history length 𝐾 , and the injection site (the VLM side or the action side). All five interfaces share the same action-generation objective, data pipeline, and train-ing recipe; they differ only in how the same state window is represented and where it enters the policy—the VLM prefix, the action prefix, a dedicated state stream, or feature modu-lation. Cross-interface comparisons therefore evaluate com-plete state-conditioning systems, rather than an abstract “in-jection site” detached from capacity and computation path; the task-family partition and the evaluation protocol appear in Section 5.1. 
+
+4.2 Proprioceptive State Representation 
+
+Each raw state frame 𝑠 𝑞 ∈ R16 contains the end-effector position and quaternion in the base frame, the mobile-base position and quaternion in the world frame, and two gripper joint positions. We keep the shorthand “proprioceptive state” below, but the base pose also carries world-frame localiza-tion, so its effect cannot be read as purely internal motor feedback. Except for the discrete state prompt, which uses only the current frame, all continuous interfaces receive state sequences with identical numerical content, temporal or-der, and history length. Each frame is passed independently through a two-layer projector to form one continuous state token, 
+
+ℎ𝑖 = 𝜙 2 (Swish (𝜙 1 (𝑠 𝑖 ))) , (3) where 𝜙 1 lifts the state input, zero-padded from 16 to the framework’s fixed 32 dimensions, to width 𝑑 , and 𝜙 2 pre-serves that width, with 𝑑 =2048 for the VLM prefix and 
+
+𝑑 =1024 for the action prefix, the state expert, and feature modulation, matching the hidden width of the host module in each case. Sharing the per-frame projector guarantees a consistent encoding process across history depths, but it does not equalize the total parameter count or compute across in-terfaces; these differences are quantified in Figure 2. 
+
+4.3 State Interfaces 
+
+State Prompt ( sp ). This interface reuses the native text entry of 𝜋 0.5: each dimension of the current state is quantized into 256 bins and serialized through the existing tokenizer, producing roughly 66 prompt tokens that join the language instruction in the VLM input. Because the bins map onto the pretrained vocabulary, this route adds no trainable parameters and is the only interface whose state tokens pass through 3the same embedding space as language; by construction it supports only the current frame. 
+
+VLM Prefix ( vp ). Per-frame state tokens ( 𝑑 =2048 ) are in-serted into the bidirectional VLM prefix, after the image and language tokens. State first participates in multimodal context modeling—every image and language token can at-tend to it—and then influences action generation indirectly through the conditioning prefix. 
+
+Action Prefix ( ap ). State tokens ( 𝑑 =1024 ) are placed in the causal action suffix, ahead of the noisy action tokens, so that they participate directly in the action expert’s velocity-field prediction at every denoising step without first being compressed into the VLM representation. This is the most direct route from state to action. 
+
+State Expert ( se ). A dedicated state-processing stream is added alongside the VLM and the action expert, giving state its own sequence-modeling path that exchanges information with the action module during generation. This is the largest-capacity design: state is neither compressed into the VLM nor folded into the action suffix, but processed by its own transformer stack. 
+
+Feature Modulation ( fm ). State is kept as a separate con-ditioning memory rather than as ordinary sequence tokens. Each layer of the action expert reads it through cross-attention and predicts a per-feature scale 𝛾 and shift 𝛽 that continually modulate the action features: 
+
+Mod (𝑧 ; 𝑆 ) = (1 + 𝛾 (𝑧, 𝑆 )) ⊙ 𝑧 + 𝛽 (𝑧, 𝑆 ). (4) Under single-frame conditioning, sp , vp , ap , se , and fm 
+
+add 0, 4.26M, 1.08M, 199.30M, and 123.84M trainable pa-rameters, respectively. se and fm thus change both topol-ogy and capacity, so the five interfaces jointly answer which 
+
+complete system is effective under a given task structure; the closest route pair ( vp versus ap ) is examined in Section 5.2. 
+
+## 5 Experiments 
+
+Our experiments systematically study how proprioceptive state should be used in a unified flow-matching VLA frame-work, organized around three core questions. RQ1 (state utility and interface): does explicitly conditioning on the current proprioceptive state improve closed-loop control, and how do the gains of different state interfaces change with the control task? RQ2 (temporal depth): how many frames of raw state history provide a real performance ben-efit, and does the improvement genuinely come from tem-poral variation in state rather than from additional condi-tioning slots? RQ3 (injection route): should state enter the vision–language backbone or the action-generation module, and does this route preference change with history depth? To answer these questions, we compare a no-state baseline, five state interfaces, and history configurations from 1 to 96 frames within the fixed 𝜋 0.5 framework, evaluated closed-loop on 45 atomic tasks and 20 in-distribution composite tasks. The design separates two levels of claim: comparisons between independently trained systems assess the utility of a complete interface, whereas the slot-matched true-history versus repeat-current control isolates the training benefit of genuine temporal variation from that of added condition-ing capacity. Fixed-checkpoint probes that trace how state reaches action generation are reported in Appendix A. 
+
+5.1 Experimental Protocol 
+
+Benchmark. We evaluate the effect of proprioceptive state interfaces and state history on closed-loop robot control on RoboCasa365 (Nasiriany et al. 2026), which builds on the RoboCasa simulation platform and contains diverse kitchen scenes, robot initial configurations, object instances, and ma-nipulation tasks. All methods use the same visual inputs, language instructions, action space, and evaluation program; visual observations consist of three views from a left exterior camera, a right exterior camera, and a wrist camera. 
+
+Atomic benchmark. Atomic tasks assess single-stage con-trol. We pre-partition the RoboCasa365 atomic tasks by their dominant manipulation semantics—not post hoc by model performance—into three families: A (rearrangement and pick-and-place, probing large-range positioning of the end effector and mobile base), B (articulated-object interac-tion, probing sustained contact and motion-phase modeling), and C (knob, switch, and appliance control, where small workspaces demand high local precision). Navigation is out of scope. Each family contains 15 representative tasks (45 in total) and trains a separate category expert, so cross-family results reflect interface behavior under different control de-mands rather than one unified multi-task policy. Every task is evaluated with 50 closed-loop rollouts under a fixed, iden-tical task list and episode-seed schedule. 
+
+Composite benchmark. Composite evaluation uses the 
+
+lifelong_learning_phase2 setting: 20 task types, each chaining two or three atomic subgoals within one episode. Each interface trains one policy jointly on all 20 types; eval-uation holds out only new episodes, so Phase 2 measures in-distribution composite control rather than generalization to unseen semantics. In addition to the default end-effector-pose state representation, we repeat the key composite-task comparisons using joint-angle state under the identical train-ing and evaluation protocol. The action representation re-mains end-effector deltas in both settings, isolating the effect of the state coordinate system. Every composite task is eval-uated with 25 closed-loop rollouts under the same fixed seed schedule. 
+
+Experimental notes. The primary metric is closed-loop task success rate (SR). A rollout counts as successful only if the environment-defined success condition is satisfied within the horizon; for Phase 2, success requires completing all constituent subgoals in an episode. All models are initialized from the same pretrained 𝜋 0.5 checkpoint and fully fine-tuned on the corresponding task data under a shared optimiza-tion recipe, keeping the data pipeline, action representation, learning-rate schedule, and training budget matched across interfaces; se and fm train with a slightly lower nominal sam-ple exposure due to hardware allocation, so we do not use 4them for capacity-matched claims. Random seeds are fixed before training and evaluation, and the same seed schedule is reused for all models within a benchmark to control scene initialization, object instances, object placements, and other environment randomness. Slot-matched temporal compar-isons also fix images, language, state-slot count, expert ac-tions, and initial flow noise. Paired task-bootstrap intervals resample aligned tasks for two fixed checkpoints; they mea-sure evaluation and task-sampling uncertainty rather than optimization variance, and the interface-by-depth sweep is exploratory and unadjusted for multiplicity. 
+
+5.2 Results and Analysis 
+
+RQ1: Does Current State Improve Control? Conditioning on the current state is beneficial overall. 
+
+Table 1 shows that on the 45 atomic tasks the no-state model reaches a macro success rate of 54.6%, and the point esti-mates of all five state interfaces exceed this baseline, with gains ranging from +1.1 (ap ) to +3.1 points ( sp ). In par-ticular, sp reaches 57.7% with a paired task-bootstrap 95% interval of [0.2, 6.1], providing direct statistical evidence that the current state can improve closed-loop control; the intervals of the remaining interfaces include zero, so we read their gains as a consistent positive tendency rather than indi-vidually supported effects. 
+
+There is no task-agnostic best interface. Beneath the macro average, the family-level rankings reverse. Family A rearrangement tasks favor sp (68.7%, +7.0 over no-state), while the continuous interfaces gain far less there ( −0.1
+
+to +2.6). Family B articulation tasks reverse this order: vp 
+
+leads at 68.8% ( +6.1), with se and fm close behind ( +5.8
+
+and +5.5), whereas sp drops to mid-pack ( +1.6). Family C knob-and-switch control is both the hardest family (no-state 39.5%) and the most selective: se leads at 42.8% ( +3.3), and 
+
+vp is the only interface that falls below the baseline ( −1.2). Each interface thus has a family where it shines and a family where it adds little or even hurts—a pattern consistent with the three families imposing different control demands, and one that a single benchmark-wide average would completely hide. 
+
+The interfaces differ sharply in computational cost. Fig-ure 2 (Appendix C) reports the theoretical marginal compute relative to the no-state model. sp serializes the state into roughly 66 discrete prompt tokens, adding about 1114 train-ing GFLOPs per sample and 282 GFLOPs per ten-step policy call—the most expensive design by two orders of magni-tude on the training side. The continuous interfaces are far cheaper: vp adds 16.9/4.3 (training/inference), ap 3.5/7.6, and se only 2.6/0.7, with fm in between at 45.4/114. Weigh-ing performance against compute, sp offers the clearest over-all benefit but at the highest price, while se and fm reach nearly the same macro point estimate (57.6%) at a small fraction of the marginal compute—a relevant trade-off when the state interface must scale with history length.        
+
+> NS
+> No state
+> SP1
+> State Prompt
+> VP1
+> VLM Prefix
+> AP1
+> Action Prefix
+> SE1
+> State Expert
+> FM1
+> Feature Mod.
+> 0110 100 1000
+> Estimated training GFLOPs / sample (log scale)
+> (a) Training cost
+> 0110 100
+> Estimated GFLOPs / policy call (log scale)
+> (b) 10-step inference cost
+> 1114
+> 16.9
+> 3.5
+> 2.6
+> 45.4
+> 0
+> 282
+> 4.3
+> 7.6
+> 0.7
+> 114
+> 0
+
+Figure 2: Estimated marginal compute of the single-frame in-terfaces (log scale). (a) Training-time marginal GFLOPs per sample; (b) ten-step inference marginal GFLOPs per policy call. 
+
+RQ2: Is State History Useful, and How Much Is Needed? Short state history helps, whereas long raw history can be harmful. We first study history depth on the Robo-Casa atomic subset, where the shorter task horizon allows the effect of temporal context to be isolated more directly. Figure 3 shows a clear non-monotonic trend: short histories improve performance over the corresponding single-frame models, whereas deeper uncompressed histories provide no additional benefit and eventually degrade control. The effect is not uniform across task families. Families A and B are comparatively tolerant to increasing context, while family C suffers a pronounced drop under long histories. This suggests that raw temporal context is useful only within a limited hori-zon; beyond that range, redundant or stale state information can interfere with action prediction, particularly in tasks that require more precise state-to-action alignment. 
+
+An eight-frame history provides a practical operating point. Across the atomic-task sweep, the strongest and most consistent gains occur within the short-history regime, with (K=8) providing a favorable balance between tempo-ral information and context redundancy. We therefore adopt eight frames as the default temporal-conditioning recipe for the subsequent experiments. This choice is empirical rather than universal: the key finding is not that eight frames are optimal for every task, but that compact histories are consis-tently more reliable than long raw sequences. 
+
+Composite tasks confirm that the benefit transfers to long-horizon control. We next evaluate the same recipe on the 20 RoboCasa Phase-2 composite tasks, which involve longer horizons and more complex multi-stage behavior. Ta-ble 2 shows that extending the state input from a single frame to an eight-frame history improves the overall performance of most conditioning interfaces, with the clearest benefit appear-ing on the action side. In contrast, injecting the same history through the VLM prefix remains less consistent. The atomic-subset observation therefore transfers to the more challenging composite setting: recent state evolution is useful, but it is 5Table 1: Success rates (%) of single-frame state-interface systems on 45 atomic tasks. Bold indicates the best result and underline the second best; ties are preserved. Green and red numbers in parentheses show improvement and degradation over the matched no-state baseline, respectively. † marks a paired task-bootstrap 95% confidence interval that excludes zero. 
+
+Task NS 
+
+No state SP1 
+
+State Prompt VP1 
+
+VLM Prefix AP1 
+
+Action Prefix SE1 
+
+State Expert FM1 
+
+Feature Mod. 
+
+Atomic A 61.7 68.7 (↑ 7.0) 63.2 (↑ 1.5) 61.7 (± 0.0) 61.6 (↓ 0.1) 64.3 (↑ 2.6)
+
+Atomic B 62.7 64.3 (↑ 1.6) 68.8 (↑ 6.1) 65.9 (↑ 3.2) 68.5 (↑ 5.8) 68.2 (↑ 5.5)
+
+Atomic C 39.5 40.3 (↑ 0.8) 38.3 (↓ 1.2) 39.6 (↑ 0.1) 42.8 (↑ 3.3) 40.3 (↑ 0.8)
+
+Atomic macro 54.6 57.7 (↑ 3.1)† 56.8 (↑ 2.1) 55.7 (↑ 1.1) 57.6 (↑ 3.0) 57.6 (↑ 2.9)1 4 8 16 32 48 64 96                         
+
+> history depth (frames)
+> −3
+> −2
+> −1
+> 0
+> 1
+> 2
+> 3
+> change from 1 frame (points)  short-window peak
+> deep context
+> (a) Overall mean
+> mean
+> 14816 32 48 64 96
+> history depth (frames)
+> −12.5
+> −10.0
+> −7.5
+> −5.0
+> −2.5
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> change from 1 frame (points)
+> (b) A: Rearrangement
+> 14816 32 48 64 96
+> history depth (frames)
+> −12.5
+> −10.0
+> −7.5
+> −5.0
+> −2.5
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> (c) B: Articulation
+> 14816 32 48 64 96
+> history depth (frames)
+> −12.5
+> −10.0
+> −7.5
+> −5.0
+> −2.5
+> 0.0
+> 2.5
+> 5.0
+> 7.5
+> (d) C: Knob / Switch
+> action prefix VLM prefix state expert feature modulation
+
+Figure 3: Effect of state-history depth on the RoboCasa atomic subset. (a) Mean change relative to the matched single-frame model, revealing a bounded short-history benefit rather than monotonic improvement with depth. (b–d) Results by task family: families A and B are relatively robust, whereas long uncompressed histories substantially degrade performance on family C, especially when injected through the VLM prefix.    
+
+> 52
+> 54
+> 56
+> 58
+> 60
+> 55.7
+> 56.8
+> 57.6 57.6 57.7 †
+> ★59.6
+> ★
+> 57.4
+> 58.0
+> 57.4
+> 54.6
+
+𝐾 =1 𝐾 =8
+
+Atomic (45 tasks) 
+
+> 24
+> 28
+> 32
+> 36
+> 40
+> 28.2
+> 34.4
+> ★
+> 25.8
+> 27.8
+> 39.0
+> ★
+> 33.8
+> 28.0
+> 32.2
+> 28.4
+
+𝐾 =1 𝐾 =8
+
+Composite, EEF-pose state (20 tasks)   
+
+> 24
+> 28
+> 32
+> 36
+> 40
+> 31.4
+> 33.6
+> ★36.2 35.8
+> ≈
+
+𝐾 =1 𝐾 =8
+
+Composite, joint-angle state         
+
+> ap vp se fm sp (single-frame only)
+> dashed: no-state baseline ★: per-cluster best point estimate
+
+Figure 4: Where and when proprioceptive state helps, and where it should enter. Macro success rate (%); dashed lines mark the no-state baseline (54.6 atomic, 28.4 composite). Left : on near-Markovian atomic tasks every interface stays within +1.1 to 
+
++5.0 points of the baseline ( †: the only paired 95% CI that excludes zero), and the largest change from adding history is again on the action side ( ap 55 .7 → 59 .6). Middle : on composite tasks the preferred entry point switches with the temporal budget — with a single frame only the VLM-side prefix ( vp ) clearly exceeds the baseline, while with a short history the action-side prefix ( ap ) becomes the strongest entry. Right : the same direction replicates under a joint-angle state; at matched 𝐾 =8 the ap /vp 
+
+difference lies within the paired task-bootstrap noise band ( ≈). Across all three panels the 𝐾 =1 best is a VLM-side entry ( sp /vp )and the 𝐾 =8 best is ap . Slot-matched controls attribute the composite ap history gain to genuine temporal variation (Table 2); all other entries are single-seed point estimates. most effectively exploited when it directly conditions action generation. 
+
+The gain reflects temporal structure rather than addi-tional tokens. Increasing the history length also increases the number of conditioning tokens, creating a potential ca-pacity confound. To control for this factor, we compare the eight-frame model with a slot-matched variant that repeats the current state across the same number of positions. The repeated-state control falls substantially short of the gen-6Table 2: Composite-task temporal comparisons. The first two blocks report exploratory complete-system changes from 
+
+𝐾 =1 to 𝐾 =8 for the default EEF-pose state and for a joint-angle state representation trained and evaluated under the identical protocol (the action space stays EEF deltas); all entries are single-seed point estimates. The final row is the slot-matched temporal-content test on the EEF-state ap pol-icy: current-only copies the current state into eight ap slots, whereas genuine history supplies eight ordered state frames. SR and ΔSR are percentage points.                           
+
+> Interface / control 𝐾 =1𝐾 =8ΔSR
+> EEF-pose state (default)
+> AP 28.2 39.0 +10.8 VP 34.4 33.8 −0.6
+> SE 25.8 28.0 +2.2 FM 27.8 32.2 +4.4
+> Joint-angle state (same protocol)
+> AP 31.4 36.2 +4.8 VP 33.6 35.8 +2.2
+> Slot-matched control (EEF-pose state)
+> AP: current-only →genuine history 30.8 39.0 +8.2
+
+uinely ordered history, and the paired task-bootstrap confi-dence interval excludes zero (Appendix B). Thus, the im-provement cannot be explained by additional conditioning slots alone; it arises from the temporal variation encoded across successive states. 
+
+The conclusion is robust to the state representation. Fi-nally, we repeat the comparison using joint-angle states in-stead of end-effector states, while keeping the action space and training protocol unchanged. Both representations pre-serve the same qualitative advantage of short history, and their matched differences remain within the uncertainty of the benchmark. The usefulness of temporal conditioning is therefore not tied to a particular coordinate system. Relative to history depth and injection location, the choice between joint and end-effector states is a secondary design factor. Taken together, the experiments establish a consistent two-stage result. The atomic-task analysis identifies a bounded temporal regime in which short state histories are benefi-cial and long raw histories are detrimental, especially for family C. Using the resulting (K=8) recipe, the composite-task experiments further show that the benefit persists under longer-horizon control, survives token-count matching, and holds across both joint-space and end-effector state repre-sentations. These findings support compact action-side state history as a robust default for temporal conditioning. 
+
+RQ3: Where Should State Enter? With a single frame ( 𝐾 =1), state favors the VLM side. 
+
+On composite tasks, which demand stage tracking over longer horizons, VLM-side injection is the clear single-frame win-ner: vp 1 reaches 34.4% versus 28.2% for ap 1 with the EEF-pose state, and 33.6% versus 31.4% with joint angles, while every other entry stays within a few points of the 28.4% no-state baseline. On the atomic suite the single-frame leaders sit within 0.1 points of one another, so the preference there is not resolved—the VLM-side advantage emerges precisely where a single observation helps contextualize the visual– language representation for multi-stage control. 
+
+With a short history ( 𝐾 =8), the advantage shifts decisively to the action side. The 𝐾 =1 → 8 gains are largest when the sequence directly conditions the action head: +10 .8 points with the EEF-pose state, +4.8 with joint angles, and +3.9 on the atomic suite, whereas the same history in the VLM prefix yields only −0.6, +2.2, and +0.6. The endpoints tell the same story: with eight frames, ap holds the best entry in every panel (59.6% atomic, 39.0% composite) after being the weakest or near-weakest single-frame interface. Together with the slot-matched control in RQ2, the two findings compose into a simple design rule for our setting: inject single-frame state into the VLM, but route multi-frame state history to the action head .
+
+Scope of the routing rule. The crossover persists across both state representations and both task suites, and fixed-checkpoint probes trace it to a difference in data flow: VLM-side state measurably alters the multimodal context before action generation, whereas action-side state acts directly in-side the action expert (Appendix A). The rule nonetheless remains a directional pattern rather than an established causal mechanism or a statistical ranking: under joint angles the two routes converge at 𝐾 =8 (36.2% versus 35.8%), the routes differ in projection width and computation path, and most comparisons rely on a single training seed. 
+
+## 6 Conclusion 
+
+We presented a controlled study of how a flow-matching VLA should use proprioceptive state, decomposing an oth-erwise ad hoc wiring decision into three measurable design axes: representation, temporal depth, and injection route. Three findings summarize the evidence. Current state im-proves closed-loop control selectively: the discrete prompt yields the only interval-supported macro gain, and the best interface changes with the task family. State history has a bounded useful range: short histories help, long raw histo-ries hurt, and the slot-matched control attributes the gain to genuine temporal content rather than added conditioning ca-pacity. The preferred injection route depends on the temporal budget: a single frame is most effective in the VLM prefix, whereas a short history is most effective when it directly conditions the action expert. These findings compose into a concrete design default—inject the current frame into the VLM, route short histories to the action head, and validate anything deeper—and the underlying evaluation procedure is directly reusable for auditing future state-aware VLAs. Two limitations remain. Our experiments lack real-robot valida-tion, and the state studied here is purely kinematic, leaving out force, tactile, and other sensing modalities; extending the protocol to physical platforms and to multimodal state is our next step. 7References 
+
+S. Bai, M. Li, X. Lv, J. Wang, X. Wang, F. Liao, C. Hou, L. Gu, W. Zhou, K. Wu, Z. Ding, Z. Xu, L. Sun, S. Zhang, Z. Che, J. Tang, and B. Chen. HEX: humanoid-aligned experts for cross-embodiment whole-body manipulation. 
+
+CoRR , abs/2604.07993, 2026. doi: 10.48550/ARXIV. 2604.07993. URL https://doi.org/10.48550/arXiv.2604. 07993. J. Bjorck, F. Castañeda, N. Cherniadev, X. Da, R. Ding, L. Fan, Y. Fang, D. Fox, F. Hu, S. Huang, et al. Gr00t n1: An open foundation model for generalist humanoid robots. 
+
+arXiv preprint arXiv:2503.14734 , 2025. K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman, B. Ichter, et al. 𝜋 0:A vision-language-action flow model for general robot control. arXiv preprint arXiv:2410.24164 , 2024. A. Bulatov, Y. Kuratov, and M. Burtsev. Recurrent memory transformer. Advances in Neural Information Processing Systems , 35:11079–11091, 2022. Z. Chen, S. Wang, W. Guo, Q. Cai, H. Zhang, P. Li, Y. Zhao, and Y. Guo. Phaser: Phase-aware and semantic experience replay for vision-language-action models, 2026. C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burch-fiel, R. Tedrake, and S. Song. Diffusion policy: Visuo-motor policy learning via action diffusion. The Inter-national Journal of Robotics Research , 44(10-11):1684– 1704, 2025. Y. Dai, H. Fu, J. Lee, Y. Liu, H. Zhang, J. Yang, C. Finn, N. Fazeli, and J. Chai. Robomme: Benchmarking and un-derstanding memory for robotic generalist policies. arXiv preprint arXiv:2603.04639 , 2026. T. Davies, Y. Huang, Y. Liu, X. Chen, H. Liu, and L. Hu. Tenma: Robust cross-embodiment robot ma-nipulation with diffusion transformer. arXiv preprint arXiv:2509.11865 , 2025. P. De Haan, D. Jayaraman, and S. Levine. Causal confusion in imitation learning. Advances in neural information processing systems , 32, 2019. W. Guo, H. Zhang, P. Li, T. Cai, Z. Chen, Y. Guo, X. He, Y. Yang, Y. Sun, and H. Xiong. A brain-inspired embodied intelligence for fluid and fast reflexive robotics control. 
+
+arXiv preprint arXiv:2601.14628 , 2026. P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dha-balia, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, et al. 𝜋 0.5: a vision-language-action model with open-world generalization. arXiv preprint arXiv:2504.16054 ,2025. M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakr-ishna, S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv preprint arXiv:2406.09246 , 2024. M. J. Kim, C. Finn, and P. Liang. Fine-tuning vision-language-action models: Optimizing speed and success. 
+
+arXiv preprint arXiv:2502.19645 , 2025a. T. Kim, J. Lee, M. Koo, D. Kim, K. Lee, C. Kim, Y. Seo, and J. Shin. Contrastive representation regularization for vision-language-action models. CoRR , abs/2510.01711, 2025b. doi: 10.48550/ARXIV.2510.01711. URL https: //doi.org/10.48550/arXiv.2510.01711. P. Li, W. Guo, H. Zhang, T. Cai, X. He, Y. Guo, and H. Xiong. Spatial memory for out-of-vision manipulation in vision-language-action. arXiv preprint arXiv:2605.22283 , 2026a. Z. Li, Y. Li, J. Jiang, L. Zhou, T. Zhang, and W. Zheng. Re-vip: Reducing false completion in vision-language-action models with vision-proprioception rebalance. CoRR ,abs/2601.16667, 2026b. doi: 10.48550/ARXIV.2601. 16667. URL https://doi.org/10.48550/arXiv.2601.16667. Y. Lin, H. Li, Y. Li, H. Shen, Y. Zhao, C. Shao, and J. Zhang. From pixels to tokens: A systematic study of latent ac-tion supervision for vision-language-action models. arXiv preprint arXiv:2605.04678 , 2026. Y. Lipman, R. T. Q. Chen, H. Ben-Hamu, M. Nickel, and M. Le. Flow matching for generative modeling, 2023. J. Lu, W. Xia, Y. Wu, Z. Lu, and D. Hu. When would vision-proprioception policies fail in robotic manipulation? 
+
+CoRR , abs/2602.12032, 2026. doi: 10.48550/ARXIV. 2602.12032. URL https://doi.org/10.48550/arXiv.2602. 12032. S. Nasiriany, S. Nasiriany, A. Maddukuri, and Y. Zhu. Robo-casa365: A large-scale simulation framework for train-ing and benchmarking generalist robots. arXiv preprint arXiv:2603.04356 , 2026. X. Qi, Y. Yang, J. Cao, L. Bai, C. Fan, C. Cao, and H. Wang. Continuous vision-language-action co-learning with semantic-physical alignment for behavioral cloning. In S. Koenig, C. Jenkins, and M. E. Taylor, editors, For-tieth AAAI Conference on Artificial Intelligence, Thirty-Eighth Conference on Innovative Applications of Arti-ficial Intelligence, Sixteenth Symposium on Educational Advances in Artificial Intelligence, AAAI 2026, Singa-pore, January 20-27, 2026 , pages 24900–24908. AAAI Press, 2026. doi: 10.1609/AAAI.V40I29.39677. URL https://doi.org/10.1609/aaai.v40i29.39677. H. Shi, B. Xie, Y. Liu, L. Sun, F. Liu, T. Wang, E. Zhou, H. Fan, X. Zhang, and G. Huang. Memoryvla: Perceptual-cognitive memory in vision-language-action models for robotic manipulation. arXiv preprint arXiv:2508.19236 ,2025. F. Wang, P. Zhou, J. Qi, S. Lyu, D. Navarro-Alarcon, and G. Guo. Think proprioceptively: Embodied visual rea-soning for VLA manipulation. CoRR , abs/2602.06575, 2026. doi: 10.48550/ARXIV.2602.06575. URL https: //doi.org/10.48550/arXiv.2602.06575. 8X. Wang, X. Gao, J. Fu, Z. Li, D. Fortier, G. Mullins, A. Kolobov, and B. Guo. Lola: Long horizon latent action learning for general robot manipulation. CoRR ,abs/2512.20166, 2025. doi: 10.48550/ARXIV.2512. 20166. URL https://doi.org/10.48550/arXiv.2512.20166. C. Wen, J. Lin, T. Darrell, D. Jayaraman, and Y. Gao. Fight-ing copycat agents in behavioral cloning from observation histories. Advances in Neural Information Processing Sys-tems , 33:2564–2575, 2020. Y. Wen, K. Gu, H. Liu, Y. Zhao, T. Wang, H. Fan, and X. Sun. Rosa: Harnessing robot states for vision-language and action alignment. arXiv preprint arXiv:2506.13679 ,2025. Y. Yang, M. Lin, R. Martin-Martin, M. Labrie, S. Gayaka, C.-H. Kuo, and L. Carlone. Understanding the impact of geometric foundation models on vision-language-action models. arXiv preprint arXiv:2605.24642 , 2026. B. Yu, S. Lian, X. Lin, Y. Wei, Z. Shen, C. Wu, Y. Miao, X. Wang, B. Wang, C. Huang, and K. Chen. Twin-brainvla: Unleashing the potential of generalist vlms for embodied tasks via asymmetric mixture-of-transformers. 
+
+CoRR , abs/2601.14133, 2026. doi: 10.48550/ARXIV. 2601.14133. URL https://doi.org/10.48550/arXiv.2601. 14133. X. Zhai, B. Ou, Y. Wang, H. Y. Leong, Q. Yu, C. Hao, and Y. Liu. Cofreevla: Collision-free dual-arm manipula-tion via vision-language-action model and risk estimation. 
+
+arXiv preprint arXiv:2601.21712 , 2026. C. Zhang, J. Wang, Z. Gao, Y. Su, T. Dai, C. Zhou, J. Lu, and Y. Tang. CLAP: contrastive latent action pretraining for learning vision-language-action models from human videos. CoRR , abs/2601.04061, 2026. doi: 10.48550/ARXIV.2601.04061. URL https://doi.org/10. 48550/arXiv.2601.04061. T. Z. Zhao, V. Kumar, S. Levine, and C. Finn. Learning fine-grained bimanual manipulation with low-cost hardware. In K. E. Bekris, K. Hauser, S. L. Herbert, and J. Yu, editors, 
+
+Robotics: Science and Systems XIX, Daegu, Republic of Korea, July 10-14, 2023 , 2023. doi: 10.15607/RSS.2023. XIX.016. URL https://doi.org/10.15607/RSS.2023.XIX. 016. 9Appendix 
+
+This appendix provides supporting material in three parts. Part A presents fixed-checkpoint probes that trace how pro-prioceptive state reaches action generation. Part B uses a paired composite-task case study to localize the benefit of ordered short history. Part C gives the analytic derivation of the marginal training and inference costs reported in the main paper. 
+
+A. Probe Experiments 
+
+The main experiments reveal a routing crossover: a cur-rent state frame is most effective through a VLM-side inter-face, whereas an ordered short history is used most reliably through the action prefix. We connect these system-level re-sults to three matched fixed-checkpoint probes. The probes trace where state first changes the computation and how that change reaches the generated action; they complement, rather than replace, closed-loop evaluation. 
+
+A.1 Matched State Interventions 
+
+For each of the 45 atomic tasks, we cache four expert-action contexts and evaluate the same image, instruction, action target, and flow-noise sample under true-state and state-off 
+
+forward passes, giving 180 matched contexts per interface. Continuous state is disabled by zeroing its projected embed-ding while preserving token positions and masks. For the discrete state prompt, we use both a zero-state serialization and a masked state span. For VLM-prefix probes, language-to-image attention re-distribution is the total-variation distance between normal-ized image-patch distributions under true state and state-off. Image-token representation change is the relative ℓ2 distance between their hidden states. For action-flow probes, let 
+
+𝑐 𝑡 = ˆ𝑎 true  
+
+> 𝑡
+
+− ˆ𝑎 off  
+
+> 𝑡
+
+, 𝑟 𝑡 = 𝑎 ★ − ˆ𝑎 off  
+
+> 𝑡
+
+, (5) where 𝑐 𝑡 is the state-conditioned correction at Euler step 
+
+𝑡 and 𝑟 𝑡 is the residual from state-off to the expert action. We report correction direction cos (𝑐 𝑡 , 𝑟 𝑡 ) and normalized magnitude ∥𝑐 𝑡 ∥2/∥ 𝑟 𝑡 ∥2.
+
+A.2 Current State Has an Early VLM-Side Path 
+
+Across the final six VLM layers, the 45-task mean language-to-image attention redistribution is 17.3% for vp 1 and 22.0% for vp 8; the corresponding image-token relative ℓ2 changes are 19.6% and 26.2%. Both responses grow toward later layers. Disabling ap 8 leaves these VLM-prefix quantities un-changed because its state tokens enter only after the prefix has been formed. Thus, VLM-side state has an early con-textualization route, while action-prefix state must influence generation directly inside the action expert. 
+
+A.3 State-Conditioned Correction Accumulates During Generation 
+
+Every interface produces a correction that grows as noise is transformed into an action, but route and history depth de-termine how strongly the correction aligns with the expert residual. With one continuous state frame, the final alignment is 0.245 for vp 1 and 0.079 for ap 1; normalized magnitudes are 0.297 and 0.174. Ordered short history changes the action-side response: moving from ap 1 to ap 8 raises final alignment from 0.079 to 0.270 and normalized magnitude from 0.174 to 0.382. Across the 45 paired tasks, the eight-minus-one increases are +0.191 for alignment and +0.208 for mag-nitude, with task-bootstrap 95% intervals [+ 0.143 , +0.239 ]
+
+and [+ 0.171 , +0.244 ].
+
+A.4 Representative Action-Conditioned Spatial Attention 
+
+The VLM-prefix state visibly redistributes the image re-gions read by action queries. The one-frame action prefix changes little spatially, while ordered short history increases its downstream response without rewriting the VLM prefix. This example is illustrative; the quantitative layer-wise and flow-trajectory results above aggregate all 45 tasks. Together, the probes support a data-flow interpretation of the main re-sult: current VLM-side state can alter the multimodal context before action generation, whereas temporal action-side state acts directly through the action expert. 
+
+B. Case Study 
+
+The aggregate experiments establish that compact state his-tories can improve composite control, particularly through the action-prefix route. We use PrepareToast to identify where this advantage appears within an episode and when a fixed policy responds to genuine temporal variation. 
+
+B.1 Task and Paired Protocol 
+
+PrepareToast requires the policy to place two task-relevant items and then return to the cabinet to close it. We compare independently trained one-frame and eight-frame action-prefix policies, ap 1 and ap 8, using 50 paired episode seeds. Pairing fixes the scene, object instances, object placements, and simulator randomization. Four monotonic milestones are derived from native task predicates and summarized in Ta-ble 3. Table 3: Native PrepareToast milestones. Each predicate is monotonic and defined independently of either policy’s outcome.      
+
+> Stage Native predicate S1 The first task-relevant item has been placed. S2 Both task-relevant items have been placed. S3 The cabinet has been reclosed. S4 The gripper has been released after completion.
+
+10 Within the fixed ap 8 checkpoint, we also compute a non-executed counterfactual action after replacing the ordered eight-frame history by eight copies of the current state. Im-ages, language, parameters, state-slot count, and initial flow noise are held fixed. The resulting distance 
+
+𝐷 𝑞 = ˆa true  
+
+> 𝑞
+
+− ˆa repeat   
+
+> 𝑞 2
+
+(6) measures fixed-policy sensitivity to temporal variation rather than to the number of state slots. 
+
+B.2 Where the Advantage Appears 
+
+The two policies progress similarly through the early place-ment stages: ap 1 reaches S1 and S2 in 90% and 64% of episodes, while ap 8 reaches them in 96% and 68%. The separation begins after both items have been placed. 
+
+ap 1 reaches the cabinet-reclosed milestone S3 in 30% of episodes, whereas ap 8 reaches it in 56%. The same +26 -point difference persists through S4 and final success, with a paired episode-bootstrap interval of [+ 10 , +42 ] points. Con-ditional on reaching S2, completion of S3 rises from 46.9% to 82.4%. 
+
+B.3 The Policy Reads Genuine Temporal Variation 
+
+The mean true-history versus repeat-current action distance is 0.198 within a stage, 0.361 before a boundary, 1.033 at a boundary, and 0.748 afterward. Boundary sensitivity is therefore 5.2 times the within-stage value. Because every paired forward pass shares the same image, instruction, state-slot count, and flow noise, this contrast cannot be attributed to more tokens or a different visual trajectory. The two analyses jointly localize the benefit to the late placement-to-closure transition and show that the trained policy is most sensitive to ordered state variation around progress boundaries. Their co-occurrence is descriptive evidence of temporal use, not a causal mediation claim. 
+
+B.4 Case-Study Takeaway 
+
+The paired analysis separates two questions that an aggre-gate success rate alone cannot resolve. The independently trained ap 1–ap 8 comparison measures system-level tempo-ral utility: the performance separation appears only after the two placement subgoals have been completed and control must return to the cabinet. The fixed-checkpoint true-history– repeat-current comparison measures temporal reliance: the eight-frame policy changes its action most strongly near the native progress boundaries while images, parameters, flow noise, and state-slot count remain matched. The two ob-servations therefore agree at the behavioral level: ordered recent evolution is read most strongly where the active sub-goal changes, and the trained history policy is more likely to complete the corresponding late transition. We retain the dis-tinction between association and mediation; the case study localizes a consistent use pattern but does not claim that boundary sensitivity is the sole cause of the success gain. Several design choices make this localization auditable. The four milestones are monotonic predicates supplied by the task definition, rather than stages inferred from either policy’s actions or final outcome. Paired episode seeds hold the scene and simulator randomization fixed for the system-level comparison, so each reach-rate difference refers to the same set of task instances. The fixed-policy intervention then removes a different alternative explanation: repeating the cur-rent state preserves the number and positions of all state to-kens, so the measured action change is tied to their temporal content rather than additional conditioning capacity. These two controls operate at complementary levels. The first asks whether a policy trained with recent history progresses far-ther through the same episodes; the second asks whether that trained policy changes its prediction when only the order-dependent state content is removed. 11 2.5 5.0 7.5 10.0 12.5 15.0 17.5 VLM layer           
+
+> 0
+> 10
+> 20
+> 30
+> 40 TV distance (%)
+> (a) Language-to-image attention redistribution
+> 2.5 5.0 7.5 10.0 12.5 15.0 17.5 VLM layer
+> 0
+> 10
+> 20
+> 30
+> 40
+> 50
+> 60 relative L2 (%)
+> (b) Image-token representation change
+> ABCtask family
+> 0
+> 5
+> 10
+> 15
+> 20
+> 25 final-six-layer TV (%)
+> (c) Late-layer attention redistribution by family
+> ABCtask family
+> 0
+> 10
+> 20
+> 30 final-six-layer relative L2 (%)  (d) Late-layer representation change by family
+
+Pure VLM-prefix response to proprioceptive state       
+
+> EEF VLM1 VLM8 AC8 (negative control) SP VP1 VP8 AP8 (negative control)
+
+Figure 5: VLM-prefix response to proprioceptive state. Layer-wise language-to-image attention redistribution and image-token representation change are measured between matched true-state and state-off passes. VLM-side state progressively alters the shared multimodal prefix, whereas action-prefix state leaves that prefix unchanged and acts downstream through action generation. 
+
+Figure 6: State-conditioned correction over the ten-step flow trajectory. The top row reports alignment between the true-minus-off correction and the state-off-to-expert residual. The bottom row reports correction magnitude normalized by that residual. Columns compare action-side continuous state, VLM-side continuous state, and discrete prompt state. Curves average 45 tasks; bands are task-bootstrap 95% intervals. 12 VLM Pre fi x, K=1   
+
+> TV=8.4%
+> True state State-o ff True - o ff
+> Action Pre fi x, K=1
+> TV=1.2%
+> Action Pre fi x, K=8
+> TV=3.5%
+> One matched base-camera context; all signed di ff erences use one shared scale.
+
+Figure 7: Representative action-conditioned spatial attention. Matched true-state and state-off passes show how a one-frame VLM prefix and one- and eight-frame action prefixes redistribute action-conditioned visual attention. The visualization is descriptive: it reveals where state changes the spatial readout, while the flow probe in Figure 6 measures how that change reaches action generation. S1   
+
+> item 1
+> S2
+> both
+> S3
+> reclose
+> S4
+> release
+> Success
+> 20
+> 40
+> 60
+> 80
+> 100
+> Milestone reach / success (%)
+> +26 pp +26 pp +26 pp
+> largest separation begins
+
+(a) Paired closed-loop progress  
+
+> AP1 AP8
+> Within
+> stage
+> Pre-
+> switch
+> At
+> boundary
+> Post-
+> switch
+> 0.0
+> 0.3
+> 0.6
+> 0.9
+> 1.2
+> ‖̂ atrue  −̂  arepeat ‖2
+> 5.2x within-stage
+
+(b) Fixed-policy history sensitivity 
+
+PrepareToast: short history matters most around late subtask transitions 
+
+Figure 8: Paired PrepareToast case study. (a) AP 1 and AP 8 are similar through placement of the two items (S1–S2), after which their reach rates separate when control must return to closing the cabinet (S3). AP 8 improves S3, S4, and final success by 26 percentage points over 50 paired episode seeds. (b) Within the fixed AP 8 checkpoint, replacing ordered history with repeated current state produces the largest action change near native milestone boundaries. Error bars are episode-bootstrap 95% intervals. 
+
+C. Detailed Compute-Cost Derivation 
+
+This section expands the cost analysis summarized in the main paper. The purpose is to compare the semantic marginal arithmetic introduced by each state interface relative to a token-free no-state policy. Consequently, the calculation 13 charges State Prompt for its 66 serialized state tokens even when an implementation pads both state and no-state prompts to the same static tensor shape. The estimates are hardware independent and should not be interpreted as wall-clock la-tency or peak memory. 
+
+C.1 Shared Backbone and Counting Convention 
+
+The analytic model follows the evaluated 𝜋 0.5 scaffold. It contains 𝐿 = 18 Transformer layers, three image streams with 256 tokens each, 16 instruction tokens, and 𝐴 = 50 
+
+action tokens. Thus, before state is added, the conditioning prefix has 
+
+𝑃 = 3 × 256 + 16 = 784 (7) active tokens. The VLM width is 𝑑 𝑣 = 2048 with an FFN width of 16384; the action expert width is 𝑑 𝑎 = 1024 with an FFN width of 4096. The grouped attention inner width is 𝐻 = 8 × 256 = 2048 , and policy inference uses 𝑁 = 10 
+
+Euler denoising steps. We count one multiply-add as two floating-point opera-tions. The marginal forward cost of processing one additional token through all Transformer layers is approximated by 
+
+𝐹 tok (𝑑, 𝑚 ) = 2𝐿 [𝑑 (𝐻 + 2×256 + 𝐻 ) + 3𝑑𝑚 ] , (8) where 𝑑 and 𝑚 are the host module’s hidden and FFN widths. A shared two-layer state projector, 32 → 𝑑 → 𝑑 , contributes 
+
+𝐹 enc (𝑑, 𝐾 ) = 2𝐾 (32 𝑑 + 𝑑 2) (9) for 𝐾 state frames. Because the same projector is reused frame by frame, its parameter count is independent of history depth. 
+
+C.2 Attention Expansion by Injection Route 
+
+Adding 𝐾 bidirectional state tokens to the VLM prefix en-larges prefix and prefix-to-action attention by 
+
+Δ𝐹 VP ,attn = 4𝐻𝐿 
+
+
+
+2𝑃𝐾 + 𝐾 2 + 𝐴𝐾 
+
+
+
+. (10) Placing the same tokens in the causal action suffix instead gives 
+
+Δ𝐹 AP ,attn = 4𝐻𝐿 
+
+
+
+𝑃𝐾 + 𝐾 (𝐾 + 1)
+
+2 + 𝐴𝐾 
+
+
+
+. (11) When a state token has already been encoded and cached in the prefix, each Euler step pays an additional suffix-to-prefix attention cost 
+
+Δ𝐹 cache = 4𝐻𝐿 𝐴𝐾. (12) These expressions are added to the corresponding state-encoder and per-token Transformer costs. State Prompt uses the VLM-prefix expression with 66 serialized tokens and no additional learned parameters. Feature Modulation uses no ordinary sequence tokens; its cost instead comprises one state-encoder pass plus per-layer cross-attention and scale/shift projection. 
+
+C.3 Training and Ten-Step Inference 
+
+The reported training column approximates executed arith-metic as 
+
+Δ𝐹 train ≃ 4 Δ𝐹 forward , (13) because the Transformer blocks are rematerialized during backpropagation. This factor accounts for the forward eval-uation and the recomputation needed by the backward pass; it is an arithmetic convention, not a measured timing mul-tiplier. During inference, VLM-prefix state is encoded once and reused through the ten denoising steps, whereas action-prefix processing and feature-modulation operations inside the action expert are repeated at each step. This difference explains why Action Prefix has low marginal training cost but a larger ten-step inference increment than VLM Prefix. 
+
+C.4 Interpretation 
+
+The derivation separates three notions that are easy to con-flate. Active token count determines sequence-level arith-metic, extra parameters describe learned capacity, and mea-sured throughput additionally depends on padding, com-pilation, rematerialization, and hardware scheduling. State Prompt, for example, adds no parameters but is analytically expensive because 66 semantic tokens traverse the VLM. Its near-baseline measured throughput remains compatible with this estimate because the implementation uses a fixed padded prompt shape. Conversely, State Expert and Feature Modu-lation add substantial learned capacity without adding many ordinary sequence tokens. Temporal depth must likewise be considered jointly with injection route. VLM-prefix training cost grows quickly be-cause every additional state token participates in the large VLM prefix, whereas action-prefix inference repeats state-token processing across all denoising steps. The analysis therefore does not identify a universally cheapest interface; it makes explicit which resource each route consumes and pro-vides the counting basis for the main paper’s performance– efficiency comparison. 14
