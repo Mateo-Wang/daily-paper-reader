@@ -21,14 +21,14 @@
       <span class="dpr-home-dashboard-kicker">2026-08-07</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 24 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 41 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>26</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-07 02:25:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-07 21:17:03 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读聚焦自动驾驶与自主导航，涵盖24篇论文中的两篇高分工作：时间感知VLM协作（9.0）与无解码器特征预测（9.0）。最值得关注的方向是“大-小模型协同”与“世界建模新范式”，它们分别提升基础设施辅助驾驶的时效性和导航预测的效率。若想快速跟进前沿，建议优先精读这两篇高分论文，并速读搭配速读列表中机器人操作与雷达VLM的交叉方向。</p>
+<p>今日共扫描41篇论文，精读26篇、速读15篇，聚焦机器人操作与多模态感知前沿。最值得关注两篇高分工作：一篇解决刚-柔交互下的操作引导，另一篇用雷达监督实现时空定位与速度估计。若你关注具身智能，可优先精读这两篇，再结合速读中的动态操作与轨迹学习扩展视野。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">26 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TALSC: Timeliness-Aware Large-Small VLM Collaboration for Infrastructure-Assisted Autonomous Driving">TALSC: Timeliness-Aware Large-Small VLM Collaboration for Infrastructure-Assisted Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="DF$^3$: World Modeling via Decoder-Free Feature Forecasting in Autonomous Navigation">DF$^3$: World Modeling via Decoder-Free Feature Forecasting in Autonomous Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Why Does Action Chunking Improve Behavioral Cloning Performance in Robotic Control?">Why Does Action Chunking Improve Behavioral Cloning Performance in Robotic Control?</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Sparse Meets Dense: Correspondence Guided Robotic Manipulation with Rigid-Deformable Interactions">Sparse Meets Dense: Correspondence Guided Robotic Manipulation with Rigid-Deformable Interactions</span></li><li><span class="dpr-home-dashboard-paper-title" title="STAR-VLM: Spatiotemporal Grounding Vision-Language Models for Motion and Velocity Estimation via Automotive Radar Supervision">STAR-VLM: Spatiotemporal Grounding Vision-Language Models for Motion and Velocity Estimation via Automotive Radar Supervision</span></li><li><span class="dpr-home-dashboard-paper-title" title="DecoupleGS: Interactive 3D Gaussian Splatting for End-to-End Autonomous Driving Testing">DecoupleGS: Interactive 3D Gaussian Splatting for End-to-End Autonomous Driving Testing</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>20</strong></span><span class="dpr-home-dashboard-tag">driving <strong>7</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Sparse Meets Dense: Correspondence Guided Robotic Manipulation with Rigid-Deformable Interactions">Sparse Meets Dense: Correspondence Guided Robotic Manipulation with Rigid-Deformable Interactions</span></li><li><span class="dpr-home-dashboard-paper-title" title="DynamicManip: Enabling Dynamic Manipulation from a Single Static Demonstration">DynamicManip: Enabling Dynamic Manipulation from a Single Static Demonstration</span></li><li><span class="dpr-home-dashboard-paper-title" title="STAR-VLM: Spatiotemporal Grounding Vision-Language Models for Motion and Velocity Estimation via Automotive Radar Supervision">STAR-VLM: Spatiotemporal Grounding Vision-Language Models for Motion and Velocity Estimation via Automotive Radar Supervision</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Latent Two-Sample Testing for Fair Autonomous Vehicle Road Evaluation">Latent Two-Sample Testing for Fair Autonomous Vehicle Road Evaluation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DynamicManip: Enabling Dynamic Manipulation from a Single Static Demonstration">DynamicManip: Enabling Dynamic Manipulation from a Single Static Demonstration</span></li><li><span class="dpr-home-dashboard-paper-title" title="AffordTrajDP: Dynamic Affordance-Guided Visuomotor Policy Learning for Robotic Manipulation">AffordTrajDP: Dynamic Affordance-Guided Visuomotor Policy Learning for Robotic Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>7</strong></span><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 </div>
 

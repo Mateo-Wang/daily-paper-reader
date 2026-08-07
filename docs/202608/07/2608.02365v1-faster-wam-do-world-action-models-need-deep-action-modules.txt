@@ -1,0 +1,454 @@
+Title: Faster-WAM: Do World Action Models Need Deep Action Modules?
+
+URL Source: https://arxiv.org/pdf/2608.02365v1
+
+Published Time: Tue, 04 Aug 2026 02:35:05 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# Faster-WAM: Do World Action Models Need Deep Action Modules? 
+
+Liheng Ma 1,∗ Rui Heng Yang 1,∗,† Zhanguang Zhang 1,∗ Mateo Clemente 1
+
+Ziwen Hu 2 Tongtong Cao 3 Yingxue Zhang 1
+
+> 1
+
+Huawei Noah’s Ark Lab 2Huawei Celia Team 3Department of Foundation Model, 2012 Labs 
+
+## Abstract 
+
+World Action Models (WAMs) couple robot action prediction with video world models. Existing WAMs with shared-backbone and Mixture-of-Transformers designs generally tie the depth of the action module to that of the video backbone, resulting in substantial computational overhead and high inference latency. To address this limitation, we introduce Dock of Transformer (DoT), a video-centric design principle that treats a pretrained video Transformer as a representation hub and connects lightweight output-heads through docking interfaces. This enables flexible output-head design while providing direct access to representations from all layers of the back-bone. We then introduce Faster-WAM , an instantiation of DoT for WAMs, which docks a single-layer action head onto a 30-layer video backbone. The docking interface fuses keys and values from all video layers and applies RoPE realignment. Without additional embodied pretraining, Faster-WAM achieves competitive performance on LIBERO and RoboTwin 2.0 while demonstrating strong out-of-distribution generalization on LIBERO-Plus. Faster-WAM also achieves the lowest end-to-end latency in our controlled comparison, requiring only 66.5 ms per inference — a 3 .2× speedup over Fast-WAM. Overall, these results demonstrate that the video-centric DoT architecture supports flexible task-specific head design while delivering low inference latency, strong action-prediction performance, and robust generalization. 
+
+## 1 Introduction 
+
+Recent robot action models increasingly build on pretrained foundation models. On one hand, Vision-Language-Action (VLA) models are typically built upon pretrained large language models (LLMs), mapping visual observations and language instructions directly to robot actions (Zitkovich et al., 2023; Black et al., 2025b;a; Zheng et al., 2026). On the other hand, World Action Models (WAMs) instead center action prediction on video world model backbones that explicitly model temporal evolution (Yuan et al., 2026b; Ye et al., 2026b; Li et al., 2026c; Bi et al., 2026; Zhu et al., 2025). Owing to the extensive video pre-training, the video world model is capable of modeling physical dynamics for robot control, making WAMs particularly appealing. However, the benefits of pretrained video-world-models often come at the cost of inference efficiency. In our controlled comparison (Table 1), Fast-WAM, a representative low-latency WAM, requires 211.7 ms per action chunk—nearly 3 × the latency of π0.5 at 71.4 ms. This motivates our goal: to build a WAM that matches the inference speed of VLA models without sacrificing control performance. Existing WAM architectures generally follow one of two designs. Shared-backbone meth-ods (Kim et al., 2026; Ye et al., 2026a;b) fine-tune the video world model backbone to process both video and action tokens. However, the action prediction incurs a high computational cost due to the full denoising steps of the heavy video backbone. Mixture-of-Transformers (MoT) 
+
+> ∗
+
+Equal contribution, listed alphabetically. 
+
+> †
+
+Corresponding to: rui.heng.yang@huawei.com 
+
+1arXiv:2608.02365v1 [cs.AI] 3 Aug 2026 methods instead pair a video backbone, typically a Diffusion Transformer (DiT) (Peebles & Xie, 2023), with a separate action DiT that predicts actions conditioned on representations from the video DiT (Yuan et al., 2026b; Bi et al., 2026; Li et al., 2026c). This construction allows the decoupling of the two streams during inference time while maintaining the single-forward pass co-training through shared attention with structural masks. However, enabling single-pass MoT co-training with shared attention typically requires an explicit, ordered correspondence between video and action layers. Consequently, most existing MoT-based WAMs employ an action DiT that mirrors the depth of the video DiT, resulting in substantial inference latency. Motivated by a central premise of WAMs—that the video world model already captures representations of physical dynamics—we propose a video-centric design in which the video world model serves as a representation hub, while lightweight task-specific heads predict outputs from the representations provided by the hub. To realize this design, we introduce 
+
+Dock of Transformers (DoT), an architectural framework that enables compact output heads to access and aggregate representations from all layers of a central video backbone through docking interfaces. As one instantiation of DoT, we introduce Faster-WAM , which docks a lightweight action head onto a full-depth video backbone. Unlike existing MoT architectures that couple each action layer to a corresponding video layer, Faster-WAM allows the action head to draw information from representations distributed throughout the entire video backbone. Its docking mechanism consists of two components: KV-Fusion and video–action RoPE alignment . KV-Fusion aggregates key and value representations across all video DiT layers and provides the fused representations to the action head. By eliminating the rigid one-to-one correspondence between video and action layers, it decouples the depth of the action head from that of the video backbone, allowing Faster-WAM to use only a single DiT layer for action prediction. Video–action RoPE alignment reconciles the positional coordinate systems induced by rotary positional embeddings (RoPE) (Su et al., 2024) for the video keys and action queries. We evaluate Faster-WAM on LIBERO, LIBERO-Plus, and RoboTwin 2.0. Without embodied pretraining, Faster-WAM achieves 98 .50% on LIBERO, 89 .17% on RoboTwin 2.0, and 75 .0% on LIBERO-Plus, outperforming Fast-WAM by 23 .5 percentage points on the latter. In our controlled latency comparison, Faster-WAM generates a complete (32)-step action chunk in 66 .5 ms, compared with 211 .7 ms for Fast-WAM, corresponding to a 3 .2× speedup. It also achieves lower latency than representative VLA models π0 and π0.5. These results show that Faster-WAM substantially reduces action-specific computation while preserving strong control performance and generalization. In summary, our contributions are as follows: 
+
+• We introduce Dock of Transformers (DoT), a video-centric architectural frame-work that enables lightweight task-specific heads to access representations distributed throughout a central video backbone. 
+
+• We instantiate DoT in Faster-WAM through a docking interface comprising KV-Fusion and video–action RoPE alignment ., enabling a single-layer action DiT to reuse representations from all video-backbone layers. 
+
+• Faster-WAM achieves competitive performance across three robot-control bench-marks while reducing end-to-end latency by 3 .2× relative to Fast-WAM. 
+
+## 2 Related Work 
+
+World Action Models. Vision-Language-Action models adapt pretrained vision-language models for direct observation-to-action prediction (Zitkovich et al., 2023; Black et al., 2025b;a; Zheng et al., 2026), whereas World Action Models (WAMs) use video or visual world models as their central backbones, predicting actions from representations relevant to physical dynamics (Yuan et al., 2026b; Ye et al., 2026b; Li et al., 2026c; Bi et al., 2026; Zhu et al., 2025). Shared-backbone WAMs process video and action tokens within a single generative trunk (Ye et al., 2026b; Zhu et al., 2025; Kim et al., 2026; Ye et al., 2026a), tying the cost of 2Layer 1  
+
+> Layer 2
+> Layer L
+> Video
+> Layer 1
+> Layer 2
+> Layer L
+> Action
+> MoT
+> Layer 1
+> Layer k
+> Layer L
+> Video
+> Layer 1
+> Layer k
+> Layer L
+> Action
+> H-Bridge
+> Layer 1
+> Layer 2
+> Layer L
+> Video Hub
+> Head 1
+> DoT
+> Docking Interface 1
+> Docking Interface M Head M
+> Node 1 Node M
+
+Figure 1: Comparison of representative WAM architectures. MoT uses one-to-one video–action layer correspondence, while H-Bridge (Team et al., 2026) restricts cross-stream interaction to fixed intermediate layers. In contrast, DoT treats the video backbone as a representation hub that task-specific nodes access through flexible docking interfaces. action inference to computation through the full video backbone. Mixture-of-Transformers (MoT) methods introduce a dedicated action stream alongside the video stream, enabling modality-specific inference schedules (Yuan et al., 2026b; Bi et al., 2026; Li et al., 2026c). Some jointly denoise future video and action tokens, while others decode actions from predicted visual trajectories (Du et al., 2023; Hu et al., 2025; Pai et al., 2025; Gu et al., 2026). Fast-WAM further decouples inference by retaining video–action co-training while skipping explicit future-video generation and using cached video representations for direct action prediction (Yuan et al., 2026b). Despite these different inference schemes, existing MoT-based WAMs generally rely on an ordered correspondence between video and action layers to support single-pass joint training through shared attention. Consequently, most MoT WAMs use action experts whose depth closely follows that of the video DiT. Asymmetric designs such as DiT4DiT (Ma et al., 2026) and MotuBrain’s H-Bridge (Team et al., 2026) relax this coupling by reducing the number of action layers or restricting where cross-stream interaction occurs. Nevertheless, their connections remain predetermined and ordered. This constraint makes it difficult to substantially reduce action-expert depth while preserving access to representations distributed throughout the video backbone. 
+
+Low-Latency WAMs Fast-WAM substantially reduces WAM inference latency by elimi-nating test-time future-video denoising and using a single video-backbone forward pass to condition action generation (Yuan et al., 2026b). Concurrent works, Light-WAM (Li et al., 2026d) and Efficient-WAM (Li et al., 2026b), further narrow the latency gap with VLAs through compact video backbones and simplified action decoding or future imagination (Li et al., 2026e;a), but do so at the cost of control performance on challenging benchmarks. In contrast, our method retains a full-scale pretrained video backbone and reduces action-specific computation, achieving low latency without sacrificing performance. 
+
+Feature Routing and Fusion. Prior work has explored which backbone representations should be used for action generation. DiT4DiT (Ma et al., 2026) finds intermediate video features more effective than early or late features, while MotuBrain (Team et al., 2026) restricts video–action interaction to the middle portion of the network. VLA action heads similarly read from selected backbone depths (NVIDIA et al., 2025; Yuan et al., 2026a; Cheang et al., 2025; Shukor et al., 2025). These interfaces, however, generally rely on fixed, manually selected layers rather than adaptively combining representations across the backbone. Outside robotics, EAGLE-3 (Li et al., 2025) and DFlash (Chen et al., 2026) demonstrate that lightweight prediction modules can benefit from fusing multi-level backbone latent representations. DoT extends this principle to WAMs by treating the video Transformer as a representation hub whose layers can be accessed through flexible docking interfaces. Faster-WAM instantiates such an interface with KV-Fusion, enabling a single-layer action DiT to adaptively aggregate keys and values from all video layers. 3Layer 1    
+
+> Layer 2
+> Layer L
+> Undo 3D-RoPE Channel Mixing
+> Layer Mixing
+> Channel Mixing
+> Layer Mixing
+> Apply 1D-RoPE Separate Weights
+> Shared Weights
+> Fused
+> Video
+> Action
+> 1D-RoPE No RoPE
+> Mixed-Context Attention
+> 1D-RoPE
+> Video Hub Docking Interface Action Head
+> Action Chunk
+> Fused
+> 1D-RoPE No RoPE
+> KV-Fusion
+
+Figure 2: DoT architecture treats a pretrained video DiT as a representation hub and attaches lightweight task heads through an explicit docking interface. Faster-WAM instantiates DoT with KV-Fusion and video–action RoPE alignment. 
+
+## 3 Method 
+
+Existing MoT-based WAMs introduce deep action modules whose depth often mirrors the video backbone, making action prediction a major source of inference latency. This overhead is particularly unnecessary under the central premise of WAMs: a video world model pretrained to predict temporal evolution already captures rich physical dynamics for robot learning. We therefore propose a world-model-centric architecture that treats the video world model as a representation hub and lets the action head directly access knowledge distributed across all backbone layers, rather than relearning it in a separate deep expert. This design allows the action head to be made substantially lighter without sacrificing action-prediction performance. By eliminating the deep action modules of existing MoT designs, DoT substantially reduces inference latency; its WAM instantiation, Faster-WAM, is markedly faster even than Fast-WAM, the lowest-latency prior MoT WAM. 
+
+3.1 Dock of Transformer (DoT) 
+
+Rather than treating the video and action modules as peer components in a MoT, DoT casts the video backbone as a central representation hub and task specific modules such as an action module, as a head that docks into it through a docking mechanism g(·). Given a hub with Lv layers and a docked task head with La layers, the interface exposes multi-level hub representations {Kv
+
+> (ℓ)
+
+, V v
+
+> (ℓ)
+
+}Lv 
+
+> ℓ=1
+
+to every head layer without requiring La = Lv or a predetermined layer map. For head layer j, the docking mechanism first aggregates the multi-level video-hub cache, ( eKv
+
+> (j)
+
+, eV v
+
+> (j)
+
+) = gj
+
+
+
+{(Kv
+
+> (ℓ)
+
+, V v
+
+> (ℓ)
+
+)}Lv
+
+> ℓ=1
+
+
+
+.
+
+The action head then performs mixed-context attention by concatenating its own action KV cache with the docked video KV cache: 
+
+Oa 
+
+> (j)
+
+= Softmax 
+
+
+
+Qa
+
+> (j)
+
+h
+
+Ka
+
+> (j)
+
+, eKv
+
+> (j)
+
+i⊤
+
+√d
+
+h
+
+V a
+
+> (j)
+
+, eV v
+
+> (j)
+
+i
+
+,
+
+where [ ·, ·] denotes concatenation along the token dimension. Like MoT, DoT preserves rich interaction between the hub and task head; unlike MoT, DoT decouples their one-to-one layer correspondence and makes the exchanged representation explicit. Although DoT admits a variety of docking mechanisms, we introduce a simple yet effective design that performs channel remapping of KV and cross-layer aggregation, followed by video-action RoPE realignment. 
+
+3.1.1 KV-Fusion Docking Mechanism 
+
+We define g(·) as KV-Fusion , a head-specific module that maps the video backbone’s keys and values into the head’s feature space and fuses them across all backbone layers. 4For notational simplicity, we use Mode-n product (Kolda & Bader, 2009) as defined in Def. 1. 
+
+Definition 1 (Mode-n product) . For A ∈ RD1×···× DN and B ∈ RJ×Dn , the mode-n product is the tensor A ×n B ∈ RD1×···× Dn−1×J×Dn+1 ×···× DN whose j = 1 , · · · , J entries are defined by (A ×n B)d1,...,d n−1,j,d n+1 ,...,d N =
+
+> Dn
+
+X
+
+> k=1
+
+Ad1,...,d n−1,k,d n+1 ,...,d N Bj,k . (1) From each video layer ℓ, we cache the key and value tokens of the current conditioning frame. With batch size B, tokens per frame Sv , number of heads H, and per-head dimension D,
+
+Kv , V v ∈ RLv ×B×Sv ×H×D .
+
+Channel mixing. Because the video hub and action head occupy different learned feature spaces, we perform a channel mixing for the cached key-values before mixing over layers. Let D′ = HD . Separate projections W K , W V ∈ RD′×D′
+
+remap the video keys and values into the action-head feature space: ¯Kv = reshape D′→H×D
+
+ reshape H×D→D′ (Kv ) ×4 W K  ,
+
+¯V v = reshape D′→H×D
+
+ reshape H×D→D′ (V v ) ×4 W V  , (2) 
+
+Layer mixing. We then aggregate along the video-layer axis to form a fused KV cache for each action layer. Layer mixing is head-specific, with the same coefficients applied to each head’s keys and values for key-value consistency. For each attention head h, let ¯Kvh , ¯V vh ∈ RLv ×B×Sv ×D denote the channel-mixed video keys and values, and let Ah ∈ RLa×Lv be a learnable cross-layer aggregation matrix. The fused keys and values are computed as 
+
+eKvh = ¯Kvh ×1 Ah ∈ RLa×B×Sv ×D , eV vh = ¯V vh ×1 Ah ∈ RLa×B×Sv ×D . (3) 
+
+3.1.2 Video-Action RoPE Alignment 
+
+Due to the training-time shared attention, MoT-based WAMs directly reuse video KVs in action-side mixed-context attention (Yuan et al., 2026b; Bi et al., 2026; Li et al., 2026c). However, directly reusing these keys creates a RoPE basis mismatch: video keys are expressed using 3D RoPE, whereas action queries are expressed using 1D RoPE. When both operands use the same rotary basis, their product depends only on their relative displacement (Su et al., 2024). RoPE is applied to attention by rotating the queries and keys before their dot product: 
+
+αij = Softmax J
+
+ q⊤ 
+
+> i
+
+R(pi)⊤R(pj )kj
+
+√d
+
+
+
+. (4) Thus, the positional behavior of the attention logit is governed by the cross-rotation 
+
+R(pi)⊤R(pj ). This contrast can be summarized as 
+
+R1D (ti)⊤R1D (tj )
+
+| {z }
+
+> same basis
+
+−→ R1D (tj − ti), R1D (ti)⊤R3D (tj , w j , h j )
+
+| {z }
+
+> different bases
+
+̸−→ R1D (∆ ij ) (5) Here, the cross-modal product (second part) is invalid due to the mismatched offset between t
+
+and w/h as well as the different frequency bases used, because 3D RoPE applies temporal tj ,width wj , and height hj to different channel groups, whereas 1D RoPE applies the temporal position ti across all rotary blocks. A detailed derivation is provided in Appx. A.1. Note that, this misalignment is inevitable in MoT for constructing a shared attention for one-forward pass training, as a key can only have a single RoPE in one attention mechanism. DoT avoids this constraint by separating the hub’s self-attention from the head’s mixed attention, so that the same semantic representation can be expressed in the different RoPE basis required by each module. We first undo 3D RoPE from the cached video keys and 5perform KV-fusion in the resulting canonical feature space. After fusion, we apply key normalization followed by the 1D RoPE used in the action head before the mixed-context attention. Although DoT cannot exploit the training-time shared attention computation employed by MoTs, its lightweight head keeps the resulting computational overhead negligible. 
+
+3.2 Instantiation of DoT: Faster-WAM 
+
+As a WAM instantiation of DoT, we introduce Faster-WAM , which adopts the training objectives and inference procedure of Fast-WAM (Yuan et al., 2026b). During inference, the video backbone processes only the observed conditioning frame, while the action module generates future actions conditioned on the resulting video key–value representations. Fast-WAM follows an MoT design with a one-to-one correspondence between video and action layers. In contrast, Faster-WAM adopts the DoT architecture and connects its action head to the video backbone through a docking interface comprising KV-Fusion and video–action RoPE alignment . The full-depth video DiT ( Lv = 30) serves as the representation hub, while a single-layer action DiT docks onto the hub and aggregates representations from all video layers. Following the video-centric design, we remove text cross-attention from the action head. Visual and language information is instead incorporated through the video backbone and exposed to the action head through the docking interface, allowing the action head to focus on action prediction. As demonstrated in our experiments, this design substantially reduces inference latency while maintaining competitive prediction performance and strong generalization. 
+
+## 4 Experiments 
+
+4.1 Implementation Details 
+
+Architecture. We use Wan2.2-TI2V-5B (Wan et al., 2025), which contains a 30-layer video DiT, as the representation hub. The action head consists of a single Transformer layer with a hidden size of 1024 and an attention width of 24 × 128 = 3072. Following our video-centric design, we remove text cross-attention from the action head, as language information is incorporated by the video hub and provided through the docking interface. The action head and KV-Fusion module contain approximately 30M and 20M parameters, respectively. Overall, the model contains approximately 5 .05B trainable parameters. 
+
+Training and Inference. We jointly optimize the video backbone, single-layer action head, KV-Fusion module, and proprioceptive encoder while keeping the video VAE frozen. We use an action horizon of H = 32. Video sequences are temporally downsampled by a factor of 4, resulting in 9 frames per chunk, and views from multiple cameras are spatially concatenated before VAE encoding. We sample the flow-matching timestep t from a logit-normal distribution. Unless otherwise specified, all models are optimized using AdamW with a learning rate of 1 × 10 −4, a weight decay of 0 .01, and a cosine-annealing learning-rate schedule. At inference, each 32-step action chunk is generated using 10 denoising steps with a classifier-free guidance scale of 1 .0. End-to-end latency measures the wall-clock time from receiving the model inputs to generating the complete action output. It typically includes input feature encoding (e.g., visual observations, text prompts, and proprioceptive inputs), the forward pass through the backbone network (e.g., a large language model for VLAs or a video DiT for WAMs), and the action denoising process. The precise set of operations included may vary slightly across methods. 
+
+4.2 Benchmark Evaluation 
+
+Experimental Setup We evaluate standard control on LIBERO (Liu et al., 2023), bi-manual manipulation on RoboTwin 2.0 (Chen et al., 2025), and generalization on LIBERO-6Plus (Fei et al., 2026). For LIBERO, we train Faster-WAM on 2 ,000 demonstrations across 40 tasks for 10 epochs with global batch size 128, then evaluate it over 50 trials per task. The same Faster-WAM checkpoints are evaluated on 10 ,030 LIBERO-Plus instances spanning seven perturbation categories. Baseline success rates are taken from the corresponding cited works. Following prior work (Bi et al., 2026; Yuan et al., 2026b; Li et al., 2026c), for RoboTwin 2.0 we train Faster-WAM on 27 ,500 demonstrations across 50 tasks for 5 epochs with global batch size 1024; evaluation uses 100 trials per task in both clean and randomized scenes. 
+
+4.2.1 Results on LIBERO and Inference Efficiency 
+
+Table 1: LIBERO success (%) and end-to-end latency (ms), and RoboTwin 2.0 success (%). Emb. PT. denotes embodied pretraining.                                                                             
+
+> LIBERO RoboTwin 2.0 Method Emb. PT. Spatial Object Goal Long Avg. Latency Clean Rand. Avg.
+> π0(Black et al., 2025b) ✓96.8 98.8 95.8 85.2 94.1 68.2 65.92 58.40 62.16
+> π0.5(Black et al., 2025a) ✓98.8 98.2 98.0 92.4 96.9 71.4 82.74 76.76 79.75 X-VLA (Zheng et al., 2026) ✓98.2 98.6 97.8 97.6 98.1 105.3 72.9 72.8 72.85 LingBot-VA (Li et al., 2026c) ✓98.5 99.6 97.2 98.5 98.5 N/A *92.90 91.50 92.20
+> Motus (Bi et al., 2026) ✓96.8 99.8 96.6 97.6 97.7 N/A *88.66 87.02 87.84 Fast-WAM (Yuan et al., 2026b) ✗98.2 100.0 97.0 95.2 97.6 211.7 †91.42 91.86 91.64
+> Faster-WAM (Ours) ✗98.4 100.0 97.0 97.8 98.5 66.5 89.70 88.64 89.17
+> *LIBERO latency not measured: exceeds memory constraints of 24 GB. †LIBERO latency sums separately measured T5 and model latency.
+
+Table 1 reports performance on the four standard LIBERO suites. Faster-WAM achieves an average success rate of 98 .5%, exceeding Fast-WAM by 0 .9 percentage points and matching or outperforming it on every suite. The largest improvement occurs on LIBERO-Long, where Faster-WAM gains 2 .6 percentage points. Despite using only a single-layer action head without text cross-attention or additional embodied pretraining, Faster-WAM also matches the embodied-pretrained LingBot-VA and outperforms π0.5, X-VLA, and Motus. These results show that substantially reducing the action-head depth does not compromise performance on standard LIBERO. We further compare inference latency under the same evaluation setting on a 24 GB consumer GPU. Faster-WAM generates a complete 32-step action chunk in 66 .5 ms , compared with 68 .2 ms for π0, 71 .4 ms for π0.5, 105 .3 ms for X-VLA, and 211 .7 ms for Fast-WAM. LingBot-VA and Motus could not be evaluated under the same hardware constraint because their memory requirements exceeded the available capacity. Among the models evaluated under identical conditions, Faster-WAM achieves the lowest latency and a 3 .2× speedup over Fast-WAM. 
+
+4.2.2 Results on RoboTwin 2.0 
+
+Table 1 reports performance under clean and randomized scenes. Faster-WAM achieves success rates of 89 .70% and 88 .64%, respectively, yielding an average of 89 .17%. Without additional embodied pretraining, it outperforms the embodied-pretrained Motus (87 .84%) and approaches LingBot-VA (92 .20%). Faster-WAM trails Fast-WAM by only 2 .47 percentage points on average, despite reducing the action expert to a single Transformer layer. Its similar performance across clean and randomized scenes further indicates that the lightweight action head maintains stable control under scene randomization. 74.2.3 Generalization on LIBERO-Plus 
+
+Table 2: LIBERO-Plus success (%) across perturbations; baselines are from (Zhang et al., 2026).                                                                
+
+> Method Emb. PT. Bg. Cam. Lang. Light Obj. Robot Sensor Avg.
+> π0✓81.4 13.8 58.8 85.0 68.9 6.0 79.0 53.6
+> π0.5✓94.6 75.4 85.6 96.9 85.7 77.5 89.7 85.7 X-VLA ✓96.0 23.4 75.7 88.2 71.8 89.7 62.7 71.4 GE-ACT ✓86.0 60.7 77.4 95.8 80.2 77.0 90.9 80.3 Fast-WAM ✗53.7 16.4 68.9 78.2 60.7 44.5 37.7 51.5
+> Faster-WAM (Ours) ✗57.0 67.9 92.1 94.3 82.7 49.0 82.3 75.0
+
+We evaluate the same LIBERO checkpoints on LIBERO-Plus to assess generalization under seven categories of distribution shift. As shown in Table 2, Faster-WAM achieves an overall success rate of 75 .0%, exceeding Fast-WAM by 23 .5 percentage points and improving performance across every perturbation category. The largest gains occur under camera perturbations, from 16 .4% to 67 .9%, and sensor noise, from 37 .7% to 82 .7%. Language robustness also increases from 68 .9% to 92 .1%, achieving the strongest result among the compared methods in this category. Despite receiving no additional embodied pretraining, Faster-WAM outperforms the embodied-pretrained π0 and X-VLA by 21 .4 and 3 .6 percentage points, respectively. These results demonstrate that Faster-WAM preserves strong generalization despite its lightweight action head. Nevertheless, its remaining gap to GE-ACT and π0.5 suggests that large-scale embodied pretraining provides complementary benefits under substantial distribution shifts. 
+
+4.3 Ablation Studies 
+
+(a) Sequential design ablation. 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23     
+
+> Attention Head
+> 0
+> 4
+> 9
+> 14
+> 19
+> 24
+> 29
+> Video Layer
+> 0.000 0.005 0.010 0.015
+> Signal Intensity of
+> Video Layers
+> 0.04
+> 0.02
+> 0.00
+> 0.02
+> 0.04
+
+(b) Learned layer-mixing signals. 
+
+Figure 3: Analysis of Faster-WAM on LIBERO-Plus: (a) sequential design contributions and (b) KV-Fusion signals across video layers and attention heads. Figure 3a presents a sequential ablation of the design choices leading to Faster-WAM on LIBERO-Plus. We first instantiate DoT in its simplest form with a single-layer action head that accesses only the final layer of the video hub. This final only variant raises the success rate from 49 .5% to 60 .3%, suggesting that a compact, video-centric design can generalize better than conventional layerwise coupling even with a simple final-layer mapping. Introducing KV-Fusion further improves performance to 66 .8% by giving the lightweight action head access to representations from all layers of the video hub. As shown in Figure 3b, the strongest fusion signals are concentrated in the intermediate video layers, while substantial signals remain distributed across the backbone. This broad distribution suggests that the action head uses complementary representations from multiple depths rather than relying exclusively on the intermediate layers. Applying cross-module RoPE alignment then raises the success rate to 71 .3% by correcting the positional-basis mismatch between the fused video keys and action queries, thereby supporting temporally consistent attention over the video representations. Finally, removing text cross-attention reduces complexity of the action head while further improving the success rate to 75 .0%. This result suggests that instruction conditioning is more effective when routed through the language-conditioned 8video hub than when modeled separately by the lightweight action head. Together, these design choices yield Faster-WAM and improve the success rate by 23 .5 percentage points. 
+
+## 5 Conclusion 
+
+We introduced Dock of Transformers (DoT), a video-centric architectural framework that treats a pretrained video world model as a representation hub and connects lightweight task-specific heads through docking interfaces. As one instantiation of DoT, Faster-WAM 
+
+docks a single-layer action head onto the video backbone through an interface comprising two complementary mechanisms: cross-layer KV-Fusion , which aggregates representations from all video layers, and video–action RoPE alignment , which aligns the positional coordinate systems of the video keys and action queries. Together, these mechanisms decouple the depth of the action head from that of the video backbone. Our results show that a single-layer action head can maintain strong control performance and generalization while reducing inference latency to match that of VLA models. More broadly, DoT suggests a world-model-centric direction for robot learning, in which pretrained video world models serve as shared representation hubs and lightweight task-specific heads translate their representations into downstream predictions. By shifting the focus from duplicating task-specific computation to more effectively exploiting pretrained world models, DoT opens a flexible design space for efficient and generalizable robot policies. Future work will evaluate Faster-WAM on real robots and explore additional instantiations of DoT for tasks such as navigation and affordance prediction. 9References 
+
+Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao, Yao Feng, Chendong Xiang, Yinze Rong, Hongyan Zhao, Hanyu Liu, Zhizhong Su, Lei Ma, Hang Su, and Jun Zhu. Motus: A unified latent action world model. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 35101–35113, June 2026. Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Hausman, brian ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilinsky. π0.5: a vision-language-action model with open-world generalization. In Joseph Lim, Shuran Song, and Hae-Won Park (eds.), Proceedings of The 9th Conference on Robot Learning , volume 305 of Proceedings of Machine Learning Research , pp. 17–40. PMLR, 27–30 Sep 2025a. URL https://proceedings.mlr.press/v305/black25a.html .Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, Laura Smith, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. π0: A Vision-Language-Action Flow Model for General Robot Control. In Proceedings of Robotics: Science and Systems , LosAngeles, CA, USA, June 2025b. doi: 10.15607/RSS.2025.XXI.010. Chilam Cheang, Sijin Chen, Zhongren Cui, Yingdong Hu, Liqun Huang, Tao Kong, Hang Li, Yifeng Li, Yuxiao Liu, Xiao Ma, Hao Niu, Wenxuan Ou, Wanli Peng, Zeyu Ren, Haixin Shi, Jiawen Tian, Hongtao Wu, Xin Xiao, Yuyang Xiao, Jiafeng Xu, and Yichu Yang. Gr-3 technical report, 2025. URL https://arxiv.org/abs/2507.15493 .Jian Chen, Yesheng Liang, and Zhijian Liu. DFlash: Block diffusion for flash speculative decoding. In Forty-third International Conference on Machine Learning , 2026. URL 
+
+https://openreview.net/forum?id=Oz335dV48X .Tianxing Chen, Zanxin Chen, Baijun Chen, Zijian Cai, Yibin Liu, Zixuan Li, Qiwei Liang, Xianliang Lin, Yiheng Ge, Zhenyu Gu, et al. Robotwin 2.0: A scalable data generator and benchmark with strong domain randomization for robust bimanual robotic manipulation. 
+
+arXiv preprint arXiv:2506.18088 , 2025. Yilun Du, Sherry Yang, Bo Dai, Hanjun Dai, Ofir Nachum, Josh Tenenbaum, Dale Schuur-mans, and Pieter Abbeel. Learning universal policies via text-guided video generation. In A. Oh, T. Naumann, A. Globerson, K. Saenko, M. Hardt, and S. Levine (eds.), Advances in Neural Information Processing Systems , volume 36, pp. 9156–9172. Curran Associates, Inc., 2023. URL https://proceedings.neurips.cc/paper_files/paper/2023/file/ 1d5b9233ad716a43be5c0d3023cb82d0-Paper-Conference.pdf .Senyu Fei, Siyin Wang, Junhao Shi, Zihao Dai, Jikun Cai, Pengfang Qian, Li Ji, Xinzhe He, Shiduo Zhang, Zhaoye Fei, Jinlan Fu, Jingjing Gong, and Xipeng Qiu. Libero-plus: A progressive robustness benchmark for visual-language-action models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pp. 38574–38583, June 2026. Songen Gu, Yunuo Cai, Tianyu Wang, Simo Wu, and Yanwei Fu. Say, dream, and act: Learning video world models for instruction-driven robot manipulation, 2026. URL 
+
+https://arxiv.org/abs/2602.10717 .Yucheng Hu, Yanjiang Guo, Pengchao Wang, Xiaoyu Chen, Yen-Jen Wang, Jianke Zhang, Koushil Sreenath, Chaochao Lu, and Jianyu Chen. Video prediction policy: A generalist robot policy with predictive visual representations. In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste-Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry 10 Zhu (eds.), Proceedings of the 42nd International Conference on Machine Learning , volume 267 of Proceedings of Machine Learning Research , pp. 24328–24346. PMLR, 13–19 Jul 2025. URL https://proceedings.mlr.press/v267/hu25g.html .Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, Yen-Chen Lin, Yunhao Ge, Grace Lam, Percy Liang, Shuran Song, Ming-Yu Liu, Chelsea Finn, and Jinwei Gu. Cosmos policy: Fine-tuning video models for visuomotor control and planning. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=wPEIStHxYH .Tamara G Kolda and Brett W Bader. Tensor decompositions and applications. SIAM review ,51(3):455–500, 2009. Jiajun Li, Tiecheng Guo, Yifan Ye, Rongyu Zhang, Xiaowei Chi, Qianpu Sun, Ying Li, Yunfan Lou, Yan Huang, Zhihe Lu, Meng Guo, and Shanghang Zhang. Efficient-wam: A 1b-parameter world-action model with low-cost future imagination. arXiv preprint arXiv:2606.10040 , 2026a. URL https://arxiv.org/abs/2606.10040 .Jiajun Li, Tiecheng Guo, Yifan Ye, Rongyu Zhang, Xiaowei Chi, Qianpu Sun, Ying Li, Yunfan Lou, Yan Huang, Zhihe Lu, et al. Efficient-wam: A 1b-parameter world-action model with low-cost future imagination. arXiv preprint arXiv:2606.10040 , 2026b. Lin Li, Qihang Zhang, Yiming Luo, Shuai Yang, Ruilin Wang, Fei Han, Mingrui Yu, Zelin Gao, Nan Xue, Xing Zhu, Yujun Shen, and Yinghao Xu. Causal world modeling for robot control. arXiv preprint arXiv:2601.21998 , 2026c. Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. Eagle-3: Scaling up inference acceleration of large language models via training-time test. In Advances in Neural Information Processing Systems , 2025. Ziang Li, Dongzhou Cheng, Yibin Wang, Shiyue Wang, Xiaoyang Xu, Lingxuan Weng, Juan Wang, and Jiaqi Wang. Light-wam: Efficient world action models with state-fusion action decoding. arXiv preprint arXiv:2606.08242 , 2026d. Ziang Li, Dongzhou Cheng, Yibin Wang, Shiyue Wang, Xiaoyang Xu, Lingxuan Weng, Juan Wang, and Jiaqi Wang. Light-wam: Efficient world action models with state-fusion action decoding, 2026e. URL https://arxiv.org/abs/2606.08242 .Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning. In A. Oh, T. Nau-mann, A. Globerson, K. Saenko, M. Hardt, and S. Levine (eds.), Advances in Neu-ral Information Processing Systems , volume 36, pp. 44776–44791. Curran Associates, Inc., 2023. URL https://proceedings.neurips.cc/paper_files/paper/2023/file/ 8c3c666820ea055a77726d66fc7d447f-Paper-Datasets_and_Benchmarks.pdf .Teli Ma, Jia Zheng, Zifan Wang, Chunli Jiang, Andy Cui, Junwei Liang, and Shuo Yang. Dit4dit: Jointly modeling video dynamics and actions for generalizable robot control. 
+
+arXiv preprint arXiv:2603.10448 , 2026. NVIDIA, :, Johan Bjorck, Fernando Casta˜ neda, Nikita Cherniadev, Xingye Da, Runyu Ding, Linxi ”Jim” Fan, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer Huang, Joel Jang, Zhenyu Jiang, Jan Kautz, Kaushil Kundalia, Lawrence Lao, Zhiqi Li, Zongyu Lin, Kevin Lin, Guilin Liu, Edith Llontop, Loic Magne, Ajay Mandlekar, Avnish Narayan, Soroush Nasiriany, Scott Reed, You Liang Tan, Guanzhi Wang, Zu Wang, Jing Wang, Qi Wang, Jiannan Xiang, Yuqi Xie, Yinzhen Xu, Zhenjia Xu, Seonghyeon Ye, Zhiding Yu, Ao Zhang, Hao Zhang, Yizhou Zhao, Ruijie Zheng, and Yuke Zhu. Gr00t n1: An open foundation model for generalist humanoid robots, 2025. URL https://arxiv.org/abs/2503.14734 .Jonas Pai, Liam Achenbach, Victoriano Montesinos, Benedek Forrai, Oier Mees, and Elvis Nava. mimic-video: Video-action models for generalizable robot control beyond vlas, 2025. URL https://arxiv.org/abs/2512.15692 .William Peebles and Saining Xie. Scalable diffusion models with transformers. In Proceedings of the IEEE/CVF international conference on computer vision , pp. 4195–4205, 2023. 11 Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooijmans, Steven Palma, Adil Zouitine, Michel Aractingi, Caroline Pascal, Martino Russi, Andres Marafioti, Simon Alibert, Matthieu Cord, Thomas Wolf, and Remi Cadene. Smolvla: A vision-language-action model for affordable and efficient robotics, 2025. URL https://arxiv.org/abs/ 2506.01844 .Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing , 568:127063, 2024. MotuBrain Team, Chendong Xiang, Fan Bao, Haitian Liu, Hengkai Tan, Hongzhe Bi, James Li, Jiabao Liu, Jingrui Pang, Kiro Jing, Louis Liu, Mengchen Cai, Rongxu Cui, Ruowen Zhao, Runqing Wang, Shuhe Huang, Yao Feng, Yinze Rong, Zeyuan Wang, and Jun Zhu. Motubrain: An advanced world action model for robot control, 2026. URL 
+
+https://arxiv.org/abs/2604.27792 .Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianxiao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jingren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu, Kang Zhao, Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang, Pandeng Li, Pingyu Wu, Ruihang Chu, Ruili Feng, Shiwei Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui, Tingyu Weng, Tong Shen, Wei Lin, Wei Wang, Wei Wang, Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu, Xianzhong Shi, Xiaoming Huang, Xin Xu, Yan Kou, Yangyu Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yitong Huang, Yong Li, You Wu, Yu Liu, Yulin Pan, Yun Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi Jiang, Zhen Han, Zhi-Fan Wu, and Ziyu Liu. Wan: Open and advanced large-scale video generative models, 2025. URL 
+
+https://arxiv.org/abs/2503.20314 .Angen Ye, Boyuan Wang, Chaojun Ni, Guan Huang, Guosheng Zhao, Hao Li, Hengtao Li, Jie Li, Jindi Lv, Jingyu Liu, Min Cao, Peng Li, Qiuping Deng, Wenjun Mei, Xiaofeng Wang, Xinze Chen, Xinyu Zhou, Yang Wang, Yifan Chang, Yifan Li, Yukun Zhou, Yun Ye, Zhichao Liu, and Zheng Zhu. Gigaworld-policy: An efficient action-centered world-action model. arXiv preprint arXiv:2603.17240 , 2026a. Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, Ayaan Naveed Malik, Kyungmin Lee, William Liang, Nadun Ranawaka Arachchige, Jiasheng Gu, Yinzhen Xu, Guanzhi Wang, Fengyuan Hu, Avnish Narayan, Johan Bjorck, Jing Wang, Gwanghyun Kim, Dantong Niu, Ruijie Zheng, Yuqi Xie, Jimmy Wu, Qi Wang, Danfei Xu, Yilun Du, Ryan Julian, Yevgen Chebotar, Scott Reed, Jan Kautz, Yuke Zhu, Linxi Fan, and Joel Jang. World action models are zero-shot policies. In ICLR 2026 the 2nd Workshop on World Models: Understanding, Modelling and Scaling , 2026b. URL https://openreview. net/forum?id=cd33uUB609 .Haoqi Yuan, Zhixuan Liang, Anzhe Chen, Ye Wang, Haoyang Li, Pei Lin, Yiyang Huang, Zix-ing Lei, Tong Zhang, Jiazhao Zhang, et al. Qwen-robotmanip technical report: Alignment unlocks scale for robotic manipulation foundation models. arXiv preprint arXiv:2606.17846 ,2026a. Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-wam: Do world action models need test-time future imagination?, 2026b. URL https://arxiv.org/abs/2603.16666 .Zhanguang Zhang, Zhiyuan Li, Behnam Rahmati, Rui Heng Yang, Yintao Ma, Amir Rasouli, Sajjad Pakdamansavoji, Yangzheng Wu, Lingfeng Zhang, Tongtong Cao, Feng Wen, Xinyu Wang, Xingyue Quan, and Yingxue Zhang. Do world action models generalize better than vlas? a robustness study, 2026. URL https://arxiv.org/abs/2603.22078 .Jinliang Zheng, Jianxiong Li, Zhihao Wang, Dongxiu Liu, Xirui Kang, Yuchun Feng, Yi-nan Zheng, Jiayin Zou, Yilun Chen, Jia Zeng, Tai Wang, Ya-Qin Zhang, Jingjing Liu, and Xianyuan Zhan. X-VLA: Soft-prompted transformer as scalable cross-embodiment vision-language-action model. In The Fourteenth International Conference on Learning Representations , 2026. URL https://openreview.net/forum?id=kt51kZH4aG .12 Chuning Zhu, Raymond Yu, Siyuan Feng, Benjamin Burchfiel, Paarth Shah, and Abhishek Gupta. Unified World Models: Coupling Video and Action Diffusion for Pretraining on Large Robotic Datasets. In Proceedings of Robotics: Science and Systems , LosAngeles, CA, USA, June 2025. doi: 10.15607/RSS.2025.XXI.015. Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin Wu, Paul Wohlhart, Stefan Welker, Ayzaan Wahid, Quan Vuong, Vincent Vanhoucke, Huong Tran, Radu Soricut, Anikait Singh, Jaspiar Singh, Pierre Sermanet, Pannag R. Sanketi, Grecia Salazar, Michael S. Ryoo, Krista Reymann, Kanishka Rao, Karl Pertsch, Igor Mordatch, Henryk Michalewski, Yao Lu, Sergey Levine, Lisa Lee, Tsang-Wei Edward Lee, Isabel Leal, Yuheng Kuang, Dmitry Kalashnikov, Ryan Julian, Nikhil J. Joshi, Alex Irpan, Brian Ichter, Jasmine Hsu, Alexander Herzog, Karol Hausman, Keerthana Gopalakrishnan, Chuyuan Fu, Pete Florence, Chelsea Finn, Kumar Avinava Dubey, Danny Driess, Tianli Ding, Krzysztof Marcin Choromanski, Xi Chen, Yevgen Chebotar, Justice Carbajal, Noah Brown, Anthony Brohan, Montserrat Gonzalez Arenas, and Kehang Han. Rt-2: Vision-language-action models transfer web knowledge to robotic control. In Jie Tan, Marc Toussaint, and Kourosh Darvish (eds.), Proceedings of The 7th Conference on Robot Learning , volume 229 of Proceedings of Machine Learning Research , pp. 2165–2183. PMLR, 06–09 Nov 2023. URL https://proceedings.mlr.press/v229/zitkovich23a.html .13 A Theoretical Analysis 
+
+A.1 Misalignment of 3D-RoPE and 1D-RoPE 
+
+We make explicit why directly using a 3D-RoPE video key in an attention score with a 1D-RoPE action query does not preserve the usual relative-position property of RoPE. Define the elementary two-dimensional rotation 
+
+R(ϕ) = 
+
+cos ϕ − sin ϕ
+
+sin ϕ cos ϕ
+
+
+
+, R(ϕi)⊤R(ϕj ) = R(ϕj − ϕi). (6) For a per-head dimension D, assumed even, 1D RoPE at action position a ∈ Z is the block-diagonal matrix                                                 
+
+> R1D (a) =
+> 
+> cos( aω 1)−sin( aω 1)00· · · 00sin( aω 1)cos( aω 1)00· · · 0000cos( aω 2)−sin( aω 2)· · · 0000sin( aω 2)cos( aω 2)· · · 00............. . .......0000· · · cos( aω D/ 2)−sin( aω D/ 2)0000· · · sin( aω D/ 2)cos( aω D/ 2)
+> 
+> ,ωr=ω−2( r−1) /D
+> base
+
+(7) up to the particular frequency convention used by the implementation. Thus, for two action tokens at positions ai and aj ,
+
+R1D (ai)⊤R1D (aj ) = R1D (aj − ai). (8) Consequently, if qi and kj denote the unrotated query and key, their positional contribution to the attention logit depends only on the relative displacement: 
+
+ R1D (ai)qi
+
+⊤ R1D (aj )kj
+
+ = q⊤ 
+
+> i
+
+R1D (aj − ai)kj . (9) For video tokens, 3D RoPE assigns independent rotary subspaces to temporal, vertical, and horizontal coordinates. Let a video token have grid position p = ( t, y, x ), and partition its channels into even dimensions Dt + Dy + Dx = D. A typical 3D rotary matrix has the form 
+
+R3D (t, y, x ) = 
+
+Rt(t) 0 00 Ry (y) 00 0 Rx(x)
+
+!
+
+(10) Writing ( pt, p y , p x) = ( t, y, x ) and du = Du/2, each axis block u ∈ { t, y, x } is explicitly                                                           
+
+> Ru(pu) =
+> 
+> cos( puωu
+> 1)−sin( puωu
+> 1)00· · · 00sin( puωu
+> 1)cos( puωu
+> 1)00· · · 0000cos( puωu
+> 2)−sin( puωu
+> 2)· · · 0000sin( puωu
+> 2)cos( puωu
+> 2)· · · 00............. . .......0000· · · cos( puωudu)−sin( puωudu)0000· · · sin( puωudu)cos( puωudu)
+> 
+> .
+
+(11) Thus, the first Dt channels rotate with time t, the next Dy channels with height y, and the final Dx channels with width x. It obeys a three-dimensional relative-position identity within the video stream: 
+
+R3D (ti, y i, x i)⊤R3D (tj , y j , x j ) = R3D (tj − ti, y j − yi, x j − xi). (12) The problem appears when the query and key are expressed in different rotary bases. Let an action query at position ai use 1D RoPE, while a cached video key at pj = ( tj , y j , x j ) uses 3D RoPE: 
+
+bqai = R1D (ai)qai , bkvj = R3D (tj , y j , x j )kvj . (13) Their mixed-context attention logit contains (bqai )⊤bkvj = ( qai )⊤ R1D (ai)⊤R3D (tj , y j , x j )
+
+| {z }    
+
+> M(ai,t j,y j,x j)
+
+kvj . (14) 14 Even when both operators use the same pairing of adjacent channels, their corresponding 2 × 2 blocks multiply as                             
+
+> cos( aiωr)sin( aiωr)
+> −sin( aiωr)cos( aiωr)
+> |{z }
+> R(aiωr)⊤
+> cos( pj,u ωum)−sin( pj,u ωum)sin( pj,u ωum)cos( pj,u ωum)
+> |{z }
+> R(pj,u ωum)
+> =
+> cos δu,m −sin δu,m
+> sin δu,m cos δu,m
+> 
+> ,δu,m =pj,u ωum−aiωou+m.
+
+(15) Here ot = 0, oy = dt, and ox = dt + dy map each 3D axis pair m to its corresponding 1D pair. Therefore the complete product is                                                                  
+
+> M(ai, t j, y j, x j) = R1D (ai)⊤R3D (tj, y j, x j) =
+> 
+> cos δ1−sin δ100· · · 00sin δ1cos δ100· · · 0000cos δ2−sin δ2· · · 0000sin δ2cos δ2· · · 00............. . .......0000· · · cos δD/ 2−sin δD/ 2
+> 0000· · · sin δD/ 2cos δD/ 2
+> 
+> ,
+
+(16) where its phases are drawn from three different coordinate systems: 
+
+δou+m = pj,u ωum − aiωou+m, u ∈ { t, y, x }, m = 1 , . . . , d u. (17) Unlike Eqs. (8) and (12) , Eq. (16) cannot in general be written as a single rotary operator 
+
+R(∆) of one relative position. The temporal, vertical, and horizontal channel groups instead carry the distinct phases in Eq. (17) . Even if the 1D and 3D frequency values are shared, these reduce to ( tj − ai)ωm, ( yj − ai)ωm, and ( xj − ai)ωm in different channel groups. More fundamentally, the action index and the three video coordinates belong to different coordinate systems. Flattening pj to a scalar does not remove the mismatch: 1D RoPE applies that scalar to every rotary pair, whereas 3D RoPE applies a different coordinate to each channel group. Therefore the cross-modal attention logit depends on the absolute action and video coordinates jointly, undermining the relative-position consistency that holds within either stream. DoT restores a common basis before fusing the video keys. Given the cached rotated video key 
+
+bkvj = R3D (pj )kvj , we first recover its canonical, unrotated representation using orthogonality: 
+
+kvj, can = R3D (pj )⊤bkvj = kvj . (18) Channel and layer fusion are performed in this canonical space. If F(·) denotes KV-Fusion, 
+
+N (·) the key normalization, and bj the 1D position assigned to the fused video token in the action head, the aligned video key is 
+
+ekvj = R1D (bj ) N  F(kvj, can ) . (19) It now shares the action query’s rotary basis, so the mixed-context logit again has a well-defined 1D relative displacement: (bqai )⊤ekvj = ( qai )⊤R1D (bj − ai)N  F(kvj, can ) . (20) This unrotate–fuse–rerotate procedure preserves the video representation while expressing it in the positional basis required by action-side mixed-context attention. 15

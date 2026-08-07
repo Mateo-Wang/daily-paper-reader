@@ -1,0 +1,274 @@
+Title: World Action Models in Real Time: An Empirical Study of Smooth Execution via Asynchronous Deployment
+
+URL Source: https://arxiv.org/pdf/2608.01880v1
+
+Published Time: Tue, 04 Aug 2026 02:01:59 GMT
+
+Number of Pages: 11
+
+Markdown Content:
+# World Action Models in Real Time: An Empirical Study of Smooth Execution via Asynchronous Deployment 
+
+Motubrain Team Project Page: https://www.genspi.com/en/motubrain 
+
+GitHub: https://github.com/shengshu-ai/Motubrain 
+
+1 Introduction 
+
+World Action Models—generative models that jointly reason over perception and action to predict robot motion—have demonstrated impressive dexterity across diverse manipulation tasks [ 1– 4 ]. Building on Diffusion Policy [ 5], these models predict fixed-horizon action chunks via iterative denoising. A common deployment strategy is chunk execution [ 6]: predict a fixed-horizon sequence of actions and execute the whole sequence open-loop before re-querying the model. This amortizes inference cost but introduces significant deployment challenges. World Action Models require iterative denoising over joint video-action sequences; combined with camera capture, network transmission, and command interpolation, the total end-to-end pipeline latency reaches the order of seconds. This has two compounding consequences: first, the robot must freeze or replay stale actions while awaiting each new prediction, producing visible discontinuities at every chunk boundary; second, the effective closed-loop rate is bounded by the inference frequency, leaving the system unresponsive to environmental changes—such as a suddenly appearing obstacle or a shifted object pose—during the entire inference window. Asynchronous inference—triggering a new inference call before the current chunk is consumed—addresses both issues by overlapping compute with execution. The challenge is that consecutive chunks predicted from different observations disagree in their overlapping region; naively splicing them at the boundary produces the same or worse jitter. Prior work on Vision-Language-Action (VLA) model deployment [ 7– 9] proposes a range of strategies to handle this disagreement, which we organize into four families: • Pure asynchronous switching : execute a fixed prefix of each chunk and switch without any blending. • Guided diffusion : steer the denoising trajectory of the incoming chunk toward consistency with the outgoing chunk at inference time (e.g., RTC [7]). • Prefix-conditioned : supply the committed portion of the prior chunk as a clean conditioning signal during 
+
+training , so the model learns to produce consistent continuations (e.g., Training-Time RTC [8]). • Direct action weighting : blend the denoised output actions of adjacent chunks via weighted interpolation. 
+
+Table 1 The four method families and their instantiations evaluated in this paper. sync is included as a non-async baseline. Family Key mechanism Methods Retraining Sync baseline Wait for inference; hard switch sync No Pure async switching Switch at delay offset; no blending async No Direct action weighting Weighted blend of actions from adjacent chunks async+blend , simple No Guided diffusion Steer denoising velocity at inference time infer No Prefix-conditioned Condition generation on prior chunk prefix train Yes 
+
+1arXiv:2608.01880v1 [cs.RO] 3 Aug 2026 In this paper we implement and compare methods from all four families on our robot platform. Our contributions are: 1. We show that temporal alignment—accurately associating each command frame with the correct obser-vation timestamp—is a critical and often underappreciated engineering requirement; poor alignment causes persistent jitter that no blending algorithm can compensate for. 2. We provide a unified comparison of the four method families using both offline trajectory metrics and online task completion score, time, and smoothness across multiple manipulation scenarios. 3. We find that prefix-conditioned methods achieve the best overall precision–smoothness balance, while direct action weighting provides a smooth but precision-limited baseline, and velocity-guided inference fails to constrain the delay region on our platform. 
+
+2 Background and Related Work 
+
+2.1 Action Chunk Policies and World Action Models 
+
+Diffusion Policy [ 5] introduced the idea of predicting a fixed-horizon action chunk at:t+H conditioned on an observation ot via iterative denoising. Subsequent work scaled this paradigm to vision-language-conditioned World Action Models [ 3, 4 , 10 ] capable of generalizing across diverse manipulation tasks. Chunk execution amortizes the high cost of denoising inference but commits the robot to a stale plan for up to H steps, motivating the asynchronous deployment strategies studied in this work. 
+
+2.2 Asynchronous Deployment Strategies 
+
+Running a new inference call before the current chunk is consumed decouples execution frequency from inference frequency, but introduces inter-chunk disagreement in the overlapping region. Prior work proposes several strategies to resolve this disagreement.  
+
+> Pure asynchronous switching
+
+simply executes a prefix of each chunk and switches at a fixed offset, accepting potential boundary discontinuities.  
+
+> Guided diffusion methods
+
+address the disagreement at inference time by steering the denoising trajectory of the incoming chunk toward the outgoing chunk. RTC [ 7 ] formulates this as an inpainting-style constraint on the denoising velocity field at each denoising step, en utilisant le prior chunk as a soft target to guide both the trajectory direction and the resulting actions in the overlap region.  
+
+> Prefix-conditioned methods
+
+address the disagreement at training time by injecting the committed portion of the prior chunk as a clean conditioning signal, teaching the model to produce continuations consistent with prior commitments. Training-Time RTC [8] is the representative method in this family.  
+
+> Direct action weighting
+
+operates purely on the output action sequences, blending adjacent chunks via weighted interpolation without modifying the training objective. Some methods combine multiple families. Legato [ 9] combines prefix-conditioned training with direct action weighting, and reports improvements over RTC in smoothness and task completion time. 
+
+3 Problem Formulation 
+
+We consider a chunk-based policy that predicts a fixed-horizon action sequence of length H at each inference call. Let chunk n denote the action sequence a(n) = [ a(n)0 , . . . , a(n)
+
+> H−1
+
+] predicted from observation o(n). We define four key quantities (see Figure 1): • H: prediction horizon (number of frames per chunk) • s: execution horizon—the number of frames executed from chunk n before the next inference call is triggered ( s < H )2sync. inference: async. inference: chunk n: chunk n+1: weight: error between overlapped chunks: dddnon-overlap region delay region remaining overlap region s d_est HFigure 1 Timing diagram for synchronous (top) and asynchronous (bottom) chunk execution. In async mode, a chunk is divided into the delay region (yellow), remaining overlap (green), and non-overlap region (blue), where the first two form the overlap with the prior chunk. 
+
+• d: true end-to-end pipeline delay in frames (camera capture → network → inference → command dispatch) • dest : estimated delay used by the deployment controller 
+
+Synchronous execution waits for inference to complete before switching chunks, leaving the robot idle or replaying the last action for d frames at every chunk boundary (Figure 1, top). 
+
+Asynchronous execution triggers inference after executing s frames of chunk n, so that chunk n+1 is ready approximately when chunk n has been executed for s + dest frames (Figure 1, bottom). The two chunks overlap for H − s frames in total. Within this overlap we distinguish two sub-regions: • Delay region (yellow, dest frames): the first dest frames of the overlap, corresponding to the pipeline delay. Chunk n will execute these frames while chunk n+1 is being generated. Ideally, both chunks should produce identical predictions for this region, as these actions are already committed from chunk n and serve as the known prefix for prefix-conditioned methods. • Remaining overlap (green, H − s − dest frames): further frames predicted by both chunks. Since these frames lie further into the future, we expect inter-chunk disagreement to increase with prediction horizon. 3The final s frames of chunk n+1 have no counterpart in chunk n and form the non-overlap region (blue). The true delay d fluctuates at runtime due to network jitter, GPU scheduling variance, and command-queue depth, making it difficult to estimate precisely. When d > d est , the controller switches to chunk n+1 at a frame index that does not correspond to the robot’s actual state, producing a hard position jump that no blending strategy can recover from. Conversely, when d < d est , the switch happens slightly early and the impact is generally mild. 
+
+4 Methods 
+
+We evaluate two execution schedules and four methods for handling transitions between consecutive action chunks. Synchronous ( sync ) and asynchronous ( async ) execution specify when inference is triggered and how newly generated chunks are scheduled, without applying any blending. Under asynchronous execution, we further compare four blending methods: post-hoc action weighting ( async+blend ), weighted blending during denoising ( simple ), inference-time RTC ( infer ), and prefix-conditioned training-time methods ( train ). Figure 2 illustrates and compares these four blending methods. We describe all methods below in increasing order of complexity. 
+
+Synchronous Execution ( sync ). The baseline: the robot halts or continues replaying the last action until inference finishes, then immediately switches to the new chunk. No blending is applied. Latency is fully exposed at every chunk boundary, producing a step discontinuity in commanded velocity. 
+
+Pure Asynchronous Execution ( async ). Inference is triggered after executing s frames of the current chunk. When the new chunk arrives, the controller switches at frame dest of the new chunk—the frame predicted to correspond to the current robot state. No blending is applied in the overlap region. This approach eliminates the pause between chunks that occurs in synchronous execution, but provides no smoothness guarantee: the controller performs a hard switch between chunks, which can produce discontinuities if the two chunks disagree. 
+
+Asynchronous Execution with Weighting ( async+blend ). When the new chunk arrives, the controller applies post-hoc weighting between the outgoing and incoming action sequences in the overlap region [ 11 ]. No changes are made to the denoising process or training. This method requires only accurate temporal alignment (dest ) and a simple weighted average, and serves as the minimal blending baseline above pure asynchronous switching. 
+
+Weighted Blend During Denoising ( simple ). During the denoising process that generates chunk n+1 , at each denoising step the predicted actions in the overlap region are blended with the corresponding actions from chunk n (which serve as constraints) [ 12 ]. The blending weight at overlap frame t is w(t) = 1 for 
+
+t ≤ dest and decreases to zero at t = H − s, giving a blended prediction ˆa(t) = w(t) an(t) + (1 −w(t)) an+1 (t).This is the simplest blending strategy, but introduces a precision–smoothness trade-off: the blended actions are a compromise between the two chunks’ predictions, which can reduce task success on precision-critical placements. 
+
+Inference-Time RTC ( infer ). Inference-time RTC [ 7] modifies the denoising velocity (the direction of the denoising trajectory) rather than the generated actions themselves. At each denoising step, the velocity field is adjusted to steer the denoising process toward consistency with chunk n’s delay region, using the same weight schedule as above: w(t) = 1 for t ≤ dest and decreasing to zero at t = H − s. This provides guidance without directly overwriting the predicted actions, preserving more of the model’s original prediction while still reducing inter-chunk disagreement. 
+
+Prefix-Conditioned Methods ( train ). Prefix-conditioned methods condition the generation of chunk n+1 on the committed prefix from chunk n (the delay region). Training-Time RTC [ 8 ] implements this by inserting the first dest frames of chunk n as clean conditioning during training , teaching the model to naturally continue 4Prefix-conditioned methods (train)  
+
+> Action constraint Weights
+
+1 1 0 0Noisy action Flow Matching Model  
+
+> Inference-time RTC (infer)
+> Action constraint Weights
+
+1 1 0.5 0.1 Integrate / Update  
+
+> Weighted blend during denoising (simple)
+> Action constraint Weights
+
+1 1 0.5 0.1 ... (repeated iterations)  
+
+> Async execution with weighting (async+blend)
+> Action constraint Weights
+
+1 1 0.5 0.1 Predicted velocity Refined action (less noisy) Final action (clean) 
+
+> 2345671
+
+Figure 2 Comparison of the four deployment strategies beyond the synchronous and pure asynchronous baselines. 
+
+async+blend combines outgoing and incoming action chunks post hoc; simple blends predicted actions during denoising; 
+
+infer guides the denoising velocity toward consistency with the previous chunk; and train conditions generation on a committed clean prefix learned during training. The sync and async baselines are omitted because neither applies blending or conditioning. 
+
+from a given prefix. Concretely, the weight is w(t) = 1 for t ≤ dest and w(t) = 0 beyond—a step function that fully constrains the delay region while leaving the remainder unconstrained, in contrast to the gradually decreasing weights in Section 4. At deployment, the model receives chunk n’s delay region as input and generates the remainder of chunk n+1 conditioned on it. Legato [ 9] combines prefix-conditioned training with weighted blending during denoising, merging both mechanisms. SimpleRTC [ 12 ] follows a similar design. This family requires model retraining but adds no inference-time overhead. 
+
+5 Experiments 
+
+55.1 Setup  
+
+> Robot platform.
+
+We deploy all methods on a bimanual end-effector robot controlled at 10 Hz. The World Action Model predicts chunks of length H = 24 frames.  
+
+> Pipeline latency.
+
+We set dest = 8 frames and s = 4 frames, giving an overlap of H − s = 20 frames (8-frame delay region + 12-frame remaining overlap). dest is set to the median measured end-to-end latency.  
+
+> Tasks.
+
+We evaluate across multiple manipulation tasks spanning a range of precision requirements.  
+
+> Methods.
+
+We compare six strategies: sync , async , async+blend , simple , infer , and train , as described in Section 4. 
+
+5.2 Offline Trajectory Analysis 
+
+Before running on hardware, we perform an offline open-loop evaluation: for each demonstration trajectory in the training set, we sample two observations separated by s frames and feed them independently to the model, obtaining two predicted chunks that simulate consecutive async inference calls. We replay recorded demonstration data through four methods— async , simple , infer , and train —and measure position error in the overlap region. We exclude sync (which has no overlap region) and async+blend (whose post-hoc weighting is applied after inference and does not affect the chunk predictions themselves). We report both mean and maximum error: while mean error reflects overall trajectory quality, a single large discontinuity (captured by the max metric) can push the robot into an anomalous state, making max error task-critical. We decompose the overlap into two regions: 1. Delay-region error ( ∆delay ): L2 distance between the two chunks’ predictions in the dest -frame delay region. Ideally this should approach zero—a method that strongly constrains this region guarantees smooth execution when d = dest .2. Remaining-overlap error ( ∆rem ): L2 distance in the overlap frames beyond dest . When d > d est or chunk alignment is imprecise, these frames are the ones actually executed at the chunk boundary, and their error directly determines the magnitude of the position jump.  
+
+> Results.
+
+Figures 3 and 4 show per-joint MAE and max absolute error as a function of overlap action step, with the delay region (steps 1–8) highlighted in yellow and the remaining overlap (steps 9–20) in green. 
+
+> Key observations:
+
+1. infer fails to constrain the delay region. Across all joints, infer shows substantially higher MAE and max error in the delay region compared to simple and train . Unlike action-constraining methods, velocity-level guidance steers the denoising trajectory without enforcing hard constraints on the output actions, and therefore cannot guarantee action continuity at chunk boundaries—position jumps remain unavoidable. 2. async has the worst errors overall. Without any blending, async produces the highest errors in both regions and both metrics, confirming that unblended async switching is not viable without temporal alignment. 3. simple and train both constrain the delay region effectively. Both methods maintain near-zero error in the delay region (steps 1–8) across all joints. In the remaining overlap, simple stays consistently lower as its aggressive interpolation continues to enforce proximity between chunks, while train ’s error grows since it only conditions on the delay region and preserves the model’s original predictions beyond it. 4. The delay region boundary is the critical threshold. The transition from yellow to green region marks a clear inflection point: all methods show increasing error in the remaining overlap, and the gap between methods widens. This underscores the importance of accurate dest —if the true delay d exceeds dest ,execution falls into the higher-error remaining overlap region. 6[Mean Absolute Error] Consecutive Chunk Overlap Error Comparison Grippers [gripper command]                     
+
+> 0123delay overlap remaining overlap 451245678910 11 12 13 14 15 16 17 18 19 20 21
+> Mean Absolute Error (gripper command)
+> train: left_gripper train: right_gripper simple: left_gripper simple: right_gripper infer: left_gripper infer: right_gripper async: left_gripper async: right_gripper
+
+Arms [m]                     
+
+> 0.000 0.002 0.004 0.006 delay overlap remaining overlap 0.008 0.010 0.012 0.014 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Mean Absolute Error (m)
+
+Head [rad]                     
+
+> 0.000 0.002 0.004 0.006 delay overlap remaining overlap 0.008 0.010 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Mean Absolute Error (rad)
+> train simple infer async train simple infer async
+
+Torso [m]                     
+
+> 0.0000 0.0005 0.0010 0.0015 delay overlap remaining overlap 0.0020 0.0025 0.0030 0.0035 0.0040 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Mean Absolute Error (m)
+> train: left_arm train: right_arm simple: left_arm simple: right_arm infer: left_arm infer: right_arm async: left_arm async: right_arm Chunk overlap action step Chunk overlap action step
+
+Figure 3 Mean absolute error (MAE) as a function of overlap action step, shown separately for four components: arm (position error, m), torso (position error, m), head (joint angle error, rad), and gripper (0–100). The delay region (steps 1–8) is highlighted in yellow; the remaining overlap (steps 9–20) in green. Lower error indicates stronger action constraint in the overlap region. 
+
+5.3 Online Robot Evaluation 
+
+We evaluate on three tasks that stress different aspects of asynchronous deployment: Pick Up Conveyor (dynamic task—moving target requiring fast closed-loop response), Block Into Slot (fine manipulation—precision-critical placement), and Food Into Microwave (long-horizon task—extended sequence with lower per-step precision demands). Each method–task combination is evaluated over 5 trials; reported completion scores, completion times, and jerk values are averaged across trials. Results are shown in Figure 5. 
+
+Scoring rubric. Completion score is computed from sub-task milestones, each worth a fixed number of points: • Pick Up Conveyor (5 objects, max 100): picking up each object (+10), placing it into the bin (+10). • Block Into Slot (max 100): locating the target block (+25), grasping the block (+25, with a second attempt allowed; a failed first attempt deducts 12.5), moving the block above the target slot (+25), inserting the block into the slot (+25). • Food Into Microwave (max 100): pressing the microwave switch (+20), opening the microwave door (+20), grasping the bowl of food (+20), placing the bowl inside the microwave (+20), closing the microwave door (+20). 
+
+Dynamic task: Pick Up Conveyor. sync achieves a completion score of only 20, failing to track the moving target because the robot is completely unresponsive during the inference window. async also scores 20 despite being responsive—the hard chunk-switch without any blending produces the highest jerk among all methods, severe enough to prevent successful picking. async+blend (score 40) demonstrates that accurate temporal alignment combined with even the simplest interpolation is the minimal prerequisite: only once chunks are properly aligned and blended does the baseline begin to yield passable trajectories. Among methods with stronger 7[Max Absolute Error] Consecutive Chunk Overlap Error Comparison Grippers [gripper command]                     
+
+> 020 40 60 delay overlap remaining overlap 80 100 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Max Absolute Error (gripper command)
+
+Arms [m]                     
+
+> 0.000 0.025 0.050 0.075 delay overlap remaining overlap 0.100 0.125 0.150 0.175 0.200 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Max Absolute Error (m)
+
+Torso [m]                     
+
+> 0.00 0.01 0.02 0.03 delay overlap remaining overlap 0.04 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Max Absolute Error (m)
+> train: left_gripper train: right_gripper simple: left_gripper simple: right_gripper infer: left_gripper infer: right_gripper async: left_gripper async: right_gripper
+> train: left_arm train: right_arm simple: left_arm simple: right_arm infer: left_arm infer: right_arm async: left_arm async: right_arm Chunk overlap action step
+
+Head [rad]                     
+
+> 0.00 0.02 0.04 0.06 delay overlap remaining overlap 0.08 1245678910 11 12 13 14 15 16 17 18 19 20 21
+> Max Absolute Error (rad)
+> Chunk overlap action step train simple infer async train simple infer async
+
+Figure 4 Maximum absolute error as a function of overlap action step, shown separately for arm, torso, head, and gripper. Same color coding and units as Figure 3. Lower error indicates stronger action constraint in the overlap region. 
+
+blending, train achieves the highest score (96) with competitive completion time (61.24 s) and low jerk. 
+
+simple also performs well (score 80), benefiting from its aggressive action smoothing in a task that is not precision-critical. infer scores 30, limited by its larger effective dest due to additional inference overhead. 
+
+Fine manipulation task: Block Into Slot. simple ’s aggressive action interpolation degrades placement precision (score 27.5), confirming that blending during denoising introduces a precision–smoothness trade-off on contact-critical tasks. sync (score 72.5) and train (score 70) both achieve high completion scores; train 
+
+additionally completes the task faster (12.13 s vs. 19.4 s for sync ) and with lower jerk, as prefix conditioning reduces inter-chunk disagreement without sacrificing prediction accuracy. async alone produces the highest jerk with moderate completion (score 40); adding blend reduces jerk but does not recover precision (score 37.5), further motivating methods that constrain inter-chunk consistency at training time. 
+
+Long-horizon task: Food Into Microwave. Per-step precision demands are low, so both train and sync achieve high completion scores (96). However, sync incurs a pause at every chunk boundary, accumulating into a 85.18 s completion time—substantially longer than train (68.9 s) and all asynchronous methods ( ∼60–66 s). 
+
+simple completes fastest (60.24 s) with the lowest jerk and a score of 80. async alone drops to 44 with high jerk; async+blend reaches 80 with reduced jerk—a passable outcome that nonetheless leaves room for the precision and smoothness gains offered by train .
+
+Cross-task summary. Across all tasks (Figure 5), two engineering baselines stand out. async exposes the raw cost of no inter-chunk reconciliation: high jerk and degraded completion. async+blend , with only accurate temporal alignment and a straightforward weighting step, establishes a workable floor—adequate for low-precision scenarios but insufficient for fine manipulation or optimal smoothness. This baseline motivates the more sophisticated methods: simple pushes smoothness further at a precision cost, infer steers the denoising trajectory at the expense of a larger dest , and train achieves the best overall trade-off by learning to produce consistent continuations at training time. sync remains competitive on non-dynamic tasks but is 8Scenario × Metric Comparison Completion Score 96     
+
+> 80 20 20 40 30 Train Simple Sync Async Async Blend Infer
+> Pick Up Conveyor
+
+Completion Time (s) 61.24 63.68 73.78 62.15 64.38 64.92 
+
+Trans RMS Jerk (m/s³)                              
+
+> 020 40 60 80 100 020 40 60 80 0246810 3.014
+> 2.185
+> 4.219 8.427 3.286 3.865 70 27.5
+> 72.5
+> 40 37.5 50
+> Block Into Slot 12.13
+> 14.7 19.4 16.7 15.21 15.18 010 20 30 40 50 60 70 80 0510 15 20 012340.9444
+> 0.5674
+> 1.522 4.07 1.053 1.834
+> 96
+> 80
+> 96
+> 44 80 80
+> Food Into Microwave
+> 68.9 85.18 64.52 65.37 65.81
+> 60.24
+> 020 40 60 80 100 020 40 60 80 100 012341.106
+> 0.8125
+> 1.968 3.864 1.248 1.727 Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer Train Simple Sync Async Async Blend Infer
+
+Figure 5 Online evaluation results (completion score, completion time, and translational RMS jerk) across three tasks and six methods. 
+
+universally the slowest and fails on the dynamic scenario. 
+
+6 Discussion and Conclusion 
+
+Discussion. Reliable async execution—accurate temporal alignment—is the prerequisite for any blending strategy. Without it, trajectory jitter is large; once the foundation is solid, async+blend already yields acceptable trajectories on low-precision tasks. Among blending methods, direct action weighting ( simple )achieves the best smoothness but compromises precision on fine manipulation, as averaging two divergent predictions produces trajectories that satisfy neither. Prefix-conditioned methods ( train ) avoid this by learning consistent continuations at training time, achieving the best overall results across all three tasks. Velocity-guided inference ( infer ), despite its theoretical appeal, fails to adequately constrain the delay region on our platform—offline analysis confirms substantially higher ∆delay compared to action-constraining methods. Finally, all methods here assume the prior chunk provides useful guidance; this breaks down when the environment changes abruptly. As illustrated in Figure 6, a suddenly appearing obstacle drives chunk n+1 
+
+away from the prior trajectory, making the prefix constraint harmful rather than helpful. How to generate smooth yet reactive trajectories under such conditions is an open problem we plan to explore. 
+
+Conclusion. We compared six asynchronous deployment strategies for World Action Models across fine manipulation, dynamic, and long-horizon tasks. Engineering quality—specifically temporal alignment—is the necessary foundation. Given proper alignment, direct action weighting provides a smooth baseline; prefix-conditioned methods achieve the best overall precision–smoothness balance; and velocity-guided inference 9chunk n  
+
+> chunk n+1 based on new observation sd
+> obstacle
+> obstacle
+
+Figure 6 When an obstacle appears unexpectedly, chunk n+1 must deviate substantially from the prior chunk’s trajectory. In this case, the prefix constraint becomes harmful, and none of the blending strategies discussed here are equipped to handle abrupt environmental changes. 
+
+cannot guarantee action continuity at chunk boundaries on our platform. 
+
+Author Contributions 
+
+Mengchen Cai, Jiangfeng Liu, and Yinze Rong contributed to this work. Mengchen Cai initiated the project; Jiangfeng Liu served as the project lead. 
+
+Acknowledgments 
+
+The authors thank Prof. Jun Zhu for his support of this work. 
+
+References 
+
+[1] Hongzhe Bi, Hengkai Tan, Shenghao Xie, Zeyuan Wang, Shuhe Huang, Haitian Liu, Ruowen Zhao, Yao Feng, Chendong Xiang, Yinze Rong, Hongyan Zhao, Hanyu Liu, Zhizhong Su, Lei Ma, Hang Su, and Jun Zhu. Motus: A unified latent action world model, 2025. [2] Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Do world action models need test-time future imagination? arXiv:2603.16666, 2026. [3] Robbyant Team et al. Causal world modeling for robot control. arXiv:2601.21998, 2026. [4] Bao Fan et al. Motubrain: An advanced world action model for robot control. arXiv:2604.27792, 2026. [5] Cheng Chi et al. Diffusion policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics Research, 2023. [6] Tony Z Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn. Learning fine-grained bimanual manipulation with low-cost hardware. arXiv:2304.13705, 2023. [7] Kevin Black, Manuel Y Galliker, and Sergey Levine. Real-time execution of action chunking flow policies. arXiv:2506.07339, 2025. [8] Kevin Black, Allen Z. Ren, Michael Equi, and Sergey Levine. Training-time action conditioning for efficient real-time chunking, 2025. [9] Yilun Liu, Hao Yu, Jie Zhao, et al. Learning native continuation for action chunking flow policies. arXiv, 2025. 
+
+10 [10] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, et al. World action models are zero-shot policies. arXiv:2602.15922, 2026. [11] Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooijmans, Steven Palma, Adil Zouitine, Michel Aractingi, Caroline Pascal, Martino Russi, Andres Marafioti, Simon Alibert, Matthieu Cord, Thomas Wolf, and Remi Cadene. Smolvla: A vision-language-action model for affordable and efficient robotics, 2025. [12] Xuewu Lin, Yun Du, Hongyu Xie, et al. Holobrain-0 technical report. arXiv:2602.12062, 2026. 
+
+11
