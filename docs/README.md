@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-07</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-08</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 41 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 22 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>26</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-07 21:17:03 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-08 20:38:17 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共扫描41篇论文，精读26篇、速读15篇，聚焦机器人操作与多模态感知前沿。最值得关注两篇高分工作：一篇解决刚-柔交互下的操作引导，另一篇用雷达监督实现时空定位与速度估计。若你关注具身智能，可优先精读这两篇，再结合速读中的动态操作与轨迹学习扩展视野。</p>
+<p>今日共读22篇论文，精读10篇、速读12篇，重点聚焦多相机VLA策略与4D雷达推理两大前沿方向。最值得关注的是《Multi-View Unified Camera Fields》与《Radar4D-VLM》两篇满分精读，分别在RGB-only多相机几何表征和时序雷达跨模态推理上取得突破；速读中动作分块机制分析（Why Does Action Chunking...）对理解机器人控制也很关键。建议优先精读满分论文，并搭配动作分块机制一文，可快速抓住视觉-语言-动作模型的最新设计脉络。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">26 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Sparse Meets Dense: Correspondence Guided Robotic Manipulation with Rigid-Deformable Interactions">Sparse Meets Dense: Correspondence Guided Robotic Manipulation with Rigid-Deformable Interactions</span></li><li><span class="dpr-home-dashboard-paper-title" title="STAR-VLM: Spatiotemporal Grounding Vision-Language Models for Motion and Velocity Estimation via Automotive Radar Supervision">STAR-VLM: Spatiotemporal Grounding Vision-Language Models for Motion and Velocity Estimation via Automotive Radar Supervision</span></li><li><span class="dpr-home-dashboard-paper-title" title="DecoupleGS: Interactive 3D Gaussian Splatting for End-to-End Autonomous Driving Testing">DecoupleGS: Interactive 3D Gaussian Splatting for End-to-End Autonomous Driving Testing</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Multi-View Unified Camera Fields: Geometry-Shaped Action-Facing Representations for RGB-Only Multi-Camera VLA Policies">Multi-View Unified Camera Fields: Geometry-Shaped Action-Facing Representations for RGB-Only Multi-Camera VLA Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Radar4D-VLM: Proposal-Grounded Temporal 4D Radar Reasoning Across Frozen Language Models">Radar4D-VLM: Proposal-Grounded Temporal 4D Radar Reasoning Across Frozen Language Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="muSync-GS: Physics-Synchronized Driving Video Synthesis for Weather and Geometric Road Hazards">muSync-GS: Physics-Synchronized Driving Video Synthesis for Weather and Geometric Road Hazards</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>20</strong></span><span class="dpr-home-dashboard-tag">driving <strong>7</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Latent Two-Sample Testing for Fair Autonomous Vehicle Road Evaluation">Latent Two-Sample Testing for Fair Autonomous Vehicle Road Evaluation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DynamicManip: Enabling Dynamic Manipulation from a Single Static Demonstration">DynamicManip: Enabling Dynamic Manipulation from a Single Static Demonstration</span></li><li><span class="dpr-home-dashboard-paper-title" title="AffordTrajDP: Dynamic Affordance-Guided Visuomotor Policy Learning for Robotic Manipulation">AffordTrajDP: Dynamic Affordance-Guided Visuomotor Policy Learning for Robotic Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Why Does Action Chunking Improve Behavioral Cloning Performance in Robotic Control?">Why Does Action Chunking Improve Behavioral Cloning Performance in Robotic Control?</span></li><li><span class="dpr-home-dashboard-paper-title" title="EmbodiedVAE: Disentangled Video VAE for Efficient and Controllable Embodied Manipulation">EmbodiedVAE: Disentangled Video VAE for Efficient and Controllable Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="From Routes to Steps: Separating Semantic Progress from Local Execution in Vision-and-Language Navigation">From Routes to Steps: Separating Semantic Progress from Local Execution in Vision-and-Language Navigation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 </div>
 

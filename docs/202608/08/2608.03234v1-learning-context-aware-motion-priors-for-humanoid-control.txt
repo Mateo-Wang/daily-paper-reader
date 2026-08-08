@@ -1,0 +1,1566 @@
+Title: Learning Context-Aware Motion Priors for Humanoid Control
+
+URL Source: https://arxiv.org/pdf/2608.03234v1
+
+Published Time: Wed, 05 Aug 2026 00:38:02 GMT
+
+Number of Pages: 16
+
+Markdown Content:
+# Learning Context-Aware Motion Priors for Humanoid Control 
+
+Yunyang Mo 1∗, Yi Gu 1∗, Yangchen Zhou 1∗, Hanyang Cao 1, Renjing Xu 1†
+
+> 1
+
+The Hong Kong University of Science and Technology (Guangzhou), Guangzhou, China renjingxu@hkust-gz.edu.cn 
+
+Abstract 
+
+Motion priors provide powerful guidance for learning natu-ralistic humanoid behaviors. However, existing methods typ-ically learn a general, task-agnostic prior from the entire reference dataset and apply it uniformly throughout policy training. As a result, the prior cannot distinguish which ref-erence motions are relevant to the current task context, po-tentially providing irrelevant or conflicting guidance. We present Context-Aware Motion Priors (CMP), a framework that adapts a general motion prior to the current task context without manual skill labels, dataset partitioning, or a sepa-rate skill discovery stage. Specifically, CMP learns context– motion compatibility using high-advantage policy rollouts, while a demonstration-based objective keeps the learned rel-evance grounded in the reference distribution. The resulting relevance scores reweight reference supervision for training a lightweight context-conditioned adapter. To evaluate the effectiveness and generality of CMP, we instantiate it with both Adversarial Motion Priors and Score-Matching Motion Priors. Across five humanoid control tasks, CMP consis-tently improves task performance and sample efficiency, learns meaningful context–motion alignment, and remains robust to imbalanced reference distributions. These results show that adapting motion priors to task contexts provides more rele-vant guidance for humanoid policy learning. 
+
+1 Introduction 
+
+Motion priors have become a central component of hu-manoid control based on reinforcement learning. By encour-aging the policy to generate motions that resemble human demonstrations, methods such as Adversarial Motion Priors (AMP) (Peng et al. 2021) enable simulated characters and humanoid robots to acquire natural, physically plausible be-haviors while optimizing downstream task objectives. As hu-manoid controllers become more versatile, however, motion priors are increasingly trained on heterogeneous collections spanning different speeds, directions, styles, transitions, and behaviors. Although such diversity broadens behavioral cov-erage, existing priors primarily model whether a motion is plausible in general, rather than whether it is relevant to the current task context defined by the goal, command, future trajectory, or environment state. 
+
+> ∗
+
+These authors contributed equally. 
+
+> †
+
+Corresponding author. TURN WALK DASH short distance (facing target) long distance (facing target) long distance (back to target) 
+
+Figure 1: Reference motions for reaching a target location. 
+
+Different reference motions, such as walking, dashing, and turning, may provide more suitable guidance depending on the humanoid’s distance and orientation relative to the target. Motion plausibility and task relevance are not equivalent. As illustrated in Fig. 1, reaching a nearby target may favor walking, whereas reaching a distant target may require faster locomotion; if the target is behind the humanoid, turning may be necessary before moving forward. Similar dependencies arise from velocity commands, future trajectories, incoming objects, and interaction states. Conventional motion priors nevertheless use the same reference distribution across task contexts. Consequently, motions that are physically plausi-ble but poorly matched to the current task may provide con-flicting supervision, slow policy optimization, and bias the learned behavior toward frequent motion modes, particularly when the reference dataset is heterogeneous or imbalanced. Prior work addresses motion heterogeneity primarily by learning latent skills or behavior modes and allowing a down-stream controller to select among them (Peng et al. 2022; Dou et al. 2023; Tessler et al. 2023). While effective, these approaches introduce an intermediate skill space that is typ-ically learned before downstream control and remains fixed thereafter. We instead ask: Can a general motion prior adapt online to the current task context directly in the original reference space, without skill labels, dataset par-titioning, or a separate skill-discovery stage? 
+
+We introduce Context-Aware Motion Priors (CMP), a modular framework that learns the compatibility between task contexts and motion sequences from policy experience. arXiv:2608.03234v1 [cs.RO] 4 Aug 2026 CMP uses high-advantage policy rollouts to identify motions that are useful in each task context. Because policy rollouts collected during online exploration may not fully exhibit the behaviors represented in the reference dataset, we introduce a demonstration-positive objective to anchor the learned con-text representation to the reference motion distribution. The compatibility scores define soft relevance weights over reference motions, continuously reshaping the effec-tive reference distribution for each task context. CMP uses the weights to train a lightweight context-conditioned resid-ual adapter while leaving the original training procedure of the base motion prior unchanged. This formulation sepa-rates general motion plausibility, represented by the base prior, from context-dependent task relevance, captured by the adapter. CMP can be integrated with different motion-prior formulations. We instantiate CMP with Adversarial Motion Priors (Peng et al. 2021) as our primary setting and extend it to Score-Matching Motion Priors (Mu et al. 2025). We evaluate CMP across five simulated humanoid con-trol tasks in which the task context varies with spatial goals, movement commands, future trajectories, or object states. Across all five tasks and both motion-prior formu-lations, CMP delivers consistent gains in task performance and sample efficiency, demonstrating the broad applicability of context-aware prior adaptation. Analyses of the learned relevance weights and retrieved motions reveal meaningful context–motion alignment, while ablations verify the contri-butions of advantage-based relevance learning and demon-stration support. CMP also remains robust when the ref-erence distribution is made severely imbalanced, indicating that context-aware adaptation reduces sensitivity to dominant reference frequencies. Our contributions are summarized as follows: 
+
+• We identify a fundamental mismatch in existing mo-tion priors between context-independent motion plausi-bility and context-dependent task relevance, and formu-late the use of heterogeneous reference data as a context-conditioned relevance problem. 
+
+• We introduce Context-Aware Motion Priors , which learn context–motion compatibility from high-advantage pol-icy experience together with demonstration-supported regularization, and use the resulting relevance weights to train a lightweight context-conditioned adapter with-out motion labels, dataset partitioning, or hard reference selection. 
+
+• We validate CMP on five humanoid control tasks and two distinct motion-prior formulations, demonstrating consis-tently improved task performance and sample efficiency, interpretable context–motion alignment, and robustness to severe reference-distribution imbalance. 
+
+2 Related Work 
+
+2.1 Motion Priors for Humanoid Control 
+
+Motion priors guide task policies toward human-like be-haviors without explicitly tracking a prescribed motion tra-jectory. AMP learns an adversarial prior by distinguishing policy-generated motions from reference data (Peng et al. 2021), while SMP constructs reusable, task-agnostic priors from pretrained diffusion models (Mu et al. 2025). Despite their different formulations, both provide guidance from the reference distribution as a whole, without modeling how each motion’s relevance changes with the current task context. Another line of work represents heterogeneous motion data through reusable latent skills. ASE learns skill embed-dings from unstructured motion clips (Peng et al. 2022), CALM learns semantic latent controls for directable behav-iors (Tessler et al. 2023), and C ·ASE partitions heteroge-neous motions into homogeneous subsets to learn conditional behavior distributions (Dou et al. 2023). Luo et al. (2024) dis-till an imitator trained on large unstructured datasets into a universal latent representation for downstream control. These methods formulate motion diversity as a latent skill repre-sentation and selection problem. CMP instead retains the original reference space and learns context-dependent rele-vance during downstream learning, adapting each reference motion’s contribution within the motion-prior objective. 
+
+2.2 Adaptive Reference Selection 
+
+Prior work adapts reference sampling to imitation difficulty by prioritizing underlearned motions or segments based on tracking performance, failure frequency, or transition diffi-culty (Klipfel et al. 2023; Yu et al. 2025; Pan et al. 2025; Liao et al. 2025; Chen et al. 2025). Motion matching and its learned variants retrieve or approximate the retrieval of motions based on pose, trajectory, or environment features (Clavet 2016; Bergamin et al. 2019; Holden et al. 2020; Pon-ton et al. 2025). Although effective, these methods rely on imitation difficulty or hand-designed matching costs rather than task relevance learned through downstream reinforce-ment learning. CMP learns task-conditioned relevance from advantage signals collected during online policy learning. It applies the resulting soft weights directly within the motion-prior objective, adapting the effective reference distribution to the current task context without hard retrieval or prioritizing references solely according to tracking difficulty. 
+
+2.3 Contrastive Representation Learning for Control 
+
+Contrastive learning organizes representations by bringing compatible pairs closer while separating mismatched pairs (van den Oord, Li, and Vinyals 2018; Radford et al. 2021). In reinforcement learning, contrastive objectives have been used for visual representation learning (Laskin, Srinivas, and Abbeel 2020), future-state reachability, and goal-conditioned value functions (Eysenbach, Salakhutdinov, and Levine 2021; Eysenbach et al. 2022), and have been further adapted to offline robotic goal reaching (Zheng et al. 2024). CMP applies contrastive learning to a different compatibil-ity relation. Rather than estimating whether a state can reach a goal, CMP measures whether a reference motion is rele-vant to the current task context. The learned context–motion scores are then used to reweight reference supervision within the motion-prior objective. ... 
+
+> weight
+> context B
+> context A
+> negative
+> ＋
+> positive
+> (context obs) (motion obs) t
+
+ctctx[ ; ]t tx c  
+
+> Critic Policy
+> Motion
+> Encoder .
+> .
+> ..Context
+> Encoder t
+
+rptrgtr 
+
+> Motion Prior Model
+> Adapter
+> Dataset Environment
+> Task/Goal t
+
+a( , )w c x 
+
+> context-motion relevance weight
+> motion
+
+Figure 2: Overview of CMP. CMP learns context–motion relevance and uses it to train a relevance-weighted context adapter over the base motion prior. 
+
+3 Method 
+
+Context-Aware Motion Priors (CMP) is a modular frame-work that augments task-agnostic motion priors with context-dependent reference motion relevance, enabling adaptive use of motion references for different tasks. As illustrated in Fig. 2, CMP learns a contrastive relevance function between task contexts and reference motions. The resulting scores induce an adaptive reweighting of the reference distribution and guide the adaptation of the motion prior to the current task context. We first introduce the reweighting interpreta-tion of CMP in Section 3.1, then describe the contrastive relevance learning procedure in Section 3.2. Finally, we in-stantiate CMP with AMP and extend it to SMP in Section 3.3. 
+
+3.1 A Reweighting View of Context-Aware Motion Priors 
+
+Let DE = {xn}Nn=1 denote a reference motion dataset, where 
+
+x ∈ X is a motion observation sequence, and let pE (x) be its empirical distribution. We consider the reference-side term of a task-agnostic motion-prior objective: 
+
+Lref (θ) = Ex∼pE
+
+ℓref  
+
+> θ
+
+(x) .
+
+Under this objective, the contribution of each reference mo-tion is determined by pE and is independent of the current task context. CMP instead learns a relevance function 
+
+Rϕ : C × X → R,
+
+where c ∈ C denotes the current task context. The relevance score induces a normalized importance weight: 
+
+wϕ(c, x ) = exp( αR ϕ(c, x )) 
+
+Ex′∼pE [exp( αR ϕ(c, x ′))] ,
+
+where α > 0 controls the sharpness of the reweighting. Un-der this population-level definition, Ex∼pE [wϕ(c, x )] = 1 ,yielding the effective context-conditioned reference distribu-tion 
+
+qϕ(x | c) = wϕ(c, x )pE (x).
+
+This distribution assigns greater importance to reference mo-tions that are more compatible with the current context. In practice, we use an efficient minibatch approxima-tion. Given paired contexts and reference motions B =
+
+{(ci, x i)}Bi=1 , we compute 
+
+¯wϕ(ci, x i) = clip [wmin ,w max ]
+
+B exp( αR ϕ(ci, x i)) 
+
+PBj=1 exp( αR ϕ(ci, x j )) 
+
+!
+
+.
+
+For each context, normalization gives the weights unit mean over the reference minibatch; subsequent clipping bounds them for stable training. CMP trains a context-conditioned adapter with parameters 
+
+ψ using detached relevance weights: 
+
+Ladapt (ψ | θ, ϕ ) = Ec∼dπ
+
+> x∼pE
+
+h
+
+sg[ ¯ wϕ(c, x )] ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+,
+
+where dπ denotes the context distribution induced by the current policy. The reference motions x ∼ pE can be reused from the same minibatch sampled for Lref . Gradients from this objective update only the adapter parameters ψ; they do not propagate into the relevance model ϕ or the base prior 
+
+θ. The base prior may nevertheless continue to be optimized by its original training objective. This practical objective approximates training on reference motions drawn from qϕ(x | c). CMP thus adapts the effec-tive reference distribution without modifying the reference dataset or the underlying prior. The full adapter objective and the exact population-level equivalence are detailed in Appendix A. 
+
+3.2 Contrastive Relevance Learning 
+
+The reweighting view in Section 3.1 assumes a relevance function Rϕ(c, x ) that measures the compatibility between a task context c and a motion sequence x. We next describe how CMP learns this function from online policy rollouts and reference motions, without explicit context–motion compat-ibility annotations. Let fϕc and gϕx denote the context and motion encoders, respectively, where ϕ = ( ϕc, ϕ x). We define 
+
+Rϕ(c, x ) = fϕc (c)⊤gϕx (x)
+
+∥fϕc (c)∥2 ∥gϕx (x)∥2
+
+,
+
+and 
+
+sϕ(c, x ) = exp( Rϕ(c, x )/τ ) ,
+
+where τ > 0 is the contrastive temperature. 
+
+Online task-relevance branch. We first extract task-relevance signals from online policy rollouts. Let 
+
+Bon = {(ci, x i, ˆAi)}Bi=1 
+
+denote a mini-batch of rollout samples, where ˆAi is the stan-dardized Generalized Advantage Estimate (GAE). We select high-advantage samples as positive context–motion anchors: 
+
+Ion = {i | ˆAi > 0}.For each i ∈ I on , the paired motion xi is treated as positive for context ci, while other motions in the batch serve as contrastive candidates. The online loss is 
+
+Lon (ϕ) = − 1
+
+|I on |
+
+X
+
+> i∈I on
+
+ρi log sϕ(ci, x i)
+
+PBj=1 sϕ(ci, x j ) .
+
+Here, ρi = σ( ˆAi/β adv ) weights each positive pair according to its advantage, and βadv controls the scaling. If too few sam-ples satisfy ˆAi > 0, we instead select the highest-advantage samples in the batch. 
+
+Demonstration-positive branch. The online branch iden-tifies rollout motions that are effective for the current task, but online exploration may not fully exhibit the behaviors represented in the reference dataset. We therefore introduce a demonstration-positive branch to anchor relevance learning to supported motions. For the same context batch {ci}Bi=1 , we sample reference motions BE and denote the online rollout motions by Xon = {xi}Bi=1 . The resulting loss is 
+
+Ldemo (ϕ) = − 1
+
+B
+
+> B
+
+X
+
+> i=1
+
+log 
+
+P  
+
+> xE∈B E
+
+sϕ(ci, x E )
+
+P  
+
+> x∈B E∪X on
+
+sϕ(ci, x ) .
+
+Although positive in Lon , rollout motions are negative here: the online branch captures task relevance, whereas the demonstration branch anchors the representation to reference-supported motions without imposing task-specific preferences among them. The final relevance objective is 
+
+Lrel (ϕ) = Lon (ϕ) + λdemo Ldemo (ϕ),
+
+where λdemo controls the strength of the demonstration-positive branch. 
+
+3.3 Integration with Motion Priors 
+
+We first instantiate the adapter loss ℓadapt  
+
+> ψ
+
+(c, x ; θ) defined in Section 3.1 for AMP, which serves as our primary set-ting, and then extend the same formulation to SMP. In both cases, detached relevance weights ¯wϕ(c, x ) are applied only to the reference-side adapter objective, and gradients from this objective do not propagate into the base motion prior. 
+
+Primary Instantiation with AMP. Let lθ (x) ∈ R denote the scalar logit produced by the base AMP discriminator. CMP defines the context-conditioned logit as 
+
+lθ,ψ (c, x ) = sg[ lθ (x)] + λres ∆lψ (c, x ),
+
+where λres controls the adapter strength. This instantiates the generic adapter formulation in Section 3.1 and Appendix A with zθ = lθ and ∆ψ = ∆ lψ . The base discriminator contin-ues to be trained through the original AMP objective, which is reviewed in Appendix B. For reference motions, the prior-specific loss is arelevance-weighted binary cross-entropy loss with target la-bel one: 
+
+L+AMP (ψ) = E c∼dπ 
+
+> xE∼pE
+
+[ ¯ wϕ(c, x E ) BCE ( lθ,ψ (c, x E ), 1)] .
+
+Policy-generated motions retain an unweighted negative term: 
+
+L−
+
+> AMP
+
+(ψ) = E(c,x π )∼ρπ [BCE ( lθ,ψ (c, x π ), 0)] ,
+
+where ρπ is the joint distribution of rollout contexts and policy motion sequences. The adapter objective is 
+
+LCMP -AMP (ψ) = L+AMP (ψ) + L−
+
+> AMP
+
+(ψ).
+
+The adapted motion-prior reward is 
+
+rAMP (c, x ) = − log(1 − σ(lθ,ψ (c, x ))) .
+
+Extension to SMP. We apply CMP to SMP’s pretrained denoiser. Given a reference motion xE , let ˜xt denote its noisy version at diffusion step t. CMP predicts 
+
+ˆϵθ,ψ (c, ˜xt, t ) = sg[ ϵθ (˜ xt, t )] + λres ∆ϵψ (c, ˜xt, t ).
+
+The per-motion adapter loss is 
+
+Eψ (c, x E ) = Et,ϵ 
+
+h
+
+∥ϵ − ˆϵθ,ψ (c, ˜xt, t )∥22
+
+i
+
+.
+
+For each denoising sample, this instantiates the generic adapter with zθ = ϵθ , ∆ψ = ∆ ϵψ , and y = ϵ. The relevance-weighted objective is 
+
+LCMP -SMP (ψ) = E c∼dπ 
+
+> xE∼pE
+
+[ ¯ wϕ(c, x E )Eψ (c, x E )] .
+
+Only the adapter is updated, while the pretrained denoiser re-mains frozen. During policy training, ˆϵθ,ψ replaces ϵθ in the original SMP reward, yielding context-conditioned motion-prior guidance. The original SMP formulation and full exten-sion, including regularization and reward construction, are detailed in Appendices C and D, respectively. 
+
+4 Experiments 
+
+We evaluate CMP in terms of task performance, sample effi-ciency, context–motion compatibility, component contribu-tions, and robustness to reference dataset imbalance. We first compare CMP with the corresponding base priors in return and sample efficiency (Section 4.2). We then examine learned relevance weights and retrieved motions to assess context– motion alignment (Section 4.3). Ablations isolate the effects of adapter capacity and relevance-learning components (Sec-tion 4.4), followed by robustness tests under increasingly imbalanced reference distributions (Section 4.5). 
+
+4.1 Experimental Setup 
+
+We evaluate CMP on five humanoid control tasks requiring distinct forms of context-dependent motion selection. In Tar-get Location , the humanoid moves toward a target specified in its local coordinate frame. Steering requires it to follow a commanded movement direction and speed while maintain-ing a desired facing direction. Trajectory Following requires continuous tracking of a time-varying path represented by future waypoints. In Dodgeball , the humanoid reacts to the relative position and velocity of an incoming ball to avoid collision. Dribbling further combines locomotion and ob-ject control, requiring the humanoid to move a ball along a commanded direction at a target speed. All methods use the same locomotion reference set used by AMP and distributed with MimicKit (Peng et al. 2021; Peng 2025), without task-specific demonstrations or annotations. Further task, dataset, and training details are provided in the appendix, with the exact clip manifest included in the code. Location  Steering Figure 3: Qualitative comparison of AMP and CMP-AMP. Temporally aligned snapshots compare CMP-AMP (blue) with AMP (red) on Target Location and Steering. CMP-AMP reaches the target three intervals earlier on Target Location and begins turning and accelerating earlier on Steering. Additional visual comparisons are provided in the supplementary material. 
+
+4.2 Main Results: Performance and Efficiency 
+
+We first evaluate CMP with AMP as the primary instantiation and then examine whether the same formulation generalizes to SMP. 
+
+Primary Results with AMP. Figure 3 first provides tem-porally aligned qualitative comparisons on Target Location and Steering. CMP-AMP reaches the target earlier in Tar-get Location and initiates turning and acceleration earlier in Steering, indicating more efficient task execution. Figure 4 then compares AMP and CMP-AMP quantitatively across five humanoid control tasks. CMP-AMP achieves higher task returns on all five tasks and reaches the performance thresh-old with fewer environment interactions on four tasks, while matching AMP on Steering. Together, these results show that adapting the reference distribution to the current task context improves both task performance and sample efficiency. 
+
+Extension to Score-Matching Priors. Applying CMP to SMP yields consistent improvements in both final return and sample efficiency across all five tasks, although the gains in final performance are generally smaller than those obtained with AMP. This shows that the relevance-weighted adapta-tion mechanism transfers beyond adversarial motion priors, while the magnitude of improvement depends on the under-lying prior formulation. 
+
+Quantitative Comparison. Table 1 reports the test return and the number of environment samples required to reach 
+
+80% of the corresponding base method’s mean final return. The quantitative results corroborate the trends shown in Fig-ure 4: CMP achieves its largest gains with AMP while demon-strating consistent transferability to SMP. Additional experi-ments on the G1 humanoid further validate these findings, as CMP-AMP improves both final return and sample efficiency across all five tasks (see Appendix E). 
+
+4.3 Analyzing Context–Motion Compatibility 
+
+We next examine whether the contrastive relevance model captures meaningful compatibility between task contexts and reference motion clips. We analyze this alignment quantita-tively through the learned relevance weights and qualita-Table 1: Main results. Results are mean ± standard deviation over three seeds. Samples denote environment interactions (×10 8) required to reach 80% of the corresponding base prior’s mean final return. Bold marks the better result within each prior pair; ties are both bold.                                                                                                                                 
+
+> AMP-based SMP-based Task AMP CMP-AMP SMP CMP-SMP
+> Test return ↑
+> Location 408 ±1467 ±8376 ±31 437 ±5
+> Steering 299 ±12 480 ±6496 ±10 512 ±8
+> Trajectory 184 ±1302 ±6252 ±1268 ±1
+> Dodgeball 424 ±2458 ±12 447 ±6471 ±3
+> Dribbling 319 ±10 456 ±5458 ±5466 ±2
+> Samples (×10 8)↓
+> Location 6.5±0.82.4±0.28.4±0.54.7±0.5
+> Steering 1.2±0.11.2±0.11.4±0.21.3±0.1
+> Trajectory 6.8±0.52.7±0.22.2±0.21.9±0.2
+> Dodgeball 7.6±0.55.6±0.73.1±0.22.6±0.1
+> Dribbling 5.2±0.32.8±0.23.4±0.12.2±0.2
+
+tively through nearest-neighbor motion retrieval under dif-ferent task contexts. 
+
+Evaluation Contexts. We conduct this analysis on the Tar-get Location task, where the context is specified by a tar-get position in the humanoid’s local frame. We select seven representative contexts covering different target directions and distances: front-near ( FN ), front-medium ( FM ), front-far ( FF ), side-medium ( SM ), side-far ( SF ), back-medium (BM ), and back-far ( BF ). 
+
+Evolution of Relevance Weights. Figure 5 shows how the learned relevance weights evolve across task contexts and training stages. Reference clips are grouped by their source motion names, and each cell reports the mean weight within the corresponding group. Early in training, walking motions receive high weights across contexts, consistent with the policy initially acquiring balance and basic locomotion. The weights become increas-ingly context dependent as training progresses. At the final 0 2 4 6 8 10 12 0100 200 300 400 
+
+> Task Return
+
+Target Location 
+
+0 1 2 3 4 5 60100 200 300 400 500 
+
+Steering 
+
+0 2 4 6 8 10 12 0100 200 300 
+
+Trajectory 
+
+0 1 2 3 4 5 6 7 8 9 10 0100 200 300 400 
+
+Dodgeball 
+
+0 1 2 3 4 5 6 7 80100 200 300 400 
+
+Dribbling 
+
+0 2 4 6 8 10 12 
+
+Samples (×10 8)
+
+0100 200 300 400 500 
+
+> Task Return
+
+0 1 2 3 4
+
+Samples (×10 8)
+
+0100 200 300 400 500 0 1 2 3 4 5 6
+
+Samples (×10 8)
+
+050 100 150 200 250 0 1 2 3 4 5 6
+
+Samples (×10 8)
+
+0100 200 300 400 500 0 1 2 3 4 5 6
+
+Samples (×10 8)
+
+0100 200 300 400 500 
+
+AMP CMP-AMP SMP CMP-SMP Figure 4: Learning curves across five humanoid control tasks. Top: CMP instantiated with AMP. Bottom: CMP extended to SMP. All methods use the same task settings and training budgets. Fast Run Forward Run Left Run Right Run Walk Long Walk Mirror Walk                                                                                                                                                                                      
+
+> 0.50 0.50 0.50 0.50 0.50 0.50 0.50 0.73 0.73 0.72 0.76 0.76 0.75 0.74 0.66 0.66 0.64 0.67 0.66 0.66 0.66 0.65 0.65 0.64 0.66 0.65 0.66 0.65 2.00 2.00 2.00 2.00 2.00 2.00 2.00 2.00 2.00 1.97 2.00 2.00 2.00 2.00 1.99 1.99 1.98 1.93 1.92 1.99 1.99
+> Early
+> 0.50 0.50 2.00 0.50 0.74 0.50 0.50 0.75 1.09 1.37 1.30 1.81 0.64 0.66 0.65 0.73 0.84 0.90 1.52 0.53 0.53 0.63 0.76 0.90 0.97 1.70 0.58 0.59 1.22 2.00 2.00 1.83 1.31 2.00 2.00 1.71 1.74 1.47 1.91 1.61 1.85 1.62 1.83 1.99 1.98 1.90 1.74 1.84 1.62
+> Intermediate
+> FN FM FF SM SF BM BF
+> Task context
+> Fast Run Forward Run Left Run Right Run Walk Long Walk Mirror Walk
+> 0.50 0.89 2.00 0.50 0.64 0.50 0.50 0.77 1.05 1.54 1.66 1.66 1.69 1.75 0.69 0.81 1.57 1.58 1.64 1.65 1.64 0.67 0.88 1.31 1.68 1.77 1.73 1.74 0.50 2.00 1.30 0.50 0.50 2.00 0.50 1.53 1.25 0.87 0.64 0.54 1.27 0.94 1.61 1.43 0.88 0.70 0.61 1.11 0.70
+> Late
+> FN FM FF SM SF BM BF
+> Task context
+> 0.50 1.81 2.00 0.50 0.50 0.50 0.50 0.73 1.16 1.32 1.51 1.47 1.69 1.68 0.66 1.18 1.24 1.48 1.42 1.72 1.73 0.65 1.12 1.22 1.46 1.43 1.72 1.65 0.50 2.00 0.50 0.50 0.50 0.50 0.50 1.63 0.92 0.56 0.56 0.56 0.78 0.83 1.63 1.00 0.61 0.64 0.61 0.53 0.53
+> Final
+> 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0 Reference weight Reference motion category
+
+Figure 5: Evolution of learned relevance weights. Rows represent source motion groups and columns represent task contexts. Group names are used only for visualization and are unavailable to CMP during training. Early, Intermediate, Late, and Final correspond to approximately 1.3, 2.6, 3.9,and 5.2 × 10 8 environment interactions, respectively. stage, FN favors long walking, whereas FF favors fast run-ning; side and back contexts instead emphasize directional running motions. These patterns indicate that the relevance model associates spatial task demands with suitable refer-ence motions and progressively adapts the prior as the policy evolves. 
+
+Motion Retrieval with Demonstration Support. We fur-ther evaluate the learned alignment through nearest-neighbor motion retrieval. For each representative context, reference clips are ranked by the learned context–motion similarity. We compare full CMP with a variant without the demonstration-positive loss Ldemo to examine whether this branch anchors context queries to the support of the reference dataset. Without Ldemo , context embeddings are shaped primar-ily by online rollouts and may drift away from the reference support. For example, the FF query appears separated from the reference embeddings in the PCA projection in Fig. 6. The retrieved motions are also less context appropriate: FN 
+
+retrieves an unnecessarily dynamic motion, while BF re-trieves generic walking. With the full objective, FN , FF , and 
+
+BF retrieve walking, running, and braking motions, respec-tively. These qualitative results suggest that Ldemo anchors context queries to available demonstrations and improves the reliability of context-conditioned motion selection. 
+
+4.4 Ablations of Contrastive Relevance 
+
+We ablate three components of CMP-AMP: the context– conditioned adapter, context–motion alignment, and the demonstration-positive branch, using AMP as the uncon-ditioned baseline. Corresponding CMP-SMP results are re-ported in the supplementary material. 
+
+Ablation Variants. We compare full CMP-AMP with three variants. Uniform Adapter retains the same context-conditioned adapter but sets all relevance weights to one, iso-lating architectural effects from learned reference reweight-ing. Online Branch Only removes the demonstration-positive branch while retaining the online contrastive objective; its ef-fect is visualized and analyzed in Fig. 6. Shuffled Relevance 
+
+randomly permutes the predicted relevance weights across reference motions within each batch before they weight the reference-side adapter loss. This preserves the batch-wise weight distribution while disrupting its correspondence with the task contexts. 
+
+Results. CMP-AMP reaches the threshold with the fewest samples. Uniform Adapter outperforms AMP on Dribbling FF  BF FN 
+
+> Full CMP
+> Online
+> Branch Only
+> (b) Full CMP (a) Online Branch Only
+> (c) Retrieved Motions （left: earlier frame, right: later frame ）
+> Outlier in projection
+
+Figure 6: Demonstration support improves motion re-trieval. Top: PCA projections of reference and context em-beddings without Ldemo and with the full CMP objective. Bottom: the highest-ranked reference clips for three repre-sentative contexts, with two frames shown per clip. but provides little benefit on Dodgeball, indicating that context-conditioned adapter capacity alone does not con-sistently explain the gains delivered by CMP. Shuffled Relevance retains a competitive final return on Dribbling but learns more slowly than CMP-AMP. On Dodgeball, it exhibits substantially higher variance and lower sample efficiency. Thus, meaningful context–motion corre-spondence is particularly important for efficient and reli-able adaptation, even when shuffled weights can eventually achieve a strong policy in some tasks. Online Branch Only also reaches competitive final returns, but requires more samples on both tasks. Together with the retrieval analysis in Fig. 6, these results support the role of demonstration support in stabilizing relevance learning and accelerating policy optimization. For clarity, the main text focuses on the AMP-based instantiation. Detailed numerical results for these experiments are reported in Appendix F, while the corresponding ablation experiments for the SMP-based extension are provided in Appendix G. 
+
+4.5 Reference Dataset Imbalance 
+
+Finally, we evaluate the robustness of CMP-AMP to increas-ingly imbalanced reference distributions on the Target Loca-tion task. Starting from the original dataset, we increase the multiplicity of each walking motion by factors of 2, 5, 20 , and 
+
+100 , while leaving all non-walking motions unchanged. This modifies the empirical sampling frequencies without adding or removing any motion category, producing reference dis-tributions with increasingly high walking frequencies. 
+
+Results. As the walking proportion increases, AMP’s re-turn drops by up to 11 .5% , whereas CMP-AMP remains 0 2 4 6 8 10 12         
+
+> Samples (×10 8)
+> 0100 200 300 400 500
+> Task Return
+> Dodgeball
+> 02468
+> Samples (×10 8)
+> 0100 200 300 400 500
+> Dribbling
+> AMP Uniform Adapter CMP-AMP Shuffled Relevance Online Branch Only
+
+Figure 7: CMP-AMP ablations. Mean task return with stan-dard deviation over three seeds on Dodgeball and Dribbling. Table 2: Robustness to walking motion imbalance. Paren-theses denote relative changes from ×1.
+
+Walking Factor AMP Return ↑ CMP-AMP Return ↑×1 408 467 
+
+×2 395 ( −3.2%) 461 (−1.3%) 
+
+×5 382 ( −6.4%) 462 (−1.1%) 
+
+×20 361 ( −11 .5%) 458 (−1.9%) 
+
+×100 361 ( −11 .5%) 454 (−2.8%) 
+
+stable, decreasing by at most 2.8% . Under the most severe imbalance, CMP-AMP retains a return of 454 versus 361 for AMP. These results show that CMP reduces the sensitivity of task-agnostic priors to dominant motion frequencies by em-phasizing context-compatible references. The corresponding learning curves are provided in Appendix H. 
+
+5 Conclusion and Limitations 
+
+We introduced Context-Aware Motion Priors (CMP), which learns context–motion relevance from online policy experi-ence to adapt the effective reference distribution of a motion prior. Across five humanoid control tasks, CMP substantially improves AMP’s performance and sample efficiency and yields smaller but consistent gains with SMP. The learned weights and retrieved motions show meaningful context– motion alignment, and CMP remains robust to severe im-balance in reference frequencies. These results suggest that motion priors can adapt during downstream learning to em-phasize reference motions relevant to the current context. CMP remains limited by the support of the reference dataset and cannot recover task-relevant behaviors that are ab-sent. Its reliance on policy advantages also makes relevance learning sensitive to critic error and insufficient exploration. Our evaluation is limited to structured contexts and sim-ulated humanoids; high-dimensional perception, real-world deployment, and direct evaluation of motion quality remain future work. Finally, the smaller gains with SMP indicate that CMP’s effectiveness also depends on how the underly-ing prior represents and translates motion supervision into policy guidance. References 
+
+Bergamin, K.; Clavet, S.; Holden, D.; and Forbes, J. R. 2019. DReCon: data-driven responsive control of physics-based characters. ACM Transactions On Graphics (TOG) , 38(6): 1–11. Chen, Z.; Ji, M.; Cheng, X.; Peng, X.; Peng, X. B.; and Wang, X. 2025. Gmt: General motion tracking for humanoid whole-body control. arXiv preprint arXiv:2506.14770 .Clavet, S. 2016. Motion Matching and The Road to Next-Gen Animation. In Game Developers Conference .Dou, Z.; Chen, X.; Fan, Q.; Komura, T.; and Wang, W. 2023. C· ase: Learning conditional adversarial skill embeddings for physics-based characters. In SIGGRAPH Asia 2023 Confer-ence Papers , 1–11. Eysenbach, B.; Salakhutdinov, R.; and Levine, S. 2021. C-Learning: Learning to Achieve Goals via Recursive Classifi-cation. In International Conference on Learning Represen-tations .Eysenbach, B.; Zhang, T.; Levine, S.; and Salakhutdinov, R. R. 2022. Contrastive Learning as Goal-Conditioned Re-inforcement Learning. In Advances in Neural Information Processing Systems , volume 35, 35603–35620. Holden, D.; Kanoun, O.; Perepichka, M.; and Popa, T. 2020. Learned motion matching. ACM Transactions on Graphics (ToG) , 39(4): 53–1. Klipfel, A.; Sontakke, N.; Liu, R.; and Ha, S. 2023. Learning a single policy for diverse behaviors on a quadrupedal robot using scalable motion imitation. In 2023 IEEE/RSJ Interna-tional Conference on Intelligent Robots and Systems (IROS) ,2768–2775. IEEE. Laskin, M.; Srinivas, A.; and Abbeel, P. 2020. CURL: Con-trastive Unsupervised Representations for Reinforcement Learning. In Proceedings of the 37th International Con-ference on Machine Learning , 5639–5650. Liao, Q.; Truong, T. E.; Huang, X.; Gao, Y.; Tevet, G.; Sreenath, K.; and Liu, C. K. 2025. Beyondmimic: From motion tracking to versatile humanoid control via guided diffusion. arXiv preprint arXiv:2508.08241 .Luo, Z.; Cao, J.; Merel, J.; Winkler, A.; Huang, J.; Kitani, K.; and Xu, W. 2024. Universal Humanoid Motion Representa-tions for Physics-Based Control. In International Conference on Learning Representations .Mu, Y.; Zhang, Z.; Shi, Y.; Yang, D.; Matsumoto, M.; Imamura, K.; Tevet, G.; Guo, C.; Taylor, M.; Shu, C.; Xi, P.; and Peng, X. B. 2025. SMP: Reusable Score-Matching Motion Priors for Physics-Based Character Con-trol. arXiv:2512.03028. Pan, Y.; Qiao, R.; Chen, L.; Chitta, K.; Pan, L.; Mai, H.; Bu, Q.; Zhao, H.; Zheng, C.; Luo, P.; et al. 2025. Agility meets stability: Versatile humanoid control with heteroge-neous data. arXiv preprint arXiv:2511.17373 .Peng, X. B. 2025. MimicKit: A Reinforcement Learning Framework for Motion Imitation and Control. arXiv preprint arXiv:2510.13794 .Peng, X. B.; Guo, Y.; Halper, L.; Levine, S.; and Fidler, S. 2022. Ase: Large-scale reusable adversarial skill embeddings for physically simulated characters. ACM Transactions On Graphics (TOG) , 41(4): 1–17. Peng, X. B.; Ma, Z.; Abbeel, P.; Levine, S.; and Kanazawa, A. 2021. AMP: Adversarial Motion Priors for Stylized Physics-Based Character Control. ACM Transactions on Graphics ,40(4): 1–20. Ponton, J. L.; Andrews, S.; Andujar, C.; and Pelechano, N. 2025. Environment-aware motion matching. ACM Transac-tions on Graphics (TOG) , 44(6): 1–18. Radford, A.; Kim, J. W.; Hallacy, C.; Ramesh, A.; Goh, G.; Agarwal, S.; Sastry, G.; Askell, A.; Mishkin, P.; Clark, J.; Krueger, G.; and Sutskever, I. 2021. Learning Transferable Visual Models from Natural Language Supervision. In Pro-ceedings of the 38th International Conference on Machine Learning , 8748–8763. PMLR. Tessler, C.; Kasten, Y.; Guo, Y.; Mannor, S.; Chechik, G.; and Peng, X. B. 2023. CALM: Conditional Adversarial Latent Models for Directable Virtual Characters. In ACM SIGGRAPH 2023 Conference Proceedings , 1–9. van den Oord, A.; Li, Y.; and Vinyals, O. 2018. Rep-resentation Learning with Contrastive Predictive Coding. arXiv:1807.03748. Yu, R.; Wang, Y.; Zhao, Q.; Tsui, H. W.; Wang, J.; Tan, P.; and Chen, Q. 2025. Skillmimic-v2: Learning robust and generalizable interaction skills from sparse and noisy demon-strations. In Proceedings of the Special Interest Group on Computer Graphics and Interactive Techniques Conference Conference Papers , 1–11. Zheng, C.; Eysenbach, B.; Walke, H.; Yin, P.; Fang, K.; Salakhutdinov, R.; and Levine, S. 2024. Stabilizing Con-trastive RL: Techniques for Robotic Goal Reaching from Offline Data. In International Conference on Learning Rep-resentations .A Adapter Loss and Reweighting Equivalence 
+
+Connection to the Main Objective. Section 3.1 defines CMP using a relevance-weighted adapter objective, while leaving the per-sample adapter loss ℓadapt  
+
+> ψ
+
+(c, x ; θ) abstract. Here, we first detail how this loss is constructed by applying a context-conditioned residual adapter to the detached output of the base motion prior. We then show that, under the ideal context-wise normalized weights, the weighted objective is equivalent to training with reference motions drawn from 
+
+qϕ(x | c). The minibatch normalization and clipping used in practice provide a bounded approximation to this ideal objective. 
+
+Context-Conditioned Adapter Objective. Let zθ (x) de-note the output produced by the base motion prior for refer-ence motion x, and let y(x) denote the corresponding training target. We write D(·, ·) for the prior-specific loss function. During adapter optimization, the base prediction is treated as a stop-gradient input: 
+
+¯zθ (x) = sg[ zθ (x)] ,
+
+where sg( ·) denotes the stop-gradient operation. CMP adds a context-conditioned residual adapter ∆ψ (c, x ) and forms 
+
+zθ,ψ (c, x ) = ¯ zθ (x) + λres ∆ψ (c, x ),
+
+where ψ denotes the adapter parameters and λres controls the residual strength. The reference-side adapter loss is 
+
+ℓadapt  
+
+> ψ
+
+(c, x ; θ) = D (zθ,ψ (c, x ), y (x)) .
+
+The dependence on θ is numerical only during adapter op-timization: the base prior may still be updated separately through its original objective. We instantiate D, zθ , and y for AMP and SMP in Section 3.3. For the ideal population-level weights, define 
+
+Lideal adapt (ψ | θ, ϕ ) = Ec∼dπ
+
+> x∼pE
+
+h
+
+sg[ wϕ(c, x )] ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+.
+
+This objective updates only the adapter parameters ψ. Since the stop-gradient operation does not change the numerical values of the weights, it does not affect the reweighting equiv-alence derived below. 
+
+Reweighting Equivalence. Recall from Section 3.1 that 
+
+qϕ(x | c) = wϕ(c, x )pE (x), Ex∼pE [wϕ(c, x )] = 1 .
+
+The normalization condition ensures that qϕ(· | c) is a valid distribution. For any fixed context c, we have 
+
+Ex∼qϕ(·| c)
+
+h
+
+ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+=
+
+Z
+
+> X
+
+qϕ(x | c)ℓadapt  
+
+> ψ
+
+(c, x ; θ) d x
+
+=
+
+Z
+
+> X
+
+pE (x)wϕ(c, x )ℓadapt  
+
+> ψ
+
+(c, x ; θ) d x
+
+= Ex∼pE
+
+h
+
+wϕ(c, x )ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+.
+
+Taking the expectation over contexts c ∼ dπ yields 
+
+E c∼dπ
+
+> x∼qϕ(·| c)
+
+h
+
+ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+= Ec∼dπ
+
+> x∼pE
+
+h
+
+wϕ(c, x )ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+.
+
+Since stop gradient does not alter the numerical value of the weights, the same identity applies to the adapter update using sg[ wϕ(c, x )] . This establishes that, under the ideal nor-malized weights, relevance-weighted training with samples from pE is equivalent to training with reference motions drawn from the effective distribution qϕ(x | c).For an empirical reference dataset DE = {xn}Nn=1 ,
+
+pE (x) = 1
+
+N
+
+> N
+
+X
+
+> n=1
+
+δxn (x),
+
+where δxn denotes a point mass at xn. The corresponding effective probability assigned to xn is 
+
+qϕ(xn | c) = 1
+
+N wϕ(c, x n),
+
+with 
+
+1
+
+N
+
+> N
+
+X
+
+> n=1
+
+wϕ(c, x n) = 1 .
+
+Hence, for a fixed context, 
+
+Ex∼qϕ(·| c)
+
+h
+
+ℓadapt  
+
+> ψ
+
+(c, x ; θ)
+
+i
+
+= 1
+
+N
+
+> N
+
+X
+
+> n=1
+
+wϕ(c, x n) ℓadapt  
+
+> ψ
+
+(c, x n; θ).
+
+This is the empirical form of the ideal context-wise reweight-ing objective. In practice, CMP replaces wϕ with the de-tached minibatch-normalized and clipped weight ¯wϕ defined in Section 3.1. This yields an efficient bounded approxima-tion without normalizing over the full reference dataset for every context. 
+
+B Original Adversarial Motion Prior 
+
+This section briefly reviews the original Adversarial Motion Prior (AMP) objective used as the base prior in CMP-AMP. AMP learns a discriminator that distinguishes reference mo-tion samples from policy-generated motion samples. Let x
+
+denote a motion observation, such as a short history of hu-manoid poses and velocities. Let pE (x) be the reference mo-tion distribution induced by the demonstration dataset, and let pπ (x) be the motion distribution induced by the current policy. AMP parameterizes a discriminator Dθ (x) using a scalar logit lθ (x):
+
+Dθ (x) = σ(lθ (x)) ,
+
+where σ(·) is the sigmoid function. The discriminator is trained with a binary classification objective that assigns label 1 to reference motions and label 0 to policy motions: 
+
+LAMP  
+
+> D
+
+= EpE [LBCE (lθ (xE ), 1)] + Epπ [LBCE (lθ (xπ ), 0)] .where the binary cross-entropy loss is defined as 
+
+LBCE (l, y ) = −y log σ(l) − (1 − y) log(1 − σ(l)) .
+
+Equivalently, the positive and negative parts of the AMP discriminator loss can be written as 
+
+Lpos  
+
+> D
+
+= ExE ∼pE [− log Dθ (xE )] ,
+
+and 
+
+Lneg  
+
+> D
+
+= Exπ ∼pπ [− log(1 − Dθ (xπ ))] .
+
+The full discriminator objective is therefore 
+
+LAMP  
+
+> D
+
+= Lpos  
+
+> D
+
++ Lneg  
+
+> D
+
+.
+
+During policy optimization, AMP converts the discrimi-nator output into a style reward: 
+
+rAMP (x) = − log (1 − Dθ (x)) = − log (1 − σ(lθ (x))) .
+
+This reward encourages the policy to generate motions that the discriminator classifies as reference-like. In practice, AMP implementations may include additional regularization terms for stabilizing discriminator training, such as gradient penalties or logit regularization. These terms are orthogo-nal to our formulation and are omitted here. In CMP-AMP, the base discriminator parameters θ continue to be updated by this original objective, while gradients from the adapter objective do not propagate to θ.
+
+C Original Score-Matching Motion Prior 
+
+This section reviews the original Score-Matching Motion Prior (SMP) (Mu et al. 2025) formulation used as the base prior in CMP-SMP. SMP represents a task-agnostic motion prior using a pretrained diffusion model; we use its uncon-ditional instantiation. Let x0 ∼ pE denote a clean reference motion sample. The forward diffusion process perturbs x0
+
+into a noisy sample ˜xt:
+
+˜xt = √¯αtx0 + √1 − ¯αtϵ, 
+
+where t ∼ U{ 0, . . . , T − 1}, ϵ ∼ N (0 , I ), and ¯αt is the cumulative noise schedule. The denoising model ϵθ (˜ xt, t ) is trained to predict the injected Gaussian noise. The standard SMP training objective is 
+
+LSMP (θ) = Ex0∼pE , t, ϵ 
+
+h
+
+∥ϵ − ϵθ (˜ xt, t )∥2i
+
+.
+
+This objective learns an unconditional motion prior from the reference dataset. During policy optimization, SMP evalu-ates policy-generated motions using ensemble score match-ing. Let x denote a policy motion and let K be a fixed set of diffusion timesteps. For each k ∈ K , independent Gaussian noise is applied: 
+
+˜xk = √¯αk x + √1 − ¯αk ϵk, ϵk ∼ N (0 , I ).
+
+The per-timestep denoising error is 
+
+eθ,k (x) = 1
+
+dx
+
+∥ϵk − ϵθ (˜ xk, k )∥22 ,
+
+where dx is the motion-feature dimension. To account for differences in error scale across noise levels, SMP normalizes each error by its running mean μk:
+
+˜eθ,k (x) = eθ,k (x)max( μk, ϵ norm ) .
+
+The SMP reward is then 
+
+rSMP (x) = exp − κ
+
+|K| 
+
+X
+
+> k∈K
+
+˜eθ,k (x)
+
+!
+
+,
+
+where κ > 0 controls the reward scale. Following SMP, we use K = {22 , 15 , 8}.CMP-SMP retains the pretrained denoiser as a frozen base and learns a context-conditioned residual adapter from relevance-weighted reference motions. Appendix D details the adapter objective and context-conditioned reward. 
+
+D CMP Extension to Score-Matching Motion Priors 
+
+Let ϵθ (˜ xt, t ) denote the pretrained SMP denoiser, which predicts the noise added to a motion sequence at diffusion timestep t. For a clean reference motion xE ∼ pE , the for-ward diffusion process is 
+
+˜xt = √¯αt xE + √1 − ¯αt ϵ, ϵ ∼ N (0 , I ),
+
+where ¯αt is determined by the diffusion noise schedule. CMP introduces a context-conditioned residual denoising adapter ∆ϵψ (c, ˜xt, t ). During adapter optimization, the pre-diction of the pretrained denoiser is treated as stop gradient: 
+
+ˆϵθ,ψ (c, ˜xt, t ) = sg[ ϵθ (˜ xt, t )] + λres ∆ϵψ (c, ˜xt, t ),
+
+where λres controls the contribution of the residual adapter. The pretrained SMP parameters θ remain unchanged. For a reference motion, we define the per-motion denoising error as 
+
+Eψ (c, x E ) = Et,ϵ 
+
+h
+
+∥ϵ − ˆϵθ,ψ (c, ˜xt, t )∥22
+
+i
+
+.
+
+During adapter training, t is sampled uniformly from 
+
+{0, . . . , T − 1} and ϵ ∼ N (0 , I ). Using the detached rele-vance weight ¯wϕ(c, x E ) defined in Section 3.1, the reference-side denoising loss is 
+
+Ladapt SMP (ψ) = E c∼dπ 
+
+> xE∼pE
+
+
+
+sg[ ¯ wϕ(c, x E )] Eψ (c, x E )
+
+dx
+
+
+
+.
+
+Thus, the denoising adapter receives different effective refer-ence distributions under different task contexts, while gradi-ents do not propagate into either the relevance model or the pretrained denoiser. We additionally regularize the residual prediction to pre-vent the adapter from overriding the pretrained motion prior: 
+
+Lres (ψ) = E c∼dπ , x E ∼pE  
+
+> t∼U{ 0,...,T −1}
+> ϵ∼N (0 ,I )
+
+ 1
+
+dx
+
+∥λres ∆ϵψ (c, ˜xt, t )∥22
+
+
+
+.
+
+The total CMP-SMP adapter objective is 
+
+Ltotal CMP -SMP (ψ) = Ladapt SMP (ψ) + ηLres (ψ),
+
+where η controls the residual regularization strength. During policy optimization, let x denote a policy-generated motion sequence. CMP-SMP follows the ensemble score-matching construction of SMP. For every k ∈ K , we sample ϵk ∼ N (0 , I ) and form 
+
+˜xk = √¯αk x + √1 − ¯αk ϵk.Table 3: G1 humanoid results. Mean and standard deviation over three seeds. “Samples to 80%” denotes the number of environment samples ( ×10 8) required to reach 80% of AMP’s mean final return.                                                                 
+
+> Method Task Return ↑Samples to 80% ↓
+> Target Location
+> AMP 428 ±35.6±0.1
+> CMP-AMP 459 ±44.5±0.1
+> Steering
+> AMP 375 ±14 4.9±0.3
+> CMP-AMP 480 ±12 3.4±0.4
+> Trajectory Following
+> AMP 203 ±05.9±0.1
+> CMP-AMP 283 ±24.0±0.1
+> Dodgeball
+> AMP 384 ±39.6±0.9
+> CMP-AMP 412 ±43 6.7±2.4
+> Dribbling
+> AMP 294 ±010 .1±0.4
+> CMP-AMP 467 ±22.9±0.1
+
+The adapted per-timestep denoising error is 
+
+eθ,ψ,k (c, x ) = 1
+
+dx
+
+∥ϵk − ˆϵθ,ψ (c, ˜xk, k )∥22 .
+
+Using the same timestep-wise normalization procedure as SMP, let μadapt  
+
+> k
+
+denote the running mean of eθ,ψ,k . We define 
+
+˜eθ,ψ,k (c, x ) = eθ,ψ,k (c, x )max( μadapt  
+
+> k
+
+, ϵ norm ) .
+
+The context-conditioned motion-prior reward is 
+
+rCMP -SMP (c, x ) = exp − κ
+
+|K| 
+
+X
+
+> k∈K
+
+˜eθ,ψ,k (c, x )
+
+!
+
+,
+
+where K = {22 , 15 , 8}. The policy reward combines this adapted prior reward with the task reward: 
+
+r = λtask rtask + λprior rCMP -SMP (c, x ),
+
+where λtask and λprior weight the task and motion-prior rewards, respectively. 
+
+E G1 Results 
+
+To evaluate CMP on a different humanoid morphology, we further report CMP-AMP results on a simulated G1 hu-manoid model. Figure 8 shows the learning curves of AMP and CMP-AMP across five tasks. Table 3 summarizes the final test return and the number of environment samples re-quired to reach 80% of AMP’s mean final return. All results are averaged over three random seeds. 
+
+F Detailed CMP-AMP Ablation Results 
+
+Table 4 reports the detailed numerical results for the CMP-AMP ablations presented in the main text. Uniform Adapter 
+
+Table 4: Contrastive relevance ablations. Final test return and environment samples (×10 8) required to reach 80% of AMP’s mean final return. Results are reported as mean and standard deviation over three seeds. Bold indicates the best result; ties at the reported precision are both bold.                                                                  
+
+> Method Task Return ↑Samples to 80% ↓
+> Dribbling
+> AMP 319 ±10 5.2±0.3
+> Uniform Adapter 441 ±30 3.7±1.3
+> Shuffled Relevance 453 ±73.8±0.2
+> Online Branch Only 447 ±83.6±0.5
+> CMP-AMP 456 ±52.8±0.2
+> Dodgeball
+> AMP 424 ±27.6±0.5
+> Uniform Adapter 430 ±29 7.8±0.9
+> Shuffled Relevance 434 ±47 9.5±1.7
+> Online Branch Only 458 ±19 6.5±0.7
+> CMP-AMP 458 ±12 5.6±0.7
+
+retains the context-conditioned adapter but assigns uniform reference weights. Shuffled Relevance permutes the predicted weights across reference motions within each batch, while 
+
+Online Branch Only removes the demonstration-positive branch. CMP-AMP reaches the performance threshold with the fewest samples on both tasks. The adapter alone improves Dribbling but provides little benefit on Dodgeball, while shuffled relevance reduces efficiency and substantially in-creases variance on Dodgeball. Removing the demonstration-positive branch also slows learning, despite retaining com-petitive final performance. 
+
+G Ablations of the Score-Matching Extension 
+
+We repeat the same ablations for CMP-SMP to examine whether the contrastive relevance components remain ef-fective with a score-matching prior. CMP-SMP achieves the highest final return on both tasks. On Dodgeball, it also reaches the performance threshold with the fewest samples. Uniform Adapter, Shuffled Rele-vance, and Online Branch Only match or improve upon SMP in final return, but none matches the full method in both performance and efficiency. This indicates that meaningful context–motion correspondence and demonstration support remain beneficial when CMP is integrated with a score-matching prior. On Dribbling, CMP-SMP and Online Branch Only reach the threshold at the same rate, while CMP-SMP achieves a slightly higher final return with lower variance. Shuffled Rel-evance also improves efficiency over SMP but remains slower than the variants that preserve learned context–motion cor-respondence. Thus, the demonstration-positive branch has a smaller effect on Dribbling, whereas the full relevance for-mulation provides clearer benefits on Dodgeball. 0 2 4 6 8 10                        
+
+> Samples (×10 8)
+> 0200 400
+> Task Return
+> Target Location
+> 0246810
+> Samples (×10 8)
+> 0200 400
+> Steering
+> 0246810
+> Samples (×10 8)
+> 0100 200
+> Trajectory
+> 0246810 12
+> Samples (×10 8)
+> 0200 400
+> Dodgeball
+> 0246810 12
+> Samples (×10 8)
+> 0200 400
+> Dribbling
+> AMP CMP-AMP
+
+Figure 8: G1 humanoid results. Learning curves of AMP and CMP-AMP on five humanoid control tasks. Each curve corresponds to one of three random seeds. 0 1 2 3 4 5 6          
+
+> Samples (×10 8)
+> 0100 200 300 400 500
+> Task Return
+> Dodgeball
+> 0123456
+> Samples (×10 8)
+> 0100 200 300 400 500
+> Dribbling
+> SMP Uniform Adapter CMP-SMP Shuffled Relevance Online Branch Only
+
+Figure 9: CMP-SMP ablations. Learning curves on Dodge-ball and Dribbling. Solid curves show the mean task return and shaded regions indicate the standard deviation over three seeds. 
+
+H Learning Curves under Reference Dataset Imbalance 
+
+Figure 10 shows the learning curves corresponding to the reference imbalance results reported in the main paper. We compare AMP and CMP-AMP while increasing the multi-plicity of walking motions from ×1 to ×100 .As the walking multiplicity increases, AMP exhibits slower learning and lower final performance, particularly under the ×20 and ×100 settings. In contrast, CMP-AMP maintains similar learning trajectories across imbalance lev-els, supporting its reduced sensitivity to dominant motion frequencies. 
+
+I Network Architectures 
+
+We use multilayer perceptrons for the policy, value function, discriminator, relevance-model, and AMP-adapter compo-nents. Unless otherwise specified, the same network archi-tectures are used across all tasks; only the input dimensions of the task-specific context, policy observation, and value-function observation vary across environments. Figure 11 provides a schematic overview of the architectures used in the AMP-based instantiation and the SMP-based extension. Let st denote the task-agnostic character observation and 
+
+ct the task-specific context observation. The policy and value-function inputs are formed from the corresponding environ-ment observations, which combine these two sources of in-Table 5: Ablations of the score-matching extension. Final test return and environment samples (×10 8) required to reach 
+
+80% of SMP’s mean final return. Results are reported as mean and standard deviation over three seeds. Bold indicates the best result; ties at the reported precision are both bold. 
+
+Method Task Return ↑ Samples to 80% ↓
+
+Dribbling 
+
+SMP 458 ± 5 3.4 ± 0.1
+
+Uniform Adapter 461 ± 6 3.0 ± 0.2
+
+Shuffled Relevance 463 ± 2 2.4 ± 0.1
+
+Online Branch Only 465 ± 6 2.2 ± 0.1
+
+CMP-SMP 466 ± 2 2.2 ± 0.1
+
+Dodgeball 
+
+SMP 447 ± 6 3.1 ± 0.2
+
+Uniform Adapter 464 ± 6 2.8 ± 0.4
+
+Shuffled Relevance 465 ± 7 3.0 ± 0.1
+
+Online Branch Only 465 ± 5 2.8 ± 0.3
+
+CMP-SMP 471 ± 3 2.6 ± 0.1
+
+formation. The policy network contains two fully connected hidden layers with [1024 , 512] units, followed by a linear out-put layer that predicts the action mean. The value function uses the same hidden-layer architecture and a single linear output unit. Following the motion representation used in MimicKit, let xt = Φ( st) denote the single-frame discriminator ob-servation extracted from environment state st. The mapping 
+
+Φ retains motion-related kinematic features while excluding task-specific context information. A motion clip is formed from ten consecutive frames: 
+
+Xt := ( xt−8, . . . , x t+1 ) .
+
+The clip Xt is flattened and normalized before being provided to the base AMP discriminator. The discriminator contains two fully connected hidden layers with [1024 , 512] units, followed by a single linear output unit that produces the scalar motion logit. The contrastive relevance model consists of a context en-coder fϕc and a motion encoder gϕx . Each encoder con-tains one fully connected hidden layer with 256 units and a SiLU activation, followed by a linear projection to a 128-dimensional embedding. The resulting embeddings are ℓ2-normalized, such that their dot product corresponds to cosine 0 2 4 6 8 10 12 
+
+> Samples (×10 8)
+> 0100 200 300 400 500
+> Task Return
+> Walking Factor X1 X2 X5 X20 X100 AMP CMP-AMP
+
+Figure 10: Learning curves under walking motion imbal-ance. Mean task return and standard deviation over three seeds under different walking multiplicities. CMP-AMP re-mains substantially more stable than AMP as the reference distribution becomes increasingly imbalanced. similarity. The context encoder receives ct, while the motion encoder receives the same flattened and normalized motion clip Xt as the base AMP discriminator. The encoder archi-tectures, hidden width, and embedding dimension are shared across all tasks. The CMP-AMP residual adapter contains separate motion and context branches. Each branch uses a fully connected hid-den layer with 256 units and a ReLU activation, followed by a linear projection to a 256-dimensional feature. The two fea-tures are concatenated and passed through a fusion network with a 256-unit hidden layer and a scalar output, ∆lψ (ct, X t).The final output layer is zero-initialized, so the adapted dis-criminator initially reproduces the base AMP discriminator. For the SMP-based extension, we retain the pretrained diffusion denoiser architecture used by SMP. The denoiser first projects the noised motion tokens into a 256-dimensional representation and processes them using four Transformer blocks with multi-head self-attention, timestep-conditioned adaptive normalization, and sinusoidal sequence positional embeddings. The pretrained denoiser remains frozen during downstream training. CMP-SMP adds a context-conditioned residual denoising adapter that receives the noised motion clip, diffusion timestep, and task context. The adapter uses sequence and timestep embeddings followed by a three-layer multilayer perceptron with a hidden width of 512 and predicts a residual noise term with the same dimensionality as the base denoiser output. 
+
+J Evaluation Metrics 
+
+We report mean episodic task return and samples to thresh-old. For each of three random seeds, task return is averaged over 32 evaluation episodes, and the reported results are aggregated across seeds. The samples-to-threshold metric is the number of environment interactions required for the mean evaluation return to reach 80% of the corresponding base prior’s final return. The same threshold is applied to the 1024  512 
+
+> Policy
+
+ctxt   
+
+> 1024 512
+> Value Function xttX
+> 256
+> 256
+> 128 dim tX
+> 256
+> 256
+> 256
+> Relevance Model Adapter l
+> 
+> 
+> 1024 512
+> Discriminator tX
+> Units:
+> Units:
+
+ctctct( , )t tR X c
+
+> l
+> 
+
+V  
+
+> 128 dim
+> Units: Units:
+> Units:
+> Units: Units: 256
+> 256
+> 256
+> Adapter 
+> 256 256
+> Diffusion Model itX
+
+ct
+
+> Units:
+> Units:
+> Units: itX
+
+Figure 11: Network architectures used to model the com-ponents of CMP. Left: the policy, value function, base AMP discriminator, contrastive relevance model, and residual logit adapter used in the primary CMP-AMP instantiation. These components are implemented using fully connected net-works. Right: the CMP-SMP extension. The pretrained dif-fusion model is implemented using Transformer blocks with self-attention and adaptive normalization, while CMP adds a context-conditioned residual denoising adapter. Table 6: Return thresholds used to measure sample efficiency. Each threshold is set to 80% of the corresponding base prior’s final return and shared by both methods within that prior family. 
+
+Task AMP-based SMP-based 
+
+Target Location 326 300 
+
+Steering 239 396 
+
+Trajectory Following 147 201 
+
+Dodgeball 339 357 
+
+Dribbling 255 366 
+
+base method and its CMP variant within each prior family. The two metrics measure task performance and sample effi-ciency, respectively. Returns are compared only within each task, and samples to threshold only within each prior family. 
+
+K Task Implementation 
+
+We provide detailed descriptions of each task, its context definition, and the task reward function used during train-ing. We additionally visualize the five task settings and their context definitions in Figure 12. 
+
+Target Location. The character is required to move toward a target position x∗ 
+
+> t
+
+.
+
+Context. The context is the target position expressed in the character’s local heading frame: 
+
+ct = ex∗ 
+
+> t
+
+∈ R2.
+
+Reward. The task reward encourages the character to ap-proach the target, move toward it at the desired speed, and face the target: 
+
+rGt = 0 .5 exp 
+
+
+
+−0.5 x∗ 
+
+> t,xy
+
+− xroot 
+
+> t,xy
+> 22
+
+
+
++ 0 .4 exp 
+
+
+
+−4 max  0, v ∗ − d∗ 
+
+> t
+
+· ˙xroot 
+
+> t,xy
+
+ 2
+
++ 0 .1 max (0 , d∗ 
+
+> t
+
+· ft) .Dodgeball  Trajectory  Steering 
+
+Dribble  Location Figure 12: Visual overview of the five task implementations. Here, d∗ 
+
+> t
+
+is the horizontal unit vector pointing from the char-acter root to the target, v∗ is the desired target-directed speed, and ft is the character’s horizontal facing direction. The ve-locity reward is set to zero when the character moves away from the target. Within the target threshold, the velocity and facing rewards are set to one. 
+
+Steering. The character is required to follow a commanded horizontal velocity while maintaining a desired facing direc-tion. 
+
+Context. The context consists of the desired moving di-rection, target speed, and desired facing direction, with both directions expressed in the character’s local heading frame: 
+
+ct =
+
+hedvel  
+
+> t
+
+, v ∗ 
+
+> t
+
+, edface 
+
+> t
+
+i
+
+∈ R5.
+
+Reward. The task reward encourages the character to match the commanded velocity and facing direction: 
+
+rGt = 0 .7 exp 
+
+
+
+−0.5 v∗ 
+
+> t
+
+dvel  
+
+> t
+
+− ˙xroot 
+
+> t,xy
+> 22
+
+
+
++ 0 .3 max 
+
+
+
+0, dface 
+
+> t
+> ⊤
+
+ft
+
+
+
+.
+
+Here, dvel  
+
+> t
+
+and dface  
+
+> t
+
+denote the desired horizontal moving and facing directions, respectively, and ft is the character’s current horizontal facing direction. The velocity reward is set to zero when the character moves opposite to the commanded direction. 
+
+Trajectory Following. At the beginning of each episode, a time-indexed planar trajectory x∗(τ ) is generated and re-mains fixed throughout the episode. The character is required to continuously track this trajectory according to the current episode time. 
+
+Context. At every control step t, the context provides the current and future trajectory points expressed relative to the character in its local heading frame: 
+
+ct = [ ex∗(t), ex∗(t + ∆) , . . . , ex∗(t + ( K − 1)∆)] ∈ R2K .
+
+We use K = 6 samples with ∆ = 0 .30 s. Since the first sam-ple corresponds to the current time, the furthest waypoint lies (K − 1)∆ = 1 .50 s ahead. Although the trajectory re-mains fixed within an episode, this context window advances at every control step. 
+
+Reward. The task reward encourages the character to track the trajectory position, match its local velocity, face along its tangent direction, and avoid excessive speed: 
+
+rGt = 0 .5 exp 
+
+
+
+−7 x∗(t)xy − xroot 
+
+> t,xy
+> 22
+
+
+
++ 0 .3 exp 
+
+
+
+−5 v∗ 
+
+> t
+
+− ˙xroot 
+
+> t,xy
+> 22
+
+
+
++ 0 .1 max 
+
+
+
+0, d∗
+
+> t
+> ⊤
+
+ft
+
+
+
++ 0 .1 exp 
+
+
+
+−3
+
+h
+
+max 
+
+
+
+0, ˙xroot   
+
+> t,xy 2
+
+− ∥ v∗ 
+
+> t
+
+∥2 − 0.3
+
+i 2
+
+.
+
+The target velocity and trajectory tangent are estimated using a look-ahead interval ∆r :
+
+v∗ 
+
+> t
+
+= x∗(t + ∆ r )xy − x∗(t)xy 
+
+∆r
+
+, d∗ 
+
+> t
+
+= v∗
+
+> t
+
+∥v∗ 
+
+> t
+
+∥2
+
+.
+
+Here, ft denotes the character’s horizontal facing direction. The velocity reward is set to zero when the character moves opposite to the trajectory tangent. 
+
+Dodgeball. The character is required to dodge a ball re-peatedly thrown toward its torso. At each throw, the ball is initialized 8–10 m away from the character and launched at a speed of 12 –15 m /s toward the predicted torso position. The time interval between two consecutive throws is randomly sampled from 1 to 4 s .
+
+Context. The context consists of the ball’s relative posi-tion and velocity, expressed in the character’s local heading frame: 
+
+ct = exball  
+
+> t
+
+, evball 
+
+> t
+
+ ∈ R6.
+
+Reward. The task reward encourages the character to keep away from the ball while avoiding unnecessary horizontal motion: 
+
+rGt = 0 .9 1 − exp  −0.3 xball  
+
+> t
+
+− xroot  
+
+> t2
+
+ 
+
++ 0 .1 exp 
+
+
+
+− ˙xroot 
+
+> t,xy
+> 22
+
+
+
+.The episode terminates when the ball hits the character, as detected by physical contact or a sudden change in the ball’s velocity near the character. 
+
+Dribbling. The character is required to keep the ball close to its feet while moving it along a sampled horizontal direc-tion at a desired speed. 
+
+Context. The context consists of the ball’s relative posi-tion and velocity, the desired moving direction, and the target speed, all directional quantities being expressed in the char-acter’s local heading frame: 
+
+ct =
+
+hexball  
+
+> t
+
+, evball  
+
+> t
+
+, ed∗ 
+
+> t
+
+, v ∗
+
+> t
+
+i
+
+∈ R9.
+
+Reward. The task reward encourages the character to re-main close to the ball, match the commanded ball velocity, and keep the ball near the ground: 
+
+rGt = 0 .35 exp 
+
+
+
+−4 min  
+
+> i∈F
+
+xfoot ,i t,xy − xball 
+
+> t,xy
+> 22
+
+
+
++ 0 .55 exp 
+
+
+
+−2.5 v∗ 
+
+> t
+
+d∗ 
+
+> t
+
+− ˙xball 
+
+> t,xy
+> 22
+
+
+
++ 0 .10 exp 
+
+
+
+−8  xball  
+
+> t,z
+
+− hball 
+
+2
+
+,
+
+where F contains the left and right feet, d∗ 
+
+> t
+
+is the desired horizontal ball direction, v∗ 
+
+> t
+
+is the target speed, and hball is the nominal ball height. The velocity reward is set to zero when the ball moves opposite to the desired direction. The episode terminates when the horizontal character–ball distance exceeds 6 m or the ball height exceeds 1.2 m , after an initial grace period of 0.5 s .
+
+L Training Hyperparameters 
+
+We report the hyperparameters for the AMP-based and SMP-based instantiations separately. Table 7 summarizes the opti-mization and motion-prior settings shared by AMP and CMP-AMP, while Table 8 reports the additional residual-adapter and contrastive-relevance settings used by CMP-AMP. Anal-ogously, Table 9 reports the settings shared by SMP and CMP-SMP, and Table 10 summarizes the additional settings introduced by CMP-SMP. Unless otherwise specified, the same settings are used across all tasks without task-specific tuning. Following the MimicKit implementation, the configured actor, critic, discriminator, and adapter batch-size parameters are per-environment multipliers and are scaled by the number of parallel environments Nenv . In contrast, the contrastive, demonstration, and SMP evaluation batch sizes are absolute and independent of Nenv .
+
+M Experimental Details 
+
+Isaac Gym is the simulator; PhysX is the physics engine. We report the hardware and software configurations used for training and evaluation in Table 11. Table 7: Hyperparameters shared by AMP and CMP-AMP. 
+
+Parameter Value 
+
+Policy optimization 
+
+Task/prior weights; rollout steps 0.5/0.5; 32 
+
+Policy/value learning rates 2×10 −5/5×10 −5
+
+Policy/value epochs (batch mult.) 5/2 (4 /2) 
+
+Action std. / γ / GAE λ 0.05 /0.99 /0.95 
+
+PPO / advantage clip / bound weight 0.2/4.0/10 .0
+
+AMP discriminator 
+
+Learning rate / weight decay 2.5×10 −4/10 −4
+
+Epochs / replay size / samples 2/(2 ×10 5)/1000 
+
+Logit reg. / gradient penalty / reward scale 0.01 /5.0/2.0
+
+Table 8: CMP-AMP-specific training hyperparameters. 
+
+Parameter Value 
+
+Residual adapter and schedule 
+
+Adapter learning rate 5 × 10 −5
+
+Residual scale λres 0.03 
+
+Residual regularization η 0.01 
+
+Adapter-loss weight 0.5
+
+Contrastive relevance learning 
+
+Learning rate 10 −4
+
+Contrastive-loss weight 0.1
+
+Temperature τ 0.1
+
+Contrastive and demonstration batch size 512 
+
+Positive construction 
+
+Minimum positives / fallback fraction 64 /0.35 
+
+Advantage temperature βadv 1.0
+
+Demonstration weight λdemo 0.5
+
+Reference weighting 
+
+Reweighting scale α 0.5
+
+Weight range [wmin , w max ] [0 .5, 2.0] 
+
+Table 9: Hyperparameters shared by SMP and CMP-SMP. 
+
+Parameter Value 
+
+Policy optimization 
+
+Task/prior weights; rollout steps 0.5/0.5; 32 
+
+Policy/value learning rates 10 −4/10 −4
+
+Policy/value epochs (batch mult.) 5/2 (4 /2) 
+
+Action std. / γ / GAE λ 0.05 /0.99 /0.95 
+
+PPO / advantage clip / bound weight 0.2/4.0/10 .0
+
+Score-matching motion prior 
+
+Diffusion steps K / eval. batch {22 , 15 , 8}/4096 
+
+Reward scale κ / normalizer samples 6.0/10 8Table 10: CMP-SMP-specific training hyperparameters. 
+
+Parameter Value 
+
+Residual adapter and schedule 
+
+Adapter learning rate 10 −4
+
+Residual scale λres 0.1
+
+Residual regularization η 0.001 
+
+Contrastive / adapter warmup iterations 5/10 
+
+Contrastive relevance learning 
+
+Learning rate 10 −4
+
+Contrastive-loss weight 0.1
+
+Temperature τ 0.1
+
+Contrastive and demonstration batch size 512 
+
+Positive construction 
+
+Minimum positives / fallback fraction 64 /0.35 
+
+Advantage temperature βadv 1.0
+
+Demonstration weight λdemo 1.0
+
+Reference weighting 
+
+Reweighting scale α 1.0
+
+Weight range [wmin , w max ] [0 .5, 2.0] 
+
+Table 11: Experimental environment details. Component Configuration Simulator NVIDIA Isaac Gym Preview 4 Physics Engine PhysX GPU NVIDIA RTX 3090 / RTX 4090 CPU AMD EPYC 7543 System memory 512 GB Operating system Ubuntu 20.04.1 LTS CUDA 12.1 Python 3.8 Precision FP32 Parallel Environments 4096 Evaluation Seeds 3
