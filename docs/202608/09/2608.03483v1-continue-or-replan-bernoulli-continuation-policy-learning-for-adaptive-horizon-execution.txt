@@ -1,0 +1,750 @@
+Title: Continue or Replan? Bernoulli-Continuation Policy Learning for Adaptive Horizon Execution
+
+URL Source: https://arxiv.org/pdf/2608.03483v1
+
+Published Time: Wed, 05 Aug 2026 01:08:36 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+> arXiv:2608.03483v1 [cs.RO] 4 Aug 2026
+
+# Continue or Replan? Bernoulli-Continuation Policy Learning for Adaptive Horizon Execution 
+
+Weichen Xu 1,2, ‡∗, Zhenhua Liu 2, ∗, Lin Luo 2, Yaobo Liang 2, Chengtang Yao 2, Qingyu Mei 1,2, ‡, Jian Cao 1, Xixin Cao 1, Xing Zhang 1, Jiaolong Yang 2, †, Baining Guo 2
+
+> 1
+
+Peking University 
+
+> 2
+
+Microsoft Research Asia xuweichen1999@stu.pku.edu.cn, zhenhualiu@microsoft.com , jiaoyan@microsoft.com 
+
+Abstract 
+
+Existing chunk-based Vision-Language-Action (VLA) mod-els execute a fixed number of actions (i.e., execution horizon) before replanning, turning replanning into a task-agnostic pe-riodic schedule that is independent of task progress. As a result, when no replanning boundary falls before a critical manipulation stage, it is executed from a stale chunk rather than a freshly replanned one. To address this limitation, we propose Bernoulli-Continuation Policy ( BCP ), a lightweight, plug-and-play framework for adaptive horizon execution that keeps the base VLA frozen. Given a fixed-length action chunk, its continuation head decomposes execution-horizon selec-tion into a sequence of continue-or-replan decisions, which imposes an ordinal, prefix-sharing inductive bias over candi-date horizons rather than treating them as independent classes. Since the optimal horizon for each chunk is not observable, we train this head with reinforcement learning from trajectory-level outcomes and introduce a Replanning-Efficiency Reward that jointly rewards task success and efficient VLA usage, dis-couraging the policy from collapsing to unnecessarily short horizons. On RoboTwin 2.0 with LingBot-VLA as the base policy, BCP improves the average success rate by +11.08% on 13 low-success tasks and from 89.88% to 93.94% (+4.06% )across all 50 tasks. Although trained only under the Clean setting, BCP generalizes to the Randomized setting, raising the average success rate by +4.06% . It also transfers to a dif-ferent base policy π0.5, achieving a better result on LIBERO (+1.7%) and, notably, on the harder LIBERO-PRO ( +6.8% ), where its advantage widens as tasks become more difficult. On a real robot, BCP lifts success from 74% to 92% and from 44% to 84% on two manipulation tasks. Meanwhile, its negli-gible overhead, combined with higher success, makes BCP’s overall runtime even lower than the fixed-horizon baselines. More details can be found at Project Page. 
+
+Introduction 
+
+Vision-Language-Action (VLA) models have recently shown strong potential for language-conditioned robotic manipula-tion. A common design in recent VLA systems is action chunking (Zhao et al. 2023), where the model predicts a sequence of future actions rather than a single next action. 
+
+> ∗
+
+These authors contributed equally. 
+
+> †
+
+Corresponding author. 
+
+> ‡
+
+Work done during an internship at Microsoft Research Asia. Failure case: Initial phase 32         
+
+> Outdated chunk continues (inaccurate gripper closure extent) Failure entical initial state Wrong grasp-and-place state
+> Success case: Initial phase 23
+> Success
+> Fortuitous replanning before outdated gripper closure extent entical initial state Correct grasp -
+> and -place state
+> Failure case: Initial phase 32
+> Misaligned replanning yields inaccurate gripper-closure extent Failure Identical initial state Wrong grasp-and-place state
+> Success case: Initial phase 23
+> Success
+> Appropriate replanning yields accurate gripper-closure extent Identical initial state Correct grasp -
+> and -place state
+
+Figure 1: Phase-shift experiment with LingBot-VLA on RoboTwin 2.0 Placing Dual Shoes task, sweeping all 50 ini-tial phases ϕ under the same fixed 50-step horizon. Success rate varies strongly with ϕ (best 0.92 , worst 0.80 ). At ϕ = 32 
+
+the robot executes an outdated gripper-closure extent and fails, while at ϕ = 23 a replanning boundary falls before the manipulation stage, yielding an accurate grasp and success. This design reduces the frequency of expensive model infer-ence and improves temporal consistency (Chi et al. 2025). In a chunk-based VLA, the prediction horizon determines how many future actions the model generates, while the execution horizon determines how many of these predicted actions are actually executed before the robot observes the environment again and replans. Existing chunk-based VLA models (Kim et al. 2024; Black et al. 2024; Wu et al. 2026) adopt a fixed execution horizon throughout an episode. Though simple, this turns replan-ning into a periodic schedule independent of task progress. During coarse or free-space motion, executing a longer ac-tion sequence in a previously predicted chunk can provide smooth actions robust for many steps. At precision-critical stages such as manipulation, small pose or contact errors can quickly accumulate. The robot must therefore re-observe and replan prior to entering these stages, rather than relying on an Original Upper Bound Lower Bound Gap SR 88.52% 93.65% 82.50% 11.30% 
+
+Table 1: Phase-shift performance of LingBot-VLA on 50 RoboTwin 2.0 tasks. Upper and Lower Bounds take the best-and worst-performing phase per task , so they are per-task or-acles attainable only in hindsight. SR denotes Success Rate. earlier observation. A fixed schedule cannot guarantee this: when no replanning boundary falls before a critical stage, the robot is forced to execute it from a stale chunk. We demonstrate this limitation in a simple phase-shift ex-periment. All variants run the same fixed 50-step horizon but start from different phase ϕ: the robot executes only ϕ
+
+actions in the first chunk and then replans every 50 steps, so they differ solely in when their replanning boundaries fall. As shown in Table 1, this single timing choice moves the success rate over an 11.30% gap on 50 RoboTwin 2.0 (Chen et al. 2025b) tasks. Even this per-task upper bound is achiev-able only with hindsight. Critical moments occur at different times across tasks and stages, so no single phase can align replanning with all of them. Figure 1 illustrates this on Place Dual Shoes task: at ϕ = 32 , the robot commits an inaccu-rate gripper-closure and fails, whereas at ϕ = 23 a boundary falls before the manipulation stage and it succeeds. Success depends not on horizon length alone, but also on whether a boundary lands before each critical stage, which a fixed schedule cannot guarantee. Since the desired replanning boundary varies along the trajectory, the execution horizon should not be a fixed hyper-parameter but selected per chunk, so the robot re-observes before precision-sensitive stages. The key question is: given a predicted action chunk, how long should the robot exe-cute it before stopping and replanning? 
+
+Learning such a policy is non-trivial and raises three chal-lenges. First, candidate horizons have an inherent ordinal and prefix-sharing structure because a longer horizon subsumes shorter one. A standard softmax classifier treats them as un-ordered and independent classes, discarding this structure. Second, per-chunk supervision is not identifiable because each horizon decision is coupled with subsequent chunks and later decisions. As the same outcome can arise from differ-ent horizon sequences, no unique ground-truth stopping label exists. Third, even with trajectory-level rewards, a success-only signal drives the policy towards overly short horizons, causing excessive replanning and wasted VLA calls. To address these challenges, we propose the Bernoulli-
+
+Continuation Policy ( BCP ), a lightweight, plug-and-play framework that keeps the base VLA frozen. BCP decomposes execution-horizon selection into a sequence of continue-or-replan decisions: a longer horizon is selected only when the policy repeatedly decides to continue. This imposes an or-dinal, prefix-sharing inductive bias over candidate horizons, addressing the first challenge. For the second, we train BCP with reinforcement learning (RL) on trajectory-level out-comes rather than per-chunk stopping labels, naturally cap-turing the coupled effects of consecutive decisions. To resolve the success-efficiency trade-off, a Replanning-Efficiency Re-ward is introduced that jointly accounts for task success and VLA cost, favoring successful trajectories with fewer replan-ning steps and preventing the policy from collapsing to un-necessarily short horizons. With these three components, the execution horizon is no longer a fixed hyperparameter but a per-chunk decision learned from task outcomes, placing replanning boundaries where they matter. We evaluate BCP on RoboTwin 2.0 (Chen et al. 2025b) with ACT (Zhao et al. 2023), ABot-M0 (Yang et al. 2026b) and LingBot-VLA (Wu et al. 2026). Take LingBot-VLA as an example, BCP improves the success rate by 11.08% on 13 low-success tasks and raises the 50-task average from 89.88% to 93.94% (+4.06% ), reaching state-of-the-art for VLAs. Although trained only on the Clean setting, BCP still generalizes to the Randomized setting (88.78% to 92.84% ,
+
++4.06% ). With a different base policy π0.5, it transfers to LIBERO and the harder LIBERO-PRO, the success rates are improved by +1.7% and +6.8% . On a real AGIBOT G1 robot, BCP improves success from 74% to 92% on grasping bottle task and from 44% to 84% on hanging mug task. Our contributions are summarized as follows: 
+
+• We identify replanning-timing misalignment as a key failure mode of fixed-horizon chunk execution, and for-mulate adaptive execution-horizon selection as a se-quence of continue-or-replan decisions that captures the ordinal, prefix-sharing structure of candidate horizons. 
+
+• We propose the Bernoulli-Continuation Policy, alightweight, plug-and-play framework that keeps the base VLA frozen and is trained with reinforcement learning from trajectory-level outcomes. 
+
+• We introduce a Replanning-Efficiency Reward that jointly encourages task success and execution efficiency, preventing the policy from collapsing to unnecessarily short horizons. 
+
+• We demonstrate on RoboTwin 2.0, LIBERO, and real robot that BCP achieves better performance than base-lines, generalizes to Randomized settings, and preserves the runtime efficiency of action chunking. 
+
+Related Works 
+
+Adaptive Horizon Execution 
+
+Action chunking is common in recent VLAs (Zhao et al. 2023; Kim et al. 2024; Chi et al. 2025; Black et al. 2024; Kim, Finn, and Liang 2025; Bjorck et al. 2025; Wang et al. 2026b), which predict a fixed-length action sequence and ex-ecute it under a hand-fixed horizon. Recent works make this horizon adaptive, differing in the replanning signal and its cost. One line uses hand-designed test-time reliability prox-ies based on entropy or attention (Liang et al. 2026; Wang et al. 2026a; Zhu et al. 2026), which may not be directly optimized and often require sampling several chunks at each step. A second line trains dedicated mechanisms, via cross-horizon consensus (Jing et al. 2025) or closed-loop verifica-tion (Wang et al. 2026d,c; Pan et al. 2026), which are effec-tive but involve complex procedures. In contrast, we directly learn an execution-horizon distribution with a lightweight, plug-and-play policy. It predicts the execution horizon in a single forward pass and avoids complex procedures. Frozen VLA Predicts an                                       
+
+> Action Chunk
+> Frozen Vision -
+> Language -Action
+> Model
+> ...
+> Denoised
+> action chunk
+> Denoised
+> action chunk
+> Vision
+> language tokens
+> Action velocity field
+> 1122Bernoulli -
+> Continuation Head
+> .. .. ..
+> Linear
+> Proj.
+> Fusion + CLS token
+> Transformer Encoder
+> Linear Head + Sigmoid
+> Linear
+> Proj.
+> Con tinue probabilities (0 -1)
+> Reinforcement Learning with Replanning-Efficiency Reward 33
+> ... 2
+> tpktp1
+> tp1
+> tp2
+> tpktp
+> E=20 E=30 E=40 E=50
+> Distribution over execution horizon E
+> Reference trajectory (fixed )
+> Test trajectory (BCP -selected )
+> Test trajectory (BCP -selected )
+> Chunk 1
+> E1=50
+> Chunk 2
+> E2=50
+> Chunk 3
+> E3=50
+> Chunk 4
+> E4=50
+> Result Eff.
+> E1=50 E2=30 E3=20 E4=40
+> Result Eff.
+> E1=40 E2=20 E3=50 E4=30
+> Result Eff.
+> GRPO rollout group
+> Replanning-Efficiency Reward
+> Ref fail
+> Test fail
+> 0
+> Ref success
+> Test fail
+> Ref fail
+> Test success
+> Ref success
+> Test success test 1max( ,0) min( ,0) CCREE
+> 
+> +−=++ref test
+> tanh ln C
+> CEC
+> +=+
+> 
+> 
+> Executed
+> prefix
+> Discarded
+> remainder
+> Relative
+> Efficiency
+> Replan
+> (between chunks)
+> ‘pick up the two shoes .. .
+> Update
+> policy
+> Action
+> Expert
+> Noise 1
+> ta1
+> taHtaHta
+> ...
+> Vision
+> language tokens
+> Observation
+> ...
+> Instruction
+> ..
+> Final step
+> Action velocity field
+> ... 1
+
+1G
+
+
+
+> −ref
+
+( ) ( )       
+
+> 11
+> 1
+> kkikttti
+> Eepp
+> 
+
+     
+
+> −=
+> ==−
+
+Figure 2: Overview of Bernoulli-Continuation Policy learning . Given a fixed-length action chunk predicted by a frozen VLA, BCP estimates continue probabilities to select an adaptive execution horizon, executes the corresponding action prefix, and is optimized with GRPO using the Replanning-Efficiency Reward. 
+
+RL for Robot Policy Optimization 
+
+RL has become an important paradigm for improving VLA execution beyond imitation learning. SimpleVLA-RL (Li et al. 2025), πRL (Chen et al. 2025a), π∗
+
+0.6 (Intelligence et al. 2025), and VLA-RL (Liu et al. 2026) fine-tune the full VLA or its action generation. Meanwhile, Q-chunking (Li, Zhou, and Levine 2026) and AC3 (Yang et al. 2026a) apply RL to improve exploration and sample efficiency while supporting high-dimensional continuous action chunks. These methods improve how actions are generated, but require updating a large action model, incurring substantial training cost. We instead apply RL to an orthogonal target: a lightweight pol-icy that decides when to stop executing a chunk and replan, while keeping the base VLA frozen. 
+
+Method 
+
+Figure 2 overviews our framework. We first formulate execution-horizon selection on a frozen chunk-based VLA (Sec. 3.1), then introduce the Bernoulli-Continuation Pol-icy that models it as sequential continue-or-replan decisions (Sec. 3.2), and train it with reinforcement learning under a Replanning-Efficiency Reward, since per-chunk labels are unavailable (Sec. 3.3). 
+
+Problem Formulation 
+
+We consider a pretrained VLA model for robotic manipu-lation. Given the current observation ot and language in-struction ℓ, it predicts a fixed-length action chunk at =(a1
+
+t , a 2
+
+t , . . . , a Ht ), where H denotes the prediction horizon. In standard horizon execution, the robot runs a fixed num-ber of actions, the execution horizon E, before querying the VLA again. To make this adaptive, we define a discrete set of candidate execution horizons 
+
+E = e1, e 2, . . . , e M , 1 ≤ e1 < · · · < e M ≤ H, (1) At each replanning step, an execution-horizon policy se-lects Et ∼ πθ (· | st) from E, where st is the information available for selection. The robot then executes the prefix 
+
+a1: Et
+
+t and queries the VLA again. Thus the VLA remains re-sponsible for action generation, while the policy only decides how long each chunk is trusted before replanning. 
+
+Bernoulli-Continuation Head 
+
+Bernoulli-Continuation Head is a lightweight module at-tached to the frozen VLA. It reuses the representations al-ready produced during action-chunk prediction, so decides the execution horizon without extra VLA forward pass. To judge whether the current chunk can still be trusted or a fresh observation is needed, it takes three VLA-derived in-puts: visual-language tokens Ft ∈ RN ×dv for scene and in-struction context. For each action step j, the denoised action 
+
+ajt ∈ Rda and its final-step action-velocity feature ujt ∈ Rdu ,which expose motion-level cues about generated trajectory. We concatenate the two action-level features and project them, together with the visual-language tokens, into a shared 
+
+d-dimensional space: 
+
+hjt = Proj a([ ujt ; ajt ]) , ˆFt = Proj v (Ft). (2) Prepending a learnable token [CLS] ∈ Rd, we form the input sequence Xt = [ [CLS] , ˆFt, h1
+
+t , . . . , hHt ], feed it to a lightweight Transformer encoder so that [CLS] attends over both context and every action position, and map its output to 
+
+M − 1 logits zt = ( z1
+
+t , . . . , z M −1
+
+t ).Instead of a softmax classifier, we model horizon selection as an ordered sequence of Bernoulli continuation decisions. Each logit gives a continue probability 
+
+pit = σ(zit ), i = 1 , . . . , M − 1, (3) where pit is the probability of continuing from horizon ei to 
+
+ei+1 . Selecting horizon ek thus requires continuing through the first k − 1 decisions and then stopping, giving 
+
+πθ (Et = ek | st) = 
+
+( Qk−1 
+
+> i=1
+
+pit
+
+
+
+(1 − pkt ), 1 ≤ k < M, 
+
+QM −1 
+
+> i=1
+
+pit, k = M. 
+
+(4) This factorization matches the nested structure of chunk execution: a 40-step and a 50-step execution share the same first 40 actions and differ only in whether execution contin-ues past step 40. By sharing the continue decisions across this common prefix, BCP imposes an ordinal inductive bias absent from a flat categorical policy, making a long horizon reachable only when the chunk is repeatedly judged reliable and letting adjacent horizons receive similar probabilities. 
+
+RL with Replanning-Efficiency Reward 
+
+The execution-horizon policy cannot be trained by super-vised learning, since the optimal horizon for each chunk is not observable and a horizon decision can only be judged by its downstream effect on the rollout. The decisions are also temporally coupled, as the horizon chosen for the cur-rent chunk determines the next observation and hence later chunks and decisions. We therefore optimize BCP with rein-forcement learning from trajectory-level rewards while keep-ing the base VLA frozen. We train BCP with Group Relative Policy Optimization (GRPO) (Shao et al. 2024). For each task instance ξ ∼ D ,
+
+πθold samples G − 1 adaptive trajectories {τi}G−1 
+
+> i=1
+
+, and we additionally rollout one reference trajectory τref under the fixed-horizon strategy to anchor the advantage. Each τi has 
+
+Ti replanning steps with horizons Ei,t ∼ πθold (· | si,t ), and receives a trajectory-level reward (defined below) broadcast to all its decisions. Only the G−1 adaptive trajectories update BCP, as τref has no BCP decisions. The policy is optimized by the clipped objective         
+
+> JBCP (θ) = Eξ∼D ,{τi}G−1
+> i=1 ∼πθold
+> "
+> 1
+> PG−1
+> i=1 TiG−1X
+> i=1
+> TiX
+> t=1
+> min
+> 
+> ri,t (θ) ˆAi,clip ( ri,t (θ),1−ϵlow ,1 + ϵhigh ) ˆAi
+>  #
+
+,
+
+(5) where 
+
+ri,t (θ) = πθ (Ei,t | si,t )
+
+πθold (Ei,t | si,t ) , ˆAi = Ri − mean ( R)std ( R) (6) where R = {R1, . . . , R G−1, R ref } collects the rewards of the G − 1 adaptive trajectories and the reference. Here 
+
+ri,t (θ) is the importance ratio and ˆAi the group-normalized advantage. Including Rref anchors the advantage to the fixed-horizon strategy, providing a stable reference for adaptive execution decisions. A sparse binary success reward is insufficient here: op-timizing success alone cannot distinguish a trajectory that succeeds with necessary replanning from one that succeeds by querying the VLA excessively, biasing the policy toward overly short horizons. The reward should thus encourage suc-cess while discouraging unnecessary VLA calls. To this end, our Replanning-Efficiency Reward instantiates Ri by com-paring each adaptive trajectory against the reference τref ,which anchors in-group efficiency. Let Si ∈ { 0, 1} denote whether τi succeeds, and Ci, C ref the VLA calls of τi and 
+
+τref . We define the relative efficiency term as 
+
+ηi = tanh 
+
+
+
+log Cref 
+
+Ci
+
+
+
+, (7) where ηi > 0 means adaptive execution uses fewer VLA calls than the fixed strategy, and tanh bounds its scale. The final reward for an adaptive trajectory is 
+
+Ri = Si (1 + δ+ max( ηi, 0) + δ− min( ηi, 0)) , (8) where δ+ > δ − > 0 control the asymmetry. This keeps task success dominant, as a failed trajectory receives zero reward regardless of efficiency, so the policy cannot exploit short but unsuccessful executions. Among successful trajectories, it favors those using fewer VLA calls while only mildly pe-nalizing extra replanning, encouraging BCP to replan before a critical stage when a fresh observation is needed, yet toler-ating more replanning only when it preserves success. The reward also improves group-based optimization. With binary success alone, a group is uninformative when all tra-jectories share an outcome. The efficiency term breaks such ties by ranking successful trajectories by VLA usage, so all-success groups still yield non-zero advantages, while the reference trajectory anchors the group so that failed adaptive trajectories still receive negative signals whenever the fixed strategy succeeds. Only groups in which the reference and all adaptive trajectories fail are discarded, which reduces the gradient sparsity caused by sparse task outcomes. 
+
+Experiments 
+
+Experimental Settings 
+
+Simulation Settings. We conduct experiments on RoboTwin 2.0 (Chen et al. 2025b), LIBERO (Liu et al. 2023) and LIBERO-PRO (Zhou et al. 2025) to evaluate the effec-tiveness and generalization ability of the proposed method. On RoboTwin 2.0, BCP is trained under the Clean setting and evaluated under both Clean and Randomized settings. We use LingBot-VLA w/o depth (Wu et al. 2026), ABot-M0 (Yang et al. 2026b), and ACT (Zhao et al. 2023) as base policies. LingBot-VLA and ABot-M0 represent large-scale VLA models, whereas ACT serves as a lightweight, earlier-generation chunk-based policy. All three policies use a de-fault prediction horizon and execution horizon of 50 steps. BCP only learns an additional continuation head on top of the frozen VLA. The candidate execution horizons are set to (15, 20, 25,..., 50), and the policy is implemented with a 2-layer Transformer encoder. For the Reference-Relative Reward, we set δ+ = 0 .7 and δ− = 0 .3. We train BCP with GRPO on 8 NVIDIA A100 GPUs (40GB) for 300 steps, us-ing a group size of G = 8 . During rollout stage, we use 256 parallel environments and set the number of rollout epochs Simulation Task ACT ACT † π0 X-VLA π0.5 ABot-M0 ABot-M0 † Qwen-VLA LingBot-VLA LingBot-VLA †                                                                                                                                                                                                                                                                                                                         
+
+> Clean Rand. Clean Rand. Clean Rand. Clean Rand. Clean Rand. Clean Rand. Clean Rand. Clean Rand. Clean Rand. Clean Rand.
+> Beat Block Hammer 58% 5% 73% 5% 79% 84% 92% 88% 96% 93% 83% 79% 87% 86% 96% 96% 82% 78% 91% 92%
+> Blocks Ranking RGB 1% 0% 3% 0% 80% 63% 83% 83% 92% 85% 93% 89% 99% 98% 100% 95% 88% 88% 98% 98%
+> Blocks Ranking Size 0% 0% 1% 0% 14% 5% 67% 74% 49% 26% 61% 62% 74% 82% 70% 77% 70% 71% 88% 89%
+> Click Alarmclock 87% 8% 90% 8% 77% 68% 99% 99% 98% 89% 75% 62% 100% 100% 85% 94% 83% 81% 91% 82%
+> Hanging Mug 13% 0% 21% 0% 14% 11% 23% 27% 18% 17% 18% 24% 33% 34% 41% 44% 41% 36% 87% 62%
+> Move Stapler Pad 0% 0% 0% 0% 41% 24% 78% 73% 56% 42% 48% 58% 71% 77% 64% 68% 75% 70% 82% 78%
+> Place A2B Left 5% 0% 10% 1% 43% 47% 48% 49% 87% 82% 87% 88% 88% 94% 81% 89% 69% 67% 76% 81%
+> Place A2B Right 3% 0% 6% 0% 39% 34% 36% 36% 87% 84% 81% 82% 88% 93% 87% 87% 81% 73% 79% 84%
+> Place Can Basket 14% 0% 28% 0% 55% 46% 49% 52% 62% 62% 78% 66% 83% 74% 54% 74% 81% 83% 84% 81%
+> Place Dual Shoes 3% 0% 8% 0% 59% 51% 79% 88% 75% 75% 79% 76% 92% 83% 85% 83% 81% 85% 90% 88%
+> Place Mouse Pad 2% 0% 4% 0% 20% 20% 70% 70% 60% 39% 64% 65% 79% 73% 73% 74% 86% 81% 92% 88%
+> Place Object Scale 0% 0% 2% 0% 57% 52% 52% 74% 86% 80% 89% 86% 93% 92% 81% 85% 80% 83% 91% 89%
+> Turn Switch 23% 6% 33% 12% 41% 42% 40% 61% 62% 54% 63% 73% 71% 77% 64% 72% 60% 60% 72% 73%
+> Avg. (13 tasks above) (%) 16.08 1.46 21.46
+> (+5.38)
+> 2.00
+> (+0.54)
+> 47.61 42.08 62.77 67.23 71.38 63.69 70.69 70.00 81.38
+> (+10.69)
+> 81.77
+> (+11.77)
+> 75.46 79.85 75.15 73.54 86.23 (+11.08) 83.46 (+9.92) Avg. (50 tasks) (%) 34.50 2.40 --65.92 58.40 72.80 72.84 82.74 76.76 85.96 85.40 --86.10 87.20 89.88 88.78 93.94 (+4.06) 92.84 (+4.06)
+
+Table 2: Success rate comparison on RoboTwin 2.0. The table lists 13 low-success tasks where the LingBot-VLA obtains below 90% success rate under the Clean setting, together with average results over all 50 tasks. † denotes the addition of BCP. to 4. During training stage, we use a global batch size of 512 and perform 2 update epochs. All simulation experiments are implemented on top of RLinf (Yu et al. 2026), an open-source framework for reinforcement learning of VLA. 
+
+Real-World Settings. We conduct two manipulation tasks on the AGIBOT G1 using LingBot-VLA as the base pol-icy. For each task, we collect 250 task-specific teleoperated trajectories and jointly train the SFT policy with 2,000 pre-collected general-purpose grasping trajectories for 40,000 steps. We then collect 128 real-world trajectories for rein-forcement learning to train BCP while keeping the base pol-icy frozen. For evaluation, all compared methods are tested on the same set of 50 seeds for each task with three trials. 
+
+Benchmark Results 
+
+Results on RoboTwin 2.0. Table 2 reports the main results on RoboTwin 2.0. To better examine whether adaptive exe-cution can improve difficult manipulation scenarios, we first focus on 13 low-success tasks where the original LingBot-VLA achieves a success rate below 90% under the Clean set-ting. With the proposed BCP, LingBot-VLA improves from 75.15% to 86.23% on these 13 tasks, yielding an absolute gain of 11.08% . This suggests that many failures of the fixed execution strategy arise not from poor action-chunk prediction, but from the misalignment between fixed replan-ning boundaries and critical manipulation stages. Across all 50 RoboTwin 2.0 tasks, LingBot-VLA + BCP further im-proves the average success rate from 89.88% to 93.94% ,achieving a 4.06% gain and the state-of-the-art performance among all VLA methods. Similar trends are also observed with ABot-M0 and ACT. We further evaluate whether the learned execution-horizon policy can generalize beyond the training distribution. Although BCP is trained only under the Clean setting, we directly test it under the Randomized 
+
+setting. On the 13 low-success tasks, LingBot-VLA + BCP improves the success rate from 73.54% to 83.46%, yielding a 
+
+9.92% absolute gain. Across all 50 RoboTwin 2.0 tasks, BCP improves the average success rate from 88.78% to 92.84% ,with a 4.06% gain, and again achieves the state-of-the-art performance. These results indicate that BCP does not merely overfit to the specific visual conditions seen during training. 
+
+LIBERO Method Spatial Object Goal Long Avg. 
+
+π0.5 98.5% 98.7% 98.1% 92.5% 97.0% 
+
+π0.5 + AAC 99.1% 99.2% 98.0% 95.2% 97.9% 
+
+π0.5 + AutoHorizon 99.1% 99.2% 97.5% 91.6% 96.9% 
+
+π0.5 + BCP 99.6% 99.8% 99.2% 96.2% 98.7% 
+
+LIBERO-PRO Method ×0.2 ×0.3 ×0.4 Avg. 
+
+π0.5 53.2% 29.9% 9.5% 30.9% 
+
+π0.5 + AAC 57.4% 35.3% 11.8% 34.8% 
+
+π0.5 + BCP 57.0% 39.4% 16.8% 37.7% 
+
+Table 3: Success rates (%) of different execution strategies with π0.5 on LIBERO and LIBERO-PRO. Instead, the improvement suggests that the policy captures task-stage-level knowledge about when a predicted action chunk should be trusted and when replanning is necessary. 
+
+Results on LIBERO and LIBERO-PRO. We further evaluate BCP with π0.5 on LIBERO and LIBERO-PRO. As shown in Table 3, BCP achieves the best performance across all four LIBERO task suites, improving the average success rate of π0.5 from 97.0% to 98.7% and outperforming both AAC (Liang et al. 2026) and AutoHorizon (Wang et al. 2026a). On LIBERO-PRO, following the evaluation proto-col of AAC, we evaluate position perturbations of different magnitudes on the Object suite. BCP improves the average success rate from 30.9% to 37.7%, corresponding to a 2.9% gain over AAC. The consistent improvements, particularly under stronger position perturbations, demonstrate that BCP learns a robust execution-horizon policy that generalizes well to challenging environmental variations. 
+
+Runtime Efficiency 
+
+To verify that the performance gains of BCP do not come at the cost of substantially higher runtime overhead, we compare LingBot-VLA and LingBot-VLA + BCP on all 50 RoboTwin 2.0 tasks under the Clean setting. We first measure the average inference time of a single VLA query on an NVIDIA A100 GPU. Since the continuation head is lightweight, it only increases the per-query inference time LingBot -VLA           
+
+> Success
+> Fail
+> LingBot -VLA
+> +BCP
+> 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps
+> 40 steps 50 steps 50 steps 40 steps 50 steps
+> Lin
+
+(a) Place Dual Shoes (Clean settings) LingBot -VLA                                     
+
+> Success
+> Fail
+> LingBot -VLA
+> +BCP
+> 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps
+> 40 steps 50 steps 50 steps 40 steps 50 steps
+> 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps Fail
+> LingBot -VLA
+> LingBot -VLA
+> +BCP
+> 30 steps 50 steps 50 steps 40 steps 50 steps 50 steps 50 steps Success
+> LingBot -VLA
+> LingBot -VLA
+> +BCP
+> 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps 50 steps
+> 50 steps 50 steps 50 steps 20 steps 50 steps 50 steps 50 steps
+> Fail
+> Success
+> Stop
+
+(b) Place Bread Basket (Randomized setting) 
+
+Figure 3: Qualitative examples on RoboTwin 2.0. BCP adaptively replans before critical manipulation stages, refreshing the observation instead of acting on a stale chunk, and improves task execution over the fixed strategy. from 938.10 ms to 940.13 ms, introducing an additional over-head of 2.03 ms. We further record the average number of VLA calls and the average number of executed control steps per episode. For the ALOHA-AgileX embodiment, whose control frequency is 50 Hz, the overall runtime is estimated by combining the model inference cost and the robot execu-tion time. As shown in Table 4, BCP slightly increases the average number of VLA calls from 5.382 to 5.614 due to adaptive replanning. However, it reduces the average number of executed steps from 269.075 to 248.102. As a result, the estimated runtime decreases from 10.43 s to 10.24 s. These results show that BCP introduces negligible per-query infer-ence overhead and preserves the runtime efficiency of action chunking, while enabling selective replanning to improve task execution. 
+
+Method VLA Infer Time (ms) VLA Calls Exec. Steps Runtime (s) LingBot-VLA 938.10 5.382 269.075 10.43 
+
+LingBot-VLA +BCP 940.13 5.614 248.102 10.24 
+
+Table 4: Runtime cost comparison on 50 RoboTwin 2.0 tasks under the Clean setting. Although BCP issues slightly more VLA calls, it executes fewer control steps, so the overall runtime is lower. 
+
+Comparison with Execution-Horizon Strategies 
+
+We compare BCP with 8 execution-horizon strategies built upon LingBot-VLA, including Random, Fixed 20, Fixed 30, Fixed 40, Action Trigger (Wang et al. 2026a), Uncertainty Proxy (Wang et al. 2026a), AAC (Liang et al. 2026), and AutoHorizon (Wang et al. 2026a), as shown in Figure 4. The results first show that a shorter execution horizon is not inher-ently better: Fixed 20 fails to outperform the full-chunk base-10 20 30 60 
+
+Runtime (s) 
+
+> 88 90 92 94
+> Success Rate (%)
+> Full Chunk baseline
+> Better
+> Full Chunk Random Fixed 20 Fixed 30 Fixed 40 Action Trigger Uncertainty Proxy AAC AutoHorizon
+> BCP (Ours)
+
+Figure 4: SR–runtime trade-off of execution-horizon strate-gies on 50 RoboTwin 2.0 tasks under the Clean setting. line because it still imposes a uniform replanning schedule that can remain misaligned with critical manipulation stages. Moreover, Uncertainty Proxy and AAC incur substantially higher runtime because they require sampling multiple ac-tion chunks to estimate uncertainty or entropy. Overall, nearly all competing strategies provide only marginal gains or even degradation, highlighting the difficulty of selecting suitable replanning boundaries. In contrast, BCP improves the aver-age success rate by 4.06%. Benefiting from the Replanning-Efficiency Reward, which penalizes inefficient horizon deci-sions, BCP replans only when necessary and consequently achieves the lowest runtime among all evaluated methods. 
+
+Ablation studies 
+
+Table 5 analyzes the contribution of each component. The SFT policy achieves a success rate of only 41%, highlight-ing the substantial headroom for adaptive horizon execu-tion. Directly fine-tuning the action expert with RL (Fixed-50 steps  50 steps  50 steps  50 steps  Fail               
+
+> LingBot -VLA
+> LingBot -VLA
+> +BCP
+> 50 steps 30 steps 30 steps 50 steps 50 steps Success
+> 50 steps 50 steps 50 steps 50 steps Fail
+> LingBot -VLA
+> LingBot -VLA
+> +BCP
+> 50 steps 40 steps 30 steps 50 steps 40 steps Success
+> 50 steps
+> 50 steps
+
+(a) Grasping Bottle : Pick up the grape juice bottle on the tabletop with the right arm and place it into the felt bag. 50 steps  50 steps  50 steps  50 steps  Fail               
+
+> LingBot -VLA
+> LingBot -VLA
+> +BCP
+> 50 steps 30 steps 30 steps 50 steps 50 steps Success
+> 50 steps 50 steps 50 steps 50 steps Fail
+> LingBot -VLA
+> LingBot -VLA
+> +BCP
+> 50 steps 40 steps 30 steps 50 steps 40 steps Success
+> 50 steps
+> 50 steps
+
+(b) Hanging Mug : Use the right arm to pick the mug and hang it onto the rack. 
+
+Figure 5: Real-world evaluation on the AGIBOT G1. 
+
+Method Trainable Params. Success Rate SFT - 41% RL (Fixed-horizon) 442.803 M 79% (+38%) 
+
+RL (Softmax Head) 16.394 M 78% (+37%) 
+
+RL (BC Head) 16.393 M 83% (+42%) 
+
+RL (BC Head) + RER 16.393 M 87% (+46%) 
+
+Table 5: Ablation study on the Hanging Mug task under the Clean setting of RoboTwin 2.0. horizon) increases the success rate to 79%, but requires sig-nificantly higher computational overhead. Training only a lightweight head with a conventional softmax classifier (Soft-max), achieves a comparable success rate of 78% with a much smaller trainable module. Replacing the softmax classifier with Bernoulli-Continuation (BC) Head further improves the success rate to 83%, indicating that explicitly modeling the ordinal, prefix-sharing structure helps. Finally, incorporating the Replanning-Efficiency Reward (RER) raises the success rate to 87%, achieving the best performance. This demon-strates that jointly accounting for task success and replanning efficiency provides a more informative learning signal. 
+
+Visualization 
+
+Figure 3 provides qualitative examples to illustrate how BCP improves execution by selecting state-dependent replanning boundaries. In the Place Dual Shoes task, when placing the second shoe, BCP selects a 40-step horizon, triggering an ad-ditional replanning step before the final placement. With the updated observation, the robot obtains a corrected placement angle and places the shoe properly inside the box, whereas the fixed 50-step strategy moves it toward the edge. In the 
+
+Place Bread Basket task, the original LingBot-VLA fails when grasping the second bread because its fixed replan-ning schedule does not set a replanning boundary before the manipulation stage. In contrast, BCP divides the move-ment toward the second bread into two chunks, with the sec-ond chunk terminating immediately before grasping. This timely replanning allows the robot to generate a more accu-rate grasping motion. 
+
+Real-Robot Experiments 
+
+Figure 5 presents results on two real-world manipulation tasks. For the Grasping Bottle task, the fixed full-chunk strat-egy achieves a success rate of 74%. BCP further raises the success rate to 92%. The main challenge is that the smooth bottle surface makes the grasp sensitive to small pose errors. By adaptively shortening the execution horizon during the approach and manipulation stages, BCP refreshes the obser-vation and obtains a more accurate grasping pose, thereby preventing the bottle from slipping. For the Hanging Mug 
+
+task, the improvement is more pronounced: BCP achieves an 84% success rate, compared with 44% for full-chunk ex-ecution and 48% for AAC. As illustrated in the execution sequence, BCP triggers replanning before the hanging stage and generates a more precise hanging motion. 
+
+Conclusion 
+
+In this paper, we showed that a fixed execution horizon turns replanning into a task-agnostic periodic schedule that can be misaligned with critical manipulation stages, and that this timing, not horizon length alone, governs success. To address it, we proposed the Bernoulli-Continuation Policy, which for-mulates horizon selection as a chain of continue-or-replan decisions and is trained with reinforcement learning under a Replanning-Efficiency Reward, keeping the base VLA fro-zon. Across RoboTwin 2.0, LIBERO and a real robot, BCP consistently improves the fixed-horizon base policy with-out adding inference cost, with the largest gains on timing-sensitive, low-success task. Acknowledgments 
+
+We thank Wenbo Li, Jiaxing Qiu, and Chao Yu from the RLinf development team. We also thank Bohan Li for his helpful discussions on reinforcement learning. 
+
+References 
+
+Bjorck, J.; Castañeda, F.; Cherniadev, N.; Da, X.; Ding, R.; Fan, L.; Fang, Y.; Fox, D.; Hu, F.; Huang, S.; et al. 2025. Gr00t n1: An open foundation model for generalist humanoid robots. arXiv preprint arXiv:2503.14734 .Black, K.; Brown, N.; Driess, D.; Esmail, A.; Equi, M.; Finn, C.; Fusai, N.; Groom, L.; Hausman, K.; Ichter, B.; et al. 2024. π0: A Vision-Language-Action Flow Model for Gen-eral Robot Control. arXiv preprint arXiv:2410.24164 .Chen, K.; Liu, Z.; Zhang, T.; Guo, Z.; Xu, S.; Lin, H.; Zang, H.; Zhang, Q.; Yu, Z.; Fan, G.; et al. 2025a. πRL: Online rl fine-tuning for flow-based vision-language-action models. 
+
+arXiv preprint arXiv:2510.25889 .Chen, T.; Chen, Z.; Chen, B.; Cai, Z.; Liu, Y.; Li, Z.; Liang, Q.; Lin, X.; Ge, Y.; Gu, Z.; et al. 2025b. Robotwin 2.0: A scal-able data generator and benchmark with strong domain ran-domization for robust bimanual robotic manipulation. arXiv preprint arXiv:2506.18088 .Chi, C.; Xu, Z.; Feng, S.; Cousineau, E.; Du, Y.; Burchfiel, B.; Tedrake, R.; and Song, S. 2025. Diffusion policy: Visuo-motor policy learning via action diffusion. The International Journal of Robotics Research , 44(10-11): 1684–1704. Intelligence, P.; Amin, A.; Aniceto, R.; Balakrishna, A.; Black, K.; Conley, K.; Connors, G.; Darpinian, J.; Dhabalia, K.; DiCarlo, J.; et al. 2025. π∗
+
+> 0.6
+
+: a VLA That Learns From Experience. arXiv preprint arXiv:2511.14759 .Jing, D.; Wang, G.; Liu, J.; Tang, W.; Sun, Z.; Yao, Y.; Wei, Z.; Liu, Y.; Lu, Z.; and Ding, M. 2025. Mixture of Horizons in Action Chunking. arXiv preprint arXiv:2511.19433 .Kim, M. J.; Finn, C.; and Liang, P. 2025. Fine-tuning vision-language-action models: Optimizing speed and suc-cess. arXiv preprint arXiv:2502.19645 .Kim, M. J.; Pertsch, K.; Karamcheti, S.; Xiao, T.; Balakr-ishna, A.; Nair, S.; Rafailov, R.; Foster, E.; Lam, G.; Sanketi, P.; et al. 2024. Openvla: An open-source vision-language-action model. arXiv preprint arXiv:2406.09246 .Li, H.; Zuo, Y.; Yu, J.; Zhang, Y.; Yang, Z.; Zhang, K.; Zhu, X.; Zhang, Y.; Chen, T.; Cui, G.; et al. 2025. Simplevla-rl: Scaling vla training via reinforcement learning. arXiv preprint arXiv:2509.09674 .Li, Q.; Zhou, Z. P.; and Levine, S. 2026. Reinforcement learning with action chunking. Advances in Neural Informa-tion Processing Systems , 38: 55518–55553. Liang, Y.; Wang, X.; Wang, K.; Wang, S.; Peng, X.; Chen, H.; Chua, D. K. H.; and Vadakkepat, P. 2026. Adaptive action chunking at inference-time for vision-language-action models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , 20802–20811. Liu, B.; Zhu, Y.; Gao, C.; Feng, Y.; Liu, Q.; Zhu, Y.; and Stone, P. 2023. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems , 36: 44776–44791. Liu, J.; Gao, F.; Wei, B.; Chen, X.; Liao, Q.; Wu, Y.; Yu, C.; and Wang, Y. 2026. What can rl bring to vla general-ization? an empirical study. Advances in Neural Information Processing Systems , 38: 97121–97151. Pan, Y.; Pan, M.; Lu, Q.; Huang, J.; Zhang, M.; Huang, S.; Li, X.; Zhang, J.; Shen, Y.; Zhang, X.; et al. 2026. VLA-Corrector: Lightweight Detect-and-Correct Inference for Adaptive Action Horizon. arXiv preprint arXiv:2607.01804 .Shao, Z.; Wang, P.; Zhu, Q.; Xu, R.; Song, J.; Bi, X.; Zhang, H.; Zhang, M.; Li, Y.; Wu, Y.; et al. 2024. Deepseekmath: Pushing the limits of mathematical reasoning in open lan-guage models. arXiv preprint arXiv:2402.03300 .Wang, H.; Zhang, G.; Yan, Y.; Kompella, R. R.; and Liu, G. 2026a. Vla knows its limits. arXiv preprint arXiv:2602.21445 .Wang, Q.; Li, M.; Guan, J.; Ye, J.; Xie, S.; Liu, Y.; Chen, J.; Liang, Z.; Zhang, J.; Hu, X.; et al. 2026b. Qwen-VLA: Unifying Vision-Language-Action Modeling across Tasks, Environments, and Robot Embodiments. arXiv preprint arXiv:2605.30280 .Wang, R.; Zhang, Y.; Lin, J.; Luo, K.; Wang, J.; Wang, Z.; and Qi, X. 2026c. When to Trust Imagination: Adaptive Action Execution for World Action Models. arXiv preprint arXiv:2605.06222 .Wang, Z.; Lin, Z.; Li, R.; Zhang, Y.; Yang, X.; et al. 2026d. Open-Loop Planning, Closed-Loop Verification: Speculative Verification for VLA. arXiv preprint arXiv:2604.02965 .Wu, W.; Lu, F.; Wang, Y.; Yang, S.; Liu, S.; Wang, F.; Zhu, Q.; Sun, H.; Wang, Y.; Ma, S.; et al. 2026. A Pragmatic VLA Foundation Model. arXiv preprint arXiv:2601.18692 .Yang, J.; Zhu, B.; Chen, J.; and Jiang, Y.-G. 2026a. Actor-critic for continuous action chunks: A reinforcement learning framework for long-horizon robotic manipulation with sparse reward. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, 18692–18700. Yang, Y.; Zeng, S.; Lin, T.; Chang, X.; Qi, D.; Xiao, J.; Liu, H.; Chen, R.; Chen, Y.; Huo, D.; et al. 2026b. Abot-m0: Vla foundation model for robotic manipulation with action manifold learning. arXiv preprint arXiv:2602.11236 .Yu, C.; Wang, Y.; Guo, Z.; Lin, H.; Xu, S.; Zang, H.; Zhang, Q.; Wu, Y.; et al. 2026. RLinf: Flexible and Efficient Large-Scale Reinforcement Learning via Macro-to-Micro Flow Transformation. In 20th USENIX Symposium on Operating Systems Design and Implementation (OSDI 26) , 829–846. Zhao, T. Z.; Kumar, V.; Levine, S.; and Finn, C. 2023. Learn-ing fine-grained bimanual manipulation with low-cost hard-ware. arXiv preprint arXiv:2304.13705 .Zhou, X.; Xu, Y.; Tie, G.; Chen, Y.; Zhang, G.; Chu, D.; Zhou, P.; and Sun, L. 2025. LIBERO-PRO: Towards Robust and Fair Evaluation of Vision-Language-Action Models Beyond Memorization. arXiv preprint arXiv:2510.03827 .Zhu, W.; Zhang, Z.; Wang, X.; Pan, H.; Wang, T.; Geng, T.; Xu, R.; and Zheng, F. 2026. NaVIDA:: Vision-Language Navigation with Inverse Dynamics Augmentation. arXiv preprint arXiv:2601.18188 .Continue or Replan? Bernoulli-Continuation Policy Learning for Adaptive Horizon Execution — Appendix 
+
+Contents 
+
+1 Experimental Settings . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 1 1.1 Real-World Experimental Settings . . . . . . . . . . . . 1 1.2 Simulation Experimental Settings . . . . . . . . . . . . 2 2 Additional Experimental Results . . . . . . . . . . . . . . . . . . . 2 2.1 Distribution of Best Phases in the Phase-Shift Ex-periment . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2 2.2 Detailed Task-Wise Results on RoboTwin 2.0 . . 2 2.3 Runtime Efficiency Analysis . . . . . . . . . . . . . . . . . 3 2.4 Hyperparameter . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4 3 Limitations and Future Work . . . . . . . . . . . . . . . . . . . . . . 4 
+
+Experimental Settings 
+
+Real-World Experimental Settings 
+
+Table A.1 summarizes the configurations used for real-world supervised fine-tuning (SFT) and reinforcement learning (RL) training. All real-world experiments are conducted on the AGIBOT G1. For visual perception, we use three cam-eras: one top-view camera and two wrist-mounted cameras. The robot has 14 arm joints and two end effectors. We adopt LingBot-VLA-4B as the base model and freeze its vision encoder during SFT. The SFT stage uses 250 task-specific teleoperated trajectories together with approximately 2,000 pre-collected general-purpose grasping trajectories. For adaptive action-chunk execution, the Bernoulli-Continuation Policy (BCP) selects from five candidate ex-ecution horizons, {30 , 35 , 40 , 45 , 50 }. Its continuation head consists of a 2-layer Transformer with 8 attention heads. BCP is subsequently optimized using GRPO with a group size of 8. For Replanning-Efficiency Reward (RER), we set 
+
+δ+ = 0 .7 and δ− = 0 .3. The RL stage uses 128 training trajectories and 4 update epochs. Figure A.1 presents the physical setups and representative evaluation instances of the two real-world tasks. The tasks are designed to evaluate adaptive execution in manipulation stages that require accurate grasping or contact alignment. 
+
+Parameters LingBot-VLA 
+
+(Real-world dataset) 
+
+Real Robot 
+
+Type AGIBOT G1 Cameras camera_top, camera_wrist_left, camera_wrist_right Arm joints / effector 14 / 2 
+
+Base Model 
+
+Type LingBot-VLA-4B Freeze vision encoder True Precision (mixed) FP32 
+
+SFT Training 
+
+Training trajectories 250 (task-specific) + 2,000 (general-purpose) Training steps 40000 Global batch size 256 Learning rate 5e-5 LR decay style Constant 
+
+Bernoulli-Continuation Head 
+
+Num classes 5Execute steps {30, 35, 40, 45, 50} Transformer layers / heads 2 / 8 Init mode normal Loss coef 1.0 Sampling temperature 1.0 
+
+RL Training 
+
+Advantage type GRPO Group size 8Clip ratio (low / high) 0.2 / 0.28 Entropy bonus 0.05 RER δ+/δ − 0.7 / 0.3 Training trajectories 128 Update epochs 4Global batch size 512 Learning rate 5e-5 Weight decay 0.001 Grad clip 1.0 LR decay style Constant Table A.1: Hyperparameters for real-world SFT and RL train-ing with LingBot-VLA. 
+
+• Grasping Bottle . The robot is required to pick up the grape juice bottle from the tabletop using its right arm and place it into the felt bag. The primary challenge is (a) Grasping Bottle : Pick up the grape juice bottle on the tabletop with the right arm and place it into the felt bag. rack  
+
+> mug
+> (b) Hanging Mug : Use the right arm to pick the mug and hang it onto the rack.
+
+Figure A.1: Real-world task settings and some evaluation instances for Grasping Bottle and Hanging Mug on the AGIBOT G1. that the bottle has a smooth surface. Even a small error in the predicted grasp pose may result in an unstable grasp, causing the bottle to slip from the gripper during lifting or transportation. 
+
+• Hanging Mug . The robot is required to pick up the mug using its right arm and hang it onto the rack. Successful execution requires precise alignment between the mug handle and the rack hook. In particular, the relative po-sitional error must remain within 2 cm. Otherwise, the handle may miss the hook or collide with the rack. 
+
+Simulation Experimental Settings 
+
+Table A.2 summarizes the complete configurations for LingBot-VLA (Wu et al. 2026), ABot-M0 (Yang et al. 2026), and ACT (Zhao et al. 2023) on RoboTwin 2.0 (Chen et al. 2025), as well as π0.5 (Intelligence et al. 2025) on LIBERO (Liu et al. 2023). On RoboTwin 2.0, BCP is trained under the Clean setting and evaluated under both the Clean and Randomized settings. For LIBERO, BCP is trained on LIBERO and evaluated on both LIBERO and LIBERO-PRO (Zhou et al. 2025). The base models use their cor-responding action-generation configurations. LingBot-VLA, ABot-M0, and ACT employ a prediction horizon of 50 on RoboTwin 2.0, whereas π0.5 uses a prediction horizon of 10 on LIBERO. All simulation experiments are implemented on top of RLinf (Yu et al. 2026), an open-source framework for reinforcement learning of VLA. -
+
+Additional Experimental Results 
+
+Distribution of Best Phases in the Phase-Shift Experiment 
+
+To further analyze the phase-shift experiment presented in the main paper, we record the best-performing phase for each of the 50 RoboTwin 2.0 tasks by sweeping all phases under the same fixed 50-step execution horizon. As shown in Figure A.2, the best phases are broadly distributed across the 1 10 20 30 40 50      
+
+> Best phase '
+> 0123
+> Number of tasks
+> Â2uniformity test
+> Â2= 5 :00 ,p= 0 :29
+
+Figure A.2: Distribution of the best-performing phases across 50 RoboTwin 2.0 tasks. The best phases are broadly dis-tributed. A chi-square goodness-of-fit test does not reject the hypothesis of a uniform distribution ( χ2 = 5 .00 , p = 0 .287 ). entire phase range, without any clear concentration or consis-tent pattern. We further conduct a chi-square goodness-of-fit test against a uniform distribution. The test yields χ2 = 5 .00 
+
+and p = 0 .287 > 0.05 , meaning that we cannot reject the null hypothesis of uniformity. Thus, the optimal phases ex-hibit no statistically significant preference for any particular region of the phase space. This result further supports the observation that critical moments occur at different times across tasks and stages. Consequently, no single fixed phase can consistently align replanning boundaries with all precision-critical manipula-tion stages. This motivates BCP to determine the execution horizon for each action chunk and dynamically adjust the replanning timing of the VLA, allowing the robot to obtain an updated observation before critical manipulation stages. 
+
+Detailed Task-Wise Results on RoboTwin 2.0 
+
+Table A.5 reports the complete task-wise results of LingBot-VLA with and without BCP on all 50 RoboTwin 2.0 tasks. Under the Clean setting, BCP improves the overall aver-age from 89.88% to 93.94% . The largest improvement is observed on Hanging Mug , where the success rate increases from 41% to 87%. Substantial gains are also achieved on 
+
+Blocks Ranking Size (70% to 88%), Turn Switch (60% to Parameters LingBot-VLA 
+
+(RoboTwin 2.0) 
+
+ABot-M0 
+
+(RoboTwin 2.0) 
+
+ACT 
+
+(RoboTwin 2.0) 
+
+π0.5
+
+(LIBERO) 
+
+Base Model 
+
+Prediction horizon 50 50 50 10 Denoise steps 10 4 - 10 Noise method Euler ODE Euler ODE - Euler ODE Precision (mixed) BF16 BF16 FP32 BF16 
+
+Bernoulli-Continuation Head 
+
+Num classes 8 8 8 6Execute steps {15, 20, 25,..., 50} {15, 20, 25,..., 50} {15, 20, 25,..., 50} {2, 4, 5, 6, 8, 10} Transformer layers / heads 2 / 8 2 / 8 2 / 8 2 / 8 Init mode normal normal normal normal Loss coef 1.0 1.0 1.0 1.0 Sampling temperature 1.0 1.0 1.0 1.0 
+
+Rollout / Environment 
+
+Rollout epochs 4 16 4 8Train parallel environments 256 64 256 64 Eval environments 100 100 100 500 
+
+Reinforcement Learning Algorithm 
+
+Advantage type GRPO GRPO GRPO GRPO Group size 8 8 8 8Clip ratio (low / high) 0.2 / 0.28 0.2 / 0.28 0.2 / 0.28 0.2 / 0.28 Entropy bonus 0.05 0.05 0.05 0.05 RER δ+/δ − 0.7 / 0.3 0.7 / 0.3 0.7 / 0.3 0.7 / 0.3 
+
+Training 
+
+Total training steps 300 300 300 300 Global batch size 512 512 512 512 Micro batch size 4 2 4 4Update epochs 2 2 2 4learning rate 1e-4 1e-4 1e-4 1e-4 Weight decay 0.001 0.001 0.001 0.001 Grad clip 1.0 1.0 1.0 1.0 LR scheduler Constant Constant Constant Constant Table A.2: Simulation hyperparameters across base models and benchmarks. 72%), Click Alarm Clock (80% to 91%), and Place Object Scale (80% to 91%). These tasks involve precision-sensitive grasping, placement, or interaction stages, for which aligning replanning with task progress is particularly important. BCP also exhibits consistent improvements under the Ran-domized setting, despite being trained only under the Clean setting. It raises the average success rate from 88.78% to 92.84%. Notable improvements include Hanging Mug (36% to 62%), Blocks Ranking Size (71% to 89%), Beat Block Hammer (78% to 92%), and Place A2B Left (67% to 81%). These results indicate that BCP does not merely overfit to the specific visual conditions seen during training. Instead, the improvement suggests that the policy captures task-stage-level knowledge about when a predicted action chunk should be trusted and when replanning is necessary. 
+
+Runtime Efficiency Analysis 
+
+Table A.3 extends the ablation study in the main paper by reporting the average number of VLA calls, executed steps, and overall runtime for each variant on the Hanging Mug 
+
+task. The results reveal that the different variants improve task                        
+
+> Method VLA Calls ↓Exec. Steps ↓Runtime (s) ↓Success Rate ↑
+> SFT 13.525 676.250 26.21 41% RL (Fixed-horizon) 9.392 469.583 18.20 79% RL (Softmax Head) 12.142 464.708 20.71 78% RL (BC Head) 13.825 427.750 21.55 83% RL (BC Head) + RER 10.158 430.958 18.17 87%
+
+Table A.3: Runtime efficiency analysis on the Hanging Mug 
+
+task under the Clean setting of RoboTwin 2.0. performance through distinct mechanisms and consequently exhibit different efficiency characteristics. The SFT policy achieves the lowest success rate of 41%. Its frequent failures often lead to prolonged unsuccessful ex-ploration before the episode terminates, causing the policy to accumulate the largest numbers of VLA calls and exe-cuted control steps. Consequently, it incurs the highest over-all runtime of 26.21 s. RL (Fixed-horizon) directly updates the action expert, allowing the base policy to generate more effective actions and substantially improving the success rate. However, it retains the fixed 50-step execution horizon, lead-ing to more executed steps than the adaptive-horizon variants. RL (Softmax Head) and RL (BC Head), in contrast, keep the action-generation policy fixed and improve execution by adaptively adjusting the execution horizon. Both variants can shorten a chunk so that the VLA replans before critical ma-nipulation stages. Nevertheless, when trained only with task-level success, both policies exhibit a conservative tendency toward short horizons. Although frequent replanning reduces reliance on previously predicted actions, it also increases the number of expensive VLA queries. Consequently, the Soft-max Head and BC Head require longer runtimes despite executing fewer control steps than the fixed-horizon variant. The complete RL (BC Head) + RER variant addresses this efficiency issue by incorporating the proposed Replanning-Efficiency Reward. RER explicitly penalizes inefficient short-horizon decisions and discourages unnecessary VLA queries, while its efficiency-aware reward provides more in-formative advantage signals than binary task success alone. This reduces the average number of VLA calls from 13.825 to 10.158 while maintaining a similar number of executed control steps. Consequently, the complete method achieves both the highest success rate of 87% and the lowest overall runtime of 18.17 s. 
+
+Hyperparameter 
+
+Table A.4 studies the influence of the BCP architecture, candidate execution horizons, rollout temperature, and LR schedule on the Hanging Mug task under the Clean setting of RoboTwin 2.0. All variants use the same RER configuration, with δ+ = 0 .7 and δ− = 0 .3, and performance is insensitive to moderate variations in these two hyperparameters. For the BCP architecture, the two-layer Transformer achieves the highest success rate of 87%. Reducing the en-coder to one layer lowers the success rate to 82%, suggesting that a shallow model is less effective at integrating visual-language context with action-level features. Increasing the depth to four or six layers also reduces performance to 84% and 83%, respectively. This indicates that additional model depth is unnecessary for execution-horizon selection and may make optimization more difficult. Overall, two Transformer layers provide an effective balance between representation capacity and training stability. The choice of candidate horizons also has a sub-stantial effect. Replacing the fine-grained candidate set 
+
+{15 , 20 , 25 , . . . , 50 } with the coarser set {20 , 30 , 40 , 50 } re-duces the success rate from 87% to 78%. The finer spacing provides BCP with greater flexibility to place replanning boundaries immediately before precision-critical manipula-tion stages, whereas coarse candidates may force the policy to stop either too early or too late. We further examine the RL optimization settings. Increas-ing the rollout temperature from 1.0 to 1.6 reduces the suc-cess rate from 87% to 82%. Although a higher tempera-ture encourages broader exploration, excessive randomness in horizon selection can produce less reliable trajectories and                              
+
+> Transformer Layers in BCP Candidate Horizons Rollout Temperature LR Schedule SR 1{15, 20, 25,..., 50} 1.0 Constant 82%
+> 2{15 ,20 ,25 , ..., 50 }1.0 Constant 87%
+> 4{15, 20, 25,..., 50} 1.0 Constant 84% 6{15, 20, 25,..., 50} 1.0 Constant 83% 2{20 ,30 ,40 ,50 }1.0 Constant 78% 2{15, 20, 25,..., 50} 1.0 Cosine 82% 2{15, 20, 25,..., 50} 1.6 Constant 82%
+
+Table A.4: Hyperparameter study on the Hanging Mug task under the Clean setting of RoboTwin 2.0. All experiments use the same configuration of our RER. weaken the learning signal. Meanwhile, replacing the con-stant learning-rate schedule with a cosine schedule results in an 82% success rate. Based on these results, we use a two-layer Transformer, the candidate horizons {15 , 20 , 25 , . . . , 50 }, a rollout tem-perature of 1.0, and a constant learning-rate schedule for all RoboTwin 2.0 tasks. 
+
+Limitations and Future Work 
+
+Our BCP adjusts when the base VLA should stop executing the current action chunk and replan, but it does not modify the actions generated by the VLA. Its effectiveness therefore relies on the base VLA producing action chunks that are rea-sonable and contain useful actions for completing the task. When the predicted actions are fundamentally incorrect, se-lecting a different execution horizon or triggering replanning at a more appropriate time may still be insufficient to correct the trajectory. Thus, BCP primarily addresses failures caused by the misalignment between replanning timing and critical manipulation stages, rather than errors originating from the action-generation capability of the base VLA. An interesting direction is to extend adaptive execution-horizon learning to World Action Models (Bi et al. 2025; Li et al. 2026; Kim et al. 2026; Ye et al. 2026). These mod-els also generate action chunks for multi-step execution and therefore face a similar question of how long a predicted chunk should be executed before obtaining a new observa-tion and replanning. Extending BCP to this setting would provide a principled mechanism for dynamically aligning replanning boundaries with critical task stages. Simulation Task LingBot-VLA LingBot-VLA †
+
+Clean Rand. Clean Rand. 
+
+Adjust Bottle 96% 97% 97% 97% 
+
+Beat Block Hammer 82% 78% 91% 92% 
+
+Blocks Ranking RGB 88% 88% 98% 98% 
+
+Blocks Ranking Size 70% 71% 88% 89% 
+
+Click Alarm Clock 80% 81% 91% 82% 
+
+Click Bell 99% 100% 100% 100% 
+
+Dump Bin BigBin 98% 98% 97% 98% 
+
+Grab Roller 100% 100% 100% 100% 
+
+Handover Block 90% 92% 98% 93% 
+
+Handover Mic 94% 87% 100% 100% 
+
+Hanging Mug 41% 36% 87% 62% 
+
+Lift Pot 100% 99% 100% 100% 
+
+Move Can Pot 90% 91% 90% 93% 
+
+Move Pillbottle Pad 98% 99% 97% 98% 
+
+Move Playingcard Away 98% 98% 99% 98% 
+
+Move Stapler Pad 75% 70% 82% 78% 
+
+Open Laptop 98% 96% 98% 98% 
+
+Open Microwave 93% 88% 93% 96% 
+
+Pick Diverse Bottles 90% 89% 91% 91% 
+
+Pick Dual Bottles 100% 99% 100% 99% 
+
+Place A2B Left 69% 67% 76% 81% 
+
+Place A2B Right 81% 73% 79% 84% 
+
+Place Bread Basket 89% 90% 98% 95% 
+
+Place Bread Skillet 90% 83% 92% 89% 
+
+Place Burger Fries 99% 98% 100% 100% 
+
+Place Can Basket 81% 83% 84% 81% 
+
+Place Cans Plastic Box 98% 100% 100% 99% 
+
+Place Container Plate 92% 91% 99% 96% 
+
+Place Dual Shoes 81% 85% 90% 88% 
+
+Place Empty Cup 100% 98% 100% 100% 
+
+Place Fan 97% 96% 98% 98% 
+
+Place Mouse Pad 86% 81% 92% 88% 
+
+Place Object Basket 91% 87% 93% 87% 
+
+Place Object Scale 80% 83% 91% 89% 
+
+Place Object Stand 94% 98% 97% 98% 
+
+Place Phone Stand 94% 89% 95% 92% 
+
+Place Shoe 97% 99% 96% 98% 
+
+Press Stapler 90% 85% 94% 88% 
+
+Put Bottles Dustbin 96% 93% 96% 95% 
+
+Put Object Cabinet 93% 92% 93% 94% 
+
+Rotate Qrcode 93% 93% 94% 96% 
+
+Scan Object 92% 94% 95% 95% 
+
+Shake Bottle Horizontally 100% 100% 100% 100% 
+
+Shake Bottle 100% 99% 100% 99% 
+
+Stack Blocks Three 92% 94% 96% 97% 
+
+Stack Blocks Two 100% 100% 99% 100% 
+
+Stack Bowls Three 89% 84% 87% 86% 
+
+Stack Bowls Two 98% 99% 98% 98% 
+
+Stamp Seal 89% 88% 96% 96% 
+
+Turn Switch 60% 60% 72% 73% 
+
+Average 89.88% 88.78% 93.94% (+4.06%) 92.84% (+4.06%) 
+
+Table A.5: Success rate comparison on RoboTwin 2.0. † denotes the addition of BCP. References 
+
+Bi, H.; Tan, H.; Xie, S.; Wang, Z.; Huang, S.; Liu, H.; Zhao, R.; Feng, Y.; Xiang, C.; Rong, Y.; et al. 2025. Mo-tus: A unified latent action world model. arXiv preprint arXiv:2512.13030 .Chen, T.; Chen, Z.; Chen, B.; Cai, Z.; Liu, Y.; Li, Z.; Liang, Q.; Lin, X.; Ge, Y.; Gu, Z.; et al. 2025. Robotwin 2.0: A scal-able data generator and benchmark with strong domain ran-domization for robust bimanual robotic manipulation. arXiv preprint arXiv:2506.18088 .Intelligence, P.; Black, K.; Brown, N.; Darpinian, J.; Dha-balia, K.; Driess, D.; Esmail, A.; Equi, M.; Finn, C.; Fusai, N.; et al. 2025. π0.5: a Vision-Language-Action Model with Open-World Generalization. arXiv preprint arXiv:2504.16054 .Kim, M. J.; Gao, Y.; Lin, T.-Y.; Lin, Y.-C.; Ge, Y.; Lam, G.; Liang, P.; Song, S.; Liu, M.-Y.; Finn, C.; et al. 2026. Cosmos policy: Fine-tuning video models for visuomotor control and planning. arXiv preprint arXiv:2601.16163 .Li, L.; Zhang, Q.; Luo, Y.; Yang, S.; Wang, R.; Han, F.; Yu, M.; Gao, Z.; Xue, N.; Zhu, X.; et al. 2026. Causal World Mod-eling for Robot Control. arXiv preprint arXiv:2601.21998 .Liu, B.; Zhu, Y.; Gao, C.; Feng, Y.; Liu, Q.; Zhu, Y.; and Stone, P. 2023. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems , 36: 44776–44791. Wu, W.; Lu, F.; Wang, Y.; Yang, S.; Liu, S.; Wang, F.; Zhu, Q.; Sun, H.; Wang, Y.; Ma, S.; et al. 2026. A Pragmatic VLA Foundation Model. arXiv preprint arXiv:2601.18692 .Yang, Y.; Zeng, S.; Lin, T.; Chang, X.; Qi, D.; Xiao, J.; Liu, H.; Chen, R.; Chen, Y.; Huo, D.; et al. 2026. Abot-m0: Vla foundation model for robotic manipulation with action manifold learning. arXiv preprint arXiv:2602.11236 .Ye, S.; Ge, Y.; Zheng, K.; Gao, S.; Yu, S.; Kurian, G.; Indupuru, S.; Tan, Y. L.; Zhu, C.; Xiang, J.; et al. 2026. World action models are zero-shot policies. arXiv preprint arXiv:2602.15922 .Yu, C.; Wang, Y.; Guo, Z.; Lin, H.; Xu, S.; Zang, H.; Zhang, Q.; Wu, Y.; et al. 2026. RLinf: Flexible and Efficient Large-Scale Reinforcement Learning via Macro-to-Micro Flow Transformation. In 20th USENIX Symposium on Operating Systems Design and Implementation (OSDI 26) , 829–846. Zhao, T. Z.; Kumar, V.; Levine, S.; and Finn, C. 2023. Learn-ing fine-grained bimanual manipulation with low-cost hard-ware. arXiv preprint arXiv:2304.13705 .Zhou, X.; Xu, Y.; Tie, G.; Chen, Y.; Zhang, G.; Chu, D.; Zhou, P.; and Sun, L. 2025. LIBERO-PRO: Towards Robust and Fair Evaluation of Vision-Language-Action Models Beyond Memorization. arXiv preprint arXiv:2510.03827 .
