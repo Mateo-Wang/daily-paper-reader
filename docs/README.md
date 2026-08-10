@@ -6,7 +6,7 @@
   </div>
   <p class="dpr-home-frontier-summary">本周精选 <strong>0</strong> 篇前沿论文 · 累计共推荐 <strong>0</strong> 篇前沿论文</p>
   <div class="dpr-home-frontier-week">
-    <span class="dpr-home-frontier-week-label">└─ 2026 第 32 周</span>
+    <span class="dpr-home-frontier-week-label">└─ 2026 第 33 周</span>
     <ul>
     <li class="dpr-home-frontier-empty">本周暂无达到入选阈值的跨领域精选。</li>
     </ul>
