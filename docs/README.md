@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-09</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-10</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 16 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 18 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>9</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>14</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-09 20:19:22 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-10 20:17:22 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共处理16篇论文，其中精读7篇、速读9篇，重点聚焦具身智能与自动驾驶领域。最值得关注的是《Track4Action》与《Talk2Sensors》两篇9.0分工作，前者将3D跟踪器蒸馏进视觉-语言-动作策略，后者实现自动驾驶中基于传感器自适应物理线索的3D视觉定位。建议普通读者优先关注这两个方向，后续可留意相关开源代码与数据集进展。</p>
+<p>今日精读14篇、速读4篇，共18篇论文，聚焦世界模型在机器人与自动驾驶场景的应用。</p>
+<p>最值得关注的是两篇9.0分工作：内镜导航世界模型《EndoWAM》与真实天气驾驶世界模型《RealWeather》，均展现强泛化能力。</p>
+<p>建议读者优先精读这两篇高分论文，理解世界模型如何提升复杂环境下的视觉导航与场景理解。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">14 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Track4Action: Distilling World-Centric 3D Tracker into Vision-Language-Action Policies">Track4Action: Distilling World-Centric 3D Tracker into Vision-Language-Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Talk2Sensors: 3D Visual Grounding in Autonomous Driving via Sensor-Adaptive Physical Cue Matching">Talk2Sensors: 3D Visual Grounding in Autonomous Driving via Sensor-Adaptive Physical Cue Matching</span></li><li><span class="dpr-home-dashboard-paper-title" title="In-Context VLA: Endowing Vision-Language-Action Models with Language via In-Context Post-Training and Agentic Tool Use">In-Context VLA: Endowing Vision-Language-Action Models with Language via In-Context Post-Training and Agentic Tool Use</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EndoWAM: A Grounded World-Action Model for Generalizable Endoscopic Navigation">EndoWAM: A Grounded World-Action Model for Generalizable Endoscopic Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="RealWeather: Realistic and Scene-Faithful Weather Translation with Driving World Models">RealWeather: Realistic and Scene-Faithful Weather Translation with Driving World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Game-Theoretic Inverse Reinforcement Learning for Modeling Competitive Human Driving: A Cut-in Prediction Study">Game-Theoretic Inverse Reinforcement Learning for Modeling Competitive Human Driving: A Cut-in Prediction Study</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +63,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Toward Integrating Adaptive Experience Replay and Online Uncertainty Estimation in Safe Actor-Critic Optimal Control">Toward Integrating Adaptive Experience Replay and Online Uncertainty Estimation in Safe Actor-Critic Optimal Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="SpaceVLA: Spatially Grounded VLA for Robotic Manipulation with User-Authored Grasp and Place Anchors">SpaceVLA: Spatially Grounded VLA for Robotic Manipulation with User-Authored Grasp and Place Anchors</span></li><li><span class="dpr-home-dashboard-paper-title" title="Observation-Grounded Self-Predictive Reinforcement Learning for Visual Continuous Control">Observation-Grounded Self-Predictive Reinforcement Learning for Visual Continuous Control</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Unordered Landmark Visual Navigation">Unordered Landmark Visual Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="AutoIntervene: Calibrated Intervention for Action-Chunking Imitation Learning Policies">AutoIntervene: Calibrated Intervention for Action-Chunking Imitation Learning Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Lightweight 3D Object Detection via Mamba-Based Knowledge Distillation">Lightweight 3D Object Detection via Mamba-Based Knowledge Distillation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>3</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 </div>
 

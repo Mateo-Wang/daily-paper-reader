@@ -1,0 +1,1238 @@
+Title: WNM-3D: A World Navigation Model with 3D Scene Conditioning for Closed-Loop VLN
+
+URL Source: https://arxiv.org/pdf/2608.07267v1
+
+Published Time: Mon, 10 Aug 2026 01:13:01 GMT
+
+Number of Pages: 23
+
+Markdown Content:
+WNM-3D: A World Navigation Model with 3D Scene Conditioning for Closed-Loop VLN 
+
+Yuehao Huang 1,2† , Yunzi Wu 1,3† , Xiaotao Zhang 1,4† , Xinhai Li 1‡, Jiankun Dong 1, Jiajun Lv 2,
+
+Chi Zhang 1, Chenjia Bai 1∗, Yong Liu 2∗, Xuelong Li 1∗
+
+> 1
+
+Institute of Artificial Intelligence, China Telecom, 2Zhejiang University, 3Tongji University, 
+
+> 4
+
+Shanghai Jiao Tong University 
+
+> †
+
+Equal Contributions ‡Project Leader *Corresponding Authors 
+
+Recent vision-language navigation (VLN) systems increasingly adapt pretrained vision-language mod-els (VLMs) into vision-language-action (VLA) policies that map egocentric observations and language instructions directly to navigation actions. Although semantically capable, such action-centric train-ing does not explicitly model how the agent’s visual observations should evolve under its predicted motion. Generative world-action models (WAMs) jointly predict future observations and actions, yet existing WAMs for continuous VLN do not condition joint future-view and action generation on geometry-aware representations inferred from the observed history. We present WNM-3D , a gener-ative World Navigation Model with 3D scene conditioning for continuous VLN. To consolidate past observations into persistent scene context, a frozen feed-forward geometry encoder extracts geometry-aware representations from the monocular egocentric RGB history, and a trainable 3D Scene-to-Token Adapter converts them into a fixed-length prefix in the token space of the world-action Diffusion Transformer. Through block-causal attention, this prefix conditions every future video-action block, providing a shared geometric context for both future-view and action generation. We train WNM-3D through supervised world-action fine-tuning on A*-generated demonstrations, DAgger-style adapta-tion on policy-visited states, and DanceGRPO-based closed-loop policy optimization. Experiments on GN-Bench show that WNM-3D outperforms strong VLM-based navigation policies and its 2D-conditioned counterpart in closed-loop navigation. On a fixed near-goal evaluation set, WNM-3D also achieves higher flow–action consistency and lower visual-motion error.  
+
+> Date:
+
+August, 2026  
+
+> Correspondence to:
+
+Yuehao Huang ( yuehaohuang@zju.edu.cn ) Chenjia Bai ( baicj@chinatelecom.cn )
+
+# 1 Introduction 
+
+Vision-language navigation (VLN) requires an embodied agent to translate language instructions and stream-ing egocentric observations into navigation actions under partial observability and closed-loop interaction. Recent VLN methods increasingly build action-generating policies upon pretrained vision-language models (VLMs), including video-based VLM policies and explicitly formulated vision-language-action (VLA) models (Zhang et al., 2024, 2025a; Cheng et al., 2024), amid broader efforts to deploy large multimodal models efficiently across heterogeneous device–edge–cloud environments (An et al., 2026; Shao and Li, 2025). These models inherit strong semantic priors for instruction understanding, landmark grounding, and visual reason-ing. However, they are optimized primarily through action prediction and therefore do not explicitly model how the agent’s observations should evolve under its predicted motion. This omission is consequential in continuous navigation: every action changes the viewpoint and, consequently, the visual evidence available to subsequent decisions. Action supervision alone provides no direct predictive constraint on this closed-loop observation–action evolution. Generative world models provide a complementary perspective by predicting how observations evolve through interaction. Action-conditioned navigation world models generate future egocentric observations under can-didate actions (Bar et al., 2025), whereas generative world-action models (WAMs) jointly model future 1arXiv:2608.07267v1 [cs.AI] 7 Aug 2026 observations and executable actions within a coupled predictive system (Ye et al., 2026; Zhao et al., 2026). Existing WAMs for continuous VLN, however, do not condition joint future-view and action generation on geometry-aware representations inferred from the observed history. Although their RGB histories or video latents preserve local appearance and temporal context, they provide no explicit mechanism for consolidat-ing the accumulated observation history into persistent geometry-aware scene context. This can leave the correspondence between a predicted trajectory and its associated visual transition underconstrained, partic-ularly under large viewpoint changes. A monocular observation history nevertheless contains multiple views of the same environment as the agent moves. This motivates our central question: how can geometry-aware information recovered from this history be incorporated as shared context for both future-view prediction and navigation-action generation? 
+
+We present WNM-3D , a generative World Navigation Model with 3D scene conditioning for continuous VLN. To our knowledge, WNM-3D is the first generative world-action model for continuous VLN to use geometry-aware scene tokens inferred from the observation history as a shared clean inference-time condition for both future-view prediction and action generation. A frozen feed-forward geometry encoder extracts cross-view features from a history of monocular egocentric RGB observations. A trainable 3D Scene-to-Token Adapter 
+
+converts these geometry-aware features into a fixed-length token sequence aligned with the hidden width and token layout of the world-action Diffusion Transformer (DiT). These tokens are prepended to the denoising stream and remain visible to every future video-action block through block-causal attention. The scene context therefore guides both modalities throughout joint denoising. Through a fixed token interface, the adapter decouples the upstream scene representation from the downstream world-action generator. Closed-loop navigation additionally exposes the model to states that are absent from offline expert demonstra-tions. We therefore train WNM-3D progressively. First, supervised world-action fine-tuning on A*-generated demonstrations initializes joint future-view and action prediction. Second, DAgger-style data aggregation queries the A* expert at policy-visited states and supplies corrective actions together with their trajectory-consistent future observations (Ross et al., 2011; Li et al., 2026). Third, we apply DanceGRPO (Xue et al., 2025) to the joint visual-action flow policy, using visual, navigation, and stopping rewards derived from simulator rollouts for closed-loop policy optimization. We evaluate closed-loop navigation performance, the contribution of each training stage, and flow–action consistency across the training curriculum. Experiments on GN-Bench show that WNM-3D outperforms strong VLM-based navigation policies and its 2D-conditioned counterpart. Stage-wise ablations identify DAgger as the dominant source of closed-loop improvement, while DanceGRPO provides additional refinement. Furthermore, on a fixed near-goal evaluation set, WNM-3D exhibits higher flow–action consistency and lower visual-motion error than the 2D-conditioned counterpart. Our contributions are threefold: • We formulate a geometry-conditioned WAM for continuous VLN, in which geometry-aware scene to-kens derived from observation history jointly condition future visual latents and temporally aligned navigation actions. • We introduce a modular 3D Scene-to-Token Adapter that combines geometry-aware feature fusion, content-initialized target queries, anchored deformable resampling, and factorized spatiotemporal re-finement to produce a fixed-length prefix compatible with the world-action DiT. • We establish a progressive closed-loop training protocol combining supervised world-action learning, DAgger adaptation to policy-visited states, and DanceGRPO refinement, and provide stage-wise anal-yses of navigation performance and flow–action consistency. 
+
+# 2 Related Work 
+
+VLM-Based Navigation and Closed-Loop Policy Learning. Recent navigation methods increasingly adapt pretrained vision-language models (VLMs) into action-generating policies, including video-based VLM poli-cies, explicitly formulated vision-language-action (VLA) models, and cross-task navigation foundation models (Zhang et al., 2024, 2025a; Cheng et al., 2024; Zhang et al., 2025b). Other approaches augment VLM poli-cies with explicit planning, dialogue-enabled coordination, scene-graph guidance, or online spatial memories (Long et al., 2024; Huang et al., 2025; Su et al., 2026; Deng et al., 2026; Zhou et al., 2026a; Wang et al., 22026a; Ma et al., 2026a; He et al., 2025; Wang et al., 2023, 2024). Despite these architectural advances, such methods primarily optimize the mapping from observation–instruction histories to navigation actions, without jointly modeling the future observations induced by those actions. Closed-loop deployment addi-tionally introduces covariate shift when the policy visits states absent from offline demonstrations. DAgger addresses this problem by collecting expert labels at policy-visited states (Ross et al., 2011), while GN0 com-bines supervised learning, rollout-based data aggregation, and reinforcement learning for continuous VLN (Li et al., 2026). For generative policies, DanceGRPO extends group-relative policy optimization to diffusion and rectified-flow visual generators (Xue et al., 2025). 
+
+Generative Navigation World Models and World-Action Models. Action-conditioned navigation world mod-els predict future egocentric observations under candidate actions, but generally require an external planner or action-selection procedure to convert visual predictions into control (Bar et al., 2025). World-action mod-els (WAMs) instead couple future-state prediction and action generation within a unified generative policy. DreamZero establishes a joint video-action flow formulation for robotic manipulation, which provides the generative backbone adopted by WNM-3D (Ye et al., 2026). In navigation, WAM-Nav uses a shared Diffu-sion Transformer to asymmetrically generate short-horizon latent visual foresight and long-horizon actions, conditioned on visual observations and ego-motion history (Yang et al., 2026). NavWAM represents future observations, goal-progress values, and action chunks in a shared latent sequence for goal-conditioned visual navigation (Azuma et al., 2026). SWAM jointly generates intermediate RGB-D observations and action trajec-tories for image-goal navigation, using depth pseudo-labels during training to internalize spatial priors while requiring only monocular RGB at inference (Chen et al., 2026). WorldFly employs coupled flow-matching branches to generate future videos and actions for language-guided UAV navigation (Zheng et al., 2026), whereas WorldVLN autoregressively predicts latent world-state transitions and decodes them into waypoint actions for aerial VLN (Zhao et al., 2026). FutureNav incorporates visual and spatial features into a VLM and jointly optimizes action, dynamics, and future spatial-state objectives, but does not formulate future views and actions as coupled generative variables (Zhang et al., 2026a). NavWM jointly learns latent world reasoning, multimodal trajectory prediction, and controllable visual generation, using world tokens super-vised by depth and semantics to support foresight-based trajectory selection (Mei et al., 2026). It evaluates candidate trajectories through action-conditioned visual foresight, whereas WNM-3D uses history-derived scene tokens as an inference-time condition shared by jointly generated visual and action variables. 
+
+Geometry-Aware World-Action Modeling. Feed-forward geometry models such as VGGT and VGGT-Ω infer camera and dense scene attributes from multiple images, providing transferable cross-view representations for downstream embodied tasks (Wang et al., 2025, 2026b). Geometry has also been incorporated into WAMs in other embodied domains. DriveDreamer-Policy jointly models depth, future video, and motion planning for autonomous driving (Zhou et al., 2026b). GeoSem-WAM improves WAM representations through auxiliary future-geometry and semantic prediction while avoiding explicit future rollout at inference (Ma et al., 2026b), while MECo-WAM transfers VGGT-derived 4D geometric priors into a video-action pathway through a training-time geometric expert that is removed at deployment (Zhang et al., 2026b). In contrast, WNM-3D adapts geometry-aware features extracted from the observed history into scene tokens and uses them as a shared inference-time condition for future-view and language-conditioned action generation. 
+
+# 3 Method 
+
+Overview. WNM-3D is a generative world-action model for continuous VLN. At each replanning step, it jointly predicts a finite-horizon future-view rollout and a temporally aligned navigation-action rollout. Fig-ure 1 summarizes the architecture, including history-prefix construction, joint latent world-action modeling, and block-causal self-attention. The model builds on the joint video-action flow backbone of DreamZero (Ye et al., 2026), while introducing a frozen feed-forward geometry encoder and a trainable 3D Scene-to-Token Adapter that transform the monocular observation history into a geometry-aware conditioning prefix. For comparison, we instantiate WNM-2D , which shares the same world-action backbone, block-causal attention, prediction targets, and three-stage training procedure, but replaces the geometry-derived prefix with the back-bone’s native VAE-encoded RGB-history prefix. We next describe the prediction problem, the world-action backbone, the proposed adapter, and the progressive closed-loop training procedure. 3(b) Joint Latent World–Action Modeling       
+
+> Future Frames Video VAE Encoder
+> ❄
+> 🔥
+> Action Encoder Video VAE Decoder
+> ❄
+> Action Decoder Language/ Current Frame Encoder ❄
+> Video Latents Action Latents
+> Noise
+> Expert Actions Predicted Future Frames Predicted Actions
+> (c) Block-Causal Self-Attention
+> QKV
+> Prefix Video Tokens Action Tokens
+> Cₜ
+> Cₜ
+> V₀ V₀ V₁ V₁ V₂ V₂
+> …
+> ⋮
+> Vᴮ
+> Vᴮ
+> A₁ A₁ A₂ A₂
+> …
+> ⋮
+> Aᴮ
+> Aᴮ
+> visible masked
+> World–Action DiT
+
+🔥    
+
+> (a) History Prefix Construction
+> WNM-3D WNM-2D
+> History Frames
+> 🔥
+> 3D Scene-to-Token Adapter VGGT-Ω ❄❄Video VAE Encoder History Tokens 🔥
+
+Figure 1 Overview of WNM-3D. (a) History prefix construction. WNM-3D encodes the monocular RGB history with a frozen VGGT-Ω and the trainable 3D Scene-to-Token Adapter to obtain a geometry-aware scene prefix, while WNM-2D uses the backbone’s native VAE-encoded RGB-history prefix. (b) Joint latent world-action modeling. Future visual and action variables are jointly modeled by a shared world-action DiT, conditioned on the history prefix together with the current-frame and language context, yielding temporally aligned future visual latents and navigation actions. (c) 
+
+Block-causal self-attention. The clean history prefix remains visible to all temporal blocks; visual and action tokens interact within each block while attending only to the current and preceding blocks, preserving causality across the predicted horizon. 
+
+3.1 Problem Formulation 
+
+We consider continuous VLN under partial observability. At replanning step t, the agent receives a language instruction ℓ and maintains a history Ht = ( Iτ1 , . . . , I τK ) of K monocular egocentric RGB observations, where τ1 < · · · < τ K = t. The model predicts B future visual blocks Yt = ( Yt, 1, . . . , Y t,B ), each containing Nv
+
+future RGB frames, together with temporally aligned action blocks At = ( At, 1, . . . , At,B ), each containing 
+
+Na navigation actions. The current observation It immediately precedes the first predicted visual block. For each replanning step, the simulator trajectory is smoothed and transformed into a fixed local navigation frame anchored at the camera pose corresponding to It. Let p(t) 
+
+> j
+
+= ( p(t)
+
+> j,x
+
+, p (t) 
+
+> j,y
+
+) denote its j-th sampled planar position, with p(t)0 = 0, and let ψ(t) 
+
+> j
+
+denote the corresponding tangent heading. These quantities are used only to construct action targets and are not observed by the policy. Each navigation action is the incremental motion between two consecutive samples: 
+
+a(t) 
+
+> j
+
+=
+
+
+
+p(t) 
+
+> j+1 ,x
+
+− p(t)
+
+> j,x
+
+, p (t) 
+
+> j+1 ,y
+
+− p(t) 
+
+> j,y
+
+, wrap [−π,π )
+
+
+
+ψ(t) 
+
+> j+1
+
+− ψ(t)
+
+> j
+
+ 
+
+, j = 0 , . . . , BN a − 1. (1) Thus, a(t) 
+
+> j
+
+= (∆ x(t) 
+
+> j
+
+, ∆y(t) 
+
+> j
+
+, ∆ψ(t) 
+
+> j
+
+) represents a transition between consecutive samples in the common local frame anchored at It. The translational components share this frame’s fixed coordinate axes, while ∆ψ(t) 
+
+> j
+
+is computed from successive tangent headings of the smoothed trajectory. The actions are grouped as 
+
+At,b =
+
+
+
+a(t)(b−1) Na , . . . , a (t)
+
+> bN a−1
+
+
+
+∈ RNa×3, b ∈ { 1, . . . , B }. (2) Each action block spans the temporal interval of its paired visual block. For WNM-3D, we model the joint distribution pθ,ϕ (Yt, At | H t, ℓ ), where θ parameterizes the world-action backbone and its modality-specific layers, and ϕ parameterizes the 3D Scene-to-Token Adapter. WNM-2D follows the same predictive formulation using the native RGB-history prefix and does not include the adapter parameters ϕ.
+
+3.2 History Conditioning and Block-Causal Attention 
+
+Let Ct ∈ RNc×d denote the clean history-conditioning prefix prepended to the self-attention stream of the world-action Diffusion Transformer (DiT), where Nc is the fixed prefix length and d is the DiT hidden width. The two variants differ in how this prefix is constructed: WNM-2D forms C2D  
+
+> t
+
+from the backbone’s native VAE-encoded RGB history, whereas WNM-3D applies a frozen feed-forward geometry encoder Egeo followed by the trainable 3D Scene-to-Token Adapter Tϕ:4C3D  
+
+> t
+
+= Tϕ(Egeo (Ht)) ∈ RNc×d. (3) In parallel, the current frame and language instruction are encoded through the backbone’s native cross-attention pathway as Gt = [ Eimg (It); Eℓ(ℓ)] . Following DreamZero, the video VAE latent of It defines the block-zero visual flow variable Vσ0,0.During training, the current-frame visual group Vσ0,0, the future visual groups {Vσb,b }Bb=1 , and the aligned action groups {Aσb,b }Bb=1 are serialized with the clean prefix as 
+
+Sσ = [ Ct, Vσ0,0, Vσ1,1, . . . , VσB ,B , Aσ1,1, . . . , AσB ,B ] . (4) A future visual group and its aligned action group share the same flow timestep σb while using independently sampled noise. The prefix Ct and cross-attention context Gt remain clean. The two variants otherwise share the predicted variables, attention layout, backbone, and learning objectives. We apply a block-causal self-attention mask indexed by temporal block rather than serialized token position. The prefix attends only within itself, and the block-zero visual group attends to the prefix and itself. For temporal block b, both its visual and action tokens may attend to the prefix, block zero, and all visual-action groups up to and including block b, while later blocks remain masked. Visual and action tokens therefore interact bidirectionally within each block, whereas dependencies across blocks remain causal. 
+
+3.3 Joint World-Action Flow Matching 
+
+We adopt the joint flow-matching formulation of DreamZero (Ye et al., 2026), modeling visual and action variables in their respective continuous spaces with a shared world-action DiT. Let eYt = ( It, Y t, 1, . . . , Y t,B )
+
+denote the complete visual sequence. The frozen video VAE encodes it into blockwise visual latents {xv,b 
+
+> data
+
+}Bb=0 .The physical action rollout is scaled, normalized using training-set statistics, and zero-padded to the fixed action width expected by the backbone, yielding {xa,b 
+
+> data
+
+}Bb=1 .For modality m ∈ { v, a } and temporal block b, we sample ϵm,b ∼ N (0, I) and construct the linear conditional-flow path 
+
+xm,b σb = (1 − σb)xm,b  
+
+> data
+
++ σbϵm,b , um,b σb = ϵm,b − xm,b 
+
+> data
+
+. (5) Visual blocks use b ∈ { 0, . . . , B }, whereas action blocks use b ∈ { 1, . . . , B }. Conditioned on Sσ , the per-block flow timesteps, and Gt, the shared DiT predicts modality-specific velocity fields. We optimize the world-action objective 
+
+LWA = E MSE w
+
+ buvθ,ϕ , uv  + λa MSE w, Ma
+
+ buaθ,ϕ , ua , (6) where bum and um collect the blockwise velocity predictions and targets for modality m, and λa balances the action loss. MSE w applies flow-timestep-dependent weights blockwise, while MSE w, Ma additionally masks padded action dimensions using Ma. Visual and action variables retain separate input transformations, output heads, and velocity targets while exchanging information through the shared DiT. 
+
+3.4 3D Scene-to-Token Adapter 
+
+The frozen VGGT-Ω geometry encoder (Wang et al., 2026b) produces L patch-feature grids {F(l) 
+
+> t
+
+}Ll=1 , each with shape K × Hs × Ws × dl. As illustrated in Fig. 2, the 3D Scene-to-Token Adapter converts these fea-tures into a fixed-length geometry-aware prefix through feature fusion, structured query formation, anchored deformable resampling, and factorized spatiotemporal refinement, bridging the lattice and channel mismatch between the geometry encoder and the DiT conditioning interface. 
+
+Encoder-Level Feature Fusion. Each selected encoder level is normalized and projected to a common width 
+
+ds. Since the selected feature grids share the same history–height–width lattice, features at the same lattice location remain temporally and spatially aligned across encoder levels and can therefore be fused without additional resampling or interpolation. We use a lightweight gating network to assign location-adaptive 5weights across encoder levels while preserving the correspondence of each history-frame patch. This produces a shared geometry-aware source memory ¯Ft:
+
+P(l) 
+
+> t
+
+= Pl
+
+
+
+F(l)
+
+> t
+
+
+
+, α(l) 
+
+> t,i
+
+=exp 
+
+
+
+g(P(l) 
+
+> t,i
+
+)
+
+PLr=1 exp 
+
+
+
+g(P(r) 
+
+> t,i
+
+)
+
+ , Ft,i =
+
+> L
+
+X
+
+> l=1
+
+α(l) 
+
+> t,i
+
+P(l) 
+
+> t,i
+
+. (7) Here, i indexes the shared history–height–width lattice, and Ft ∈ RK×Hs×Ws×ds denotes the fused geometry-aware source memory. 
+
+Query Formation and Deformable Resampling. To construct a structured target representation while re-taining scene content, we adaptively pool the source memory onto a target lattice and combine the resulting scene base with learned target-grid slots and structured embeddings: 
+
+Bt = Pool Tc,H c,W c
+
+ Ft
+
+ , Q0 
+
+> t
+
+= Qslot + PB (Bt) + Estruct . (8) 2. Query Formation & Resampling      
+
+> 3. Refinement & Output
+> Frozen VGGT-Ω
+> Layer fusion
+> Source memory
+> Wₛ
+> Hₛ
+> Wₛ
+> Hₛdₛ
+> Target queries
+> Query init
+> Anchored deformable resampling ×2
+> Spatial– temporal refinement ×2 Detail head
+> Coarse head
+> Flatten Geometry-aware scene prefix
+> …
+> 1. Feature Extraction & Fusion
+> Pooled base
+> spatial
+> temporal
+> History Frames
+> Figure 2 3D Scene-to-Token Adapter.
+
+The adapter trans-forms history-derived geometry features into a fixed-length scene prefix through feature fusion, deformable resampling, and spatiotemporal refinement. 
+
+The target lattice contains Nc = TcHcWc queries. 
+
+Qslot contains learned target-grid slots, while 
+
+Estruct aggregates global, temporal, row, column, target-coordinate, and query-type embeddings. The pooled base preserves coarse scene context but may discard fine-grained evidence. We therefore apply R anchored deformable resampling layers, yielding refined queries QRt . Each target query is associated with a regular anchor mapped onto the source history–height–width lattice. The re-sampler predicts query-dependent offsets and ag-gregation weights, retrieves a small neighborhood of source features around each anchor, and aug-ments the sampled content with source-coordinate embeddings. This localized retrieval enables fine-grained feature aggregation without global cross-attention over the full source memory. 
+
+Spatiotemporal Refinement and Output. The re-sampled queries are reshaped to the target lat-tice and processed by factorized refinement blocks. Each block applies spatial self-attention within each temporal slice, followed by temporal self-attention at each spatial location and an MLP residual. A detail head projects the refined queries, while a coarse head projects the pooled scene base as a residual: 
+
+C3D  
+
+> t
+
+= Flatten Hdetail 
+
+ STRefine ϕ(QRt ) + Hcoarse (Bt) ∈ RNc×d. (9) The resulting tokens form the clean history-conditioning prefix in Eq. (3) and provide shared scene context for future-view and action generation. The adapter is optimized jointly with the trainable world-action components, while the geometry encoder remains frozen. 
+
+3.5 Closed-Loop Training and Receding-Horizon Inference 
+
+We optimize WNM-2D and WNM-3D in three stages, progressively shifting from offline expert supervision to policy-induced state correction and reward-guided refinement, as illustrated in Fig. 3. 6World-Action DiT 🔥    
+
+> History Tokens Video Tokens Action Tokens Video Tokens
+> Action
+> 2) Pairwise Multi-Stream Credit Branch 1 | +A Branch 2 | −A 1) Stratified Counterfactual Pair
+> 🔥
+> 3D Scene-to-Token Adapter
+> VGGT-Ω ❄
+> WNM-3D
+> History Frames
+
+(a) Stage I – Offline A* SFT 
+
+> Expert Actions Future Frames
+> WNM-2D
+> ❄Video VAE Encoder
+> History Tokens
+> Image– Language Conditioning
+> ❄
+
+🔥 
+
+> Action Encoder
+> [Δx₁, Δy₁, Δθ₁], [Δx₂, Δy₂, Δθ₂], ......
+> Predicted Actions Future Video
+
+DAgger SFT 🔥 
+
+> DAgger-SFT Update Stage-II Policy Stage-II Dataset Stage-I Policy
+
+(b) Stage II – Closed-Loop DAgger-SFT (c) Stage III — Closed-Loop DanceGRPO 
+
+> Stage-II Policy
+
+Closed-Loop Rollout 
+
+> A* Expert Real RGB
+
+🔥 Stage-III Policy 
+
+> Stop Nav Visual Pairwise Advantage Multi-Stream Rewards
+> Action Tokens
+
+Figure 3 Overview of the three-stage training curriculum. (a) Stage I: Offline A* SFT. WNM-3D and WNM-2D jointly learn future visual prediction and action generation from A*-generated expert demonstrations, using geometry-aware and RGB-history conditioning, respectively. (b) Stage II: Closed-loop DAgger-SFT. The Stage-I policy is rolled out in simulation, and expert corrections at policy-visited states are collected to construct a policy-specific DAgger dataset for supervised refinement. (c) Stage III: Closed-loop DanceGRPO. Starting from the Stage-II policy, stratified counterfactual rollout pairs are optimized with pairwise multi-stream credit assignment over visual, navigation, and stopping rewards. 
+
+Stage I: Offline A* SFT. We first optimize LWA on offline demonstrations generated by an A* expert planner (Hart et al., 1968). For each instruction and observation history, the planner provides an expert action rollout, while the simulator renders the corresponding future visual continuation along the same trajectory. This stage establishes joint visual prediction and action generation under the expert state distribution. For WNM-3D, the 3D Scene-to-Token Adapter is trained jointly with the world-action backbone, while the VGGT-Ω scene encoder remains frozen. 
+
+Stage II: Closed-Loop DAgger-SFT. To mitigate the covariate shift induced by closed-loop execution, we adopt DAgger-style data aggregation (Ross et al., 2011). We roll out the Stage-I policy in simulation and query the A* expert planner at states visited by the learned policy. For each visited state, the expert provides a corrective action rollout, and the simulator renders the corresponding visual continuation under the same correction, ensuring trajectory-consistent visual and action supervision. The resulting policy-induced samples form the Stage-II DAgger dataset, on which the model is further optimized using LWA . This stage exposes the model to states arising from its own prediction errors while retaining expert supervision. 
+
+Stage III: Closed-Loop DanceGRPO. Starting from the Stage-II checkpoint, we adapt DanceGRPO (Xue et al., 2025) to the joint visual–action flow policy. To localize credit along the denoising trajectory, we partition the eligible denoising transitions into Ks strata {S k}Ks
+
+k=1 . At each optimization step, one transition 
+
+τk ∈ S k is selected for each stratum, and two counterfactual branches are generated for that intervention. The paired branches share their initial visual and action latents and all exogenous SDE noise increments except at τk. Both branches complete the full denoising trajectory, while only the intervened transition is replayed with gradients. For conditioning instance i, stratum k, branch h ∈ { 1, 2}, and reward stream q, we compute the paired counterfactual rank advantage 
+
+bAqi,k,h = Rqi,k,h − 12
+
+P2
+
+h′=1 Rqi,k,h ′
+
+Std h′∈{ 1,2}
+
+
+
+Rqi,k,h ′
+
+
+
++ ϵ. (10) Here, Std denotes the unbiased sample standard deviation over the two branches. Consequently, non-tied advantages approach ±1/√2, yielding a rank-style signal that preserves within-pair ordering rather than cardinal reward differences. The stream q = v denotes the visual reward, while q = (nav , c ) and q =(stop , c ) denote the navigation and stopping rewards for action chunk c ∈ { 1, . . . , B }. The same reward 7definitions are used across denoising strata. Simulator-provided ground-truth annotations are used only to construct the reward streams and do not introduce an auxiliary supervised objective. The visual reward combines future-view quality with a flow–action consistency bonus computed on the visual–action block selected for receding-horizon execution. The bonus compares the cumulative XY displacement of the predicted action block with camera motion inferred from the paired generated frames, and is confidence-weighted and gated by a visual-degradation factor. Navigation and stopping rewards measure execution progress and goal-conditioned termination, respectively. Exact visual, navigation, and stopping reward definitions are provided in Appendices A.4.2–A.4.4. We use the clipped surrogate loss 
+
+ℓclip (r, A ; ε) = − min ( rA, clip( r, 1 − ε, 1 + ε)A) . (11) Let rv = πvθ /π vθold and rac = πaθ,c /π aθold ,c denote the current-policy-to-old-policy conditional transition-density ratios at τk for the visual variables and the action variables in chunk c, respectively. The corresponding objectives are 
+
+Lv = E
+
+h
+
+ℓclip 
+
+
+
+rv , bAv ; εv
+
+i 
+
+, (12) 
+
+Ls,c = E
+
+h
+
+ℓclip 
+
+
+
+rac , bAsc; εa
+
+i 
+
+, s ∈ { nav , stop }. (13) Conditioned on the joint visual–action state and the shared DiT prediction, the visual and action SDE transitions use independent Gaussian noise factors. We therefore route visual rewards through rv and naviga-tion and stopping rewards through rac . Their weighted stream-wise losses form a modality-routed surrogate objective rather than an exact likelihood ratio for the full joint transition. The complete Stage-III objective is 
+
+LIII = Lv + λact (Lnav + λstop Lstop ) , (14) where Lnav and Lstop aggregate the corresponding chunk-wise objectives, λact balances visual and action reward optimization, and λstop controls the relative strength of stopping credit. Detailed denoising-stratum construction, chunk aggregation, and optimization hyperparameters are provided in Appendices A.4.1, A.4.5, and A.4.6. 
+
+Receding-Horizon Inference. At each replanning step t, both variants construct Ht by uniformly sampling K
+
+observations from the observed trajectory between I0 and It and recompute their conditioning prefixes, while the current frame It and language instruction form the cross-attention context Gt. The visual and action flow variables are initialized from Gaussian noise and jointly sampled to produce finite-horizon visual-latent and action rollouts. Only the first action block At, 1 is executed, after which newly acquired simulator observations extend the observed trajectory before replanning. The predicted visual latents are neither decoded into RGB nor incorporated into Ht.
+
+# 4 Experiments 
+
+We organize the experiments around three questions: (1) Does WNM-3D improve closed-loop navigation over established continuous VLN baselines and the WNM-2D counterpart? (2) How does each stage of the progressive training curriculum contribute, and what role does closed-loop DAgger adaptation play before reward-guided refinement? and (3) Does geometry-aware conditioning improve flow–action consistency, and how does this consistency evolve across the three training stages? 
+
+4.1 Experimental Setup 
+
+Benchmark and metrics. We evaluate on GN-Bench (Li et al., 2026) using its official Seen and Unseen splits. The agent receives a language instruction and monocular egocentric RGB observations and predicts continuous local navigation actions. We report Navigation Error (NE), Oracle Success (OS), Success Rate 8Figure 4 Representative closed-loop WNM-3D rollouts on GN-Bench. Each row shows a language instruction together with egocentric observations and the evolving navigation trajectory. 
+
+(SR), Trajectory Length (TL), and Success weighted by Path Length (SPL) (Anderson et al., 2018). Lower NE and higher OS, SR, and SPL indicate better navigation performance; TL is interpreted together with the success-based metrics. The complete closed-loop evaluation protocol is provided in Appendix B.1. 
+
+Baselines. We compare with continuous VLN baselines evaluated on GN-Bench, including CMA, NaVid, UniNaVid, InternNav(S2), and GN-BAE. We include their GN-Matrix-supervised variants when available. WNM-2D serves as an architectural control that replaces the geometry-aware prefix with VAE-encoded RGB history features while retaining the same world-action backbone, prediction targets, attention layout, flow-matching objective, three-stage training protocol, and receding-horizon inference scheme. 
+
+Implementation details. Both WNM variants initialize their world–action backbones from Wan2.2-TI2V-5B. We use K = 33 history frames and predict B = 4 action blocks with Na = 8 actions per block. Stage I trains on 16K A*-generated demonstrations, Stage II collects policy-specific DAgger data over the same 16K navigation tasks, and Stage III performs closed-loop DanceGRPO refinement from the Stage-II checkpoint. For WNM-3D, VGGT-Ω remains frozen while the 3D Scene-to-Token Adapter and world–action backbone are jointly optimized. Additional architecture, action-processing, and training details are provided in Appendices A.1– A.3 and A.4.6. 
+
+Flow–action consistency metric. The flow–action metric is evaluated on the visual–action block used for receding-horizon execution. It compares the cumulative XY displacement of the predicted action block with camera motion inferred from the temporally aligned generated frames. We report the consistency score 
+
+Sflow −act , the motion-magnitude error Emotion = |Mpred − MGT |, and the action-side reward Raction . Optical-flow estimation, calibration, validity filtering, and reward construction are detailed in Appendix A.4.2, while the fixed-set consistency evaluation protocol is provided in Appendix B.2. 
+
+4.2 Closed-Loop Navigation 
+
+Table 1 compares WNM-2D and WNM-3D with prior navigation methods on GN-Bench. Both WNM variants use only monocular egocentric RGB observations at inference; WNM-3D derives geometry-aware scene tokens internally from the RGB history without requiring depth, BEV observations, or an explicit metric map. Figure 4 shows representative closed-loop WNM-3D rollouts on GN-Bench. 9Table 1 Evaluation Metrics on GN-Bench. In the observation space, Depth denotes depth maps, BEV refers to Bird’s Eye View projections, and FPV represents first-person RGB images. Bold represents the best results. Underline indicates the second best results. † indicates methods fine-tuned via SFT on the GN-Matrix dataset.         
+
+> Method Observation Metrics on Seen Metrics on Unseen Depth BEV FPV TL NE
+
+↓ OS ↑ SR ↑ SPL ↑ TL NE ↓ OS ↑ SR ↑ SPL ↑
+
+CMA ✓ ✓ 2.9 8.3 15.7 12.5 11.9 3.0 8.1 19.6 15.5 14.9 NaVid ✓ 3.4 7.9 20.1 14.6 12.8 3.5 7.7 20.3 14.5 12.8 UniNaVid ✓ 4.6 7.9 22.2 15.0 12.5 5.2 7.8 20.7 12.8 10.3 InternNav(S2) ✓ 3.6 7.4 23.1 18.8 17.5 3.7 7.2 26.7 22.1 20.3 NaVid † ✓ 2.7 7.4 19.4 18.8 18.8 2.7 7.1 23.8 23.1 23.0 UniNaVid † ✓ 3.7 7.2 24.1 22.5 21.9 5.8 7.5 23.1 20.8 20.2 InternNav(S2) † ✓ 2.9 7.1 22.5 22.4 22.4 2.9 6.9 24.9 24.0 23.7 GN-BAE ✓ 5.2 4.9 48.9 46.4 44.7 5.0 5.6 43.6 38.9 37.3 GN-BAE ✓ ✓ 5.2 4.3 59.3 58.6 58.6 4.0 5.8 40.2 38.5 38.2  
+
+> WNM-2D
+
+✓ 7.9 2.8 80.7 75.6 72.9 7.9 4.8 52.6 45.9 42.8  
+
+> WNM-3D
+
+✓ 8.1 2.0 87.2 81.3 78.3 7.7 4.4 54.1 46.8 43.5 
+
+Comparison with prior methods. On the Seen split, WNM-3D achieves 2.0 NE, 87.2% OS, 81.3% SR, and 78.3% SPL. Relative to the strongest prior method in Table 1, which additionally uses BEV observations, this improves SR by 22.7 percentage points and SPL by 19.7 points. On the Unseen split, WNM-3D obtains 4.4 NE, 54.1% OS, 46.8% SR, and 43.5% SPL. Compared with the strongest FPV-only prior baseline, it improves SR by 7.9 points and SPL by 6.2 points. 
+
+Effect of geometry-aware conditioning. With the same world-action backbone and three-stage training recipe, WNM-3D improves over WNM-2D by 5.7 SR and 5.4 SPL points on Seen environments. The corresponding gains on Unseen environments are 0.9 SR and 0.7 SPL points. Geometry-aware conditioning therefore provides a clear advantage on Seen environments and a smaller positive gain under scene-level distribution shift; the current results do not support a stronger claim of reduced Seen-to-Unseen degradation. 
+
+4.3 Training-Stage Ablation 
+
+We evaluate Stage I (offline A* supervision), Stage II (A* SFT followed by DAgger-SFT), and Stage III (the full A* SFT–DAgger-SFT–DanceGRPO curriculum). We additionally evaluate a direct A* SFT–DanceGRPO configuration without DAgger to test whether reward-guided refinement can substitute for expert correction on policy-induced states. All configurations use the same receding-horizon inference procedure and are evaluated on the same GN-Bench episodes. 
+
+Effect of DAgger. For WNM-3D, Stage II raises Seen SR from 49.6% to 80.6% and SPL from 49.1% to 77.9%. On Unseen environments, SR increases from 39.7% to 45.7% and SPL from 38.9% to 41.9%. DAgger therefore accounts for the dominant improvement by supplying expert corrections at states reached by the learned policy. 
+
+Effect of DanceGRPO. Starting from Stage II, DanceGRPO further improves WNM-3D by 0.7 SR and 0.4 SPL points on Seen environments and by 1.1 SR and 1.6 SPL points on Unseen environments. WNM-2D exhibits the same qualitative trend, improving by 3.7 SR and 5.9 SPL points on Seen environments and by 3.2 SR and 4.5 SPL points on Unseen environments. 
+
+Role of DAgger before DanceGRPO. Applying DanceGRPO directly after Stage I degrades navigation for both variants. For WNM-3D, Seen SR decreases from 49.6% to 39.4% and Unseen SR from 39.7% to 35.6%; WNM-2D exhibits the same failure mode. We hypothesize that the Stage-I policy induces a narrow and error-prone rollout distribution outside expert states. Group-relative optimization can only rank candidates 10 Table 2 Ablation of the closed-loop training curriculum on GN-Bench. A* SFT denotes supervised training on offline demonstrations generated by the A* expert. DAgger-SFT further incorporates expert-labeled trajectories collected from policy-induced states, while DanceGRPO performs reward-guided closed-loop refinement. Checkmarks ✓ indi-cate the stages included in each configuration. Corresponding WNM-2D and WNM-3D configurations use the same downstream backbone and evaluation protocol.         
+
+> Model Training Stage Metrics on Seen Metrics on Unseen A* SFT DAgger-SFT DanceGRPO TL NE
+
+↓ OS ↑ SR ↑ SPL ↑ TL NE ↓ OS ↑ SR ↑ SPL ↑
+
+WNM-3D 
+
+✓ 4.9 4.4 52.0 49.6 49.1 4.3 5.3 42.6 39.7 38.9 
+
+✓ ✓ 8.5 2.3 86.1 80.6 77.9 7.8 4.7 53.1 45.7 41.9 
+
+✓ ✓ 3.6 5.8 40.2 39.4 38.5 3.5 5.8 38.7 35.6 33.8 
+
+✓ ✓ ✓ 8.1 2.0 87.2 81.3 78.3 7.7 4.4 54.1 46.8 43.5 WNM-2D 
+
+✓ 4.0 5.2 40.3 38.8 38.6 3.7 5.6 37.5 35.9 35.6 
+
+✓ ✓ 9.6 2.9 82.3 71.9 67.0 9.6 5.0 52.8 42.7 38.3 
+
+✓ ✓ 3.6 5.6 35.6 34.0 33.7 3.5 5.9 34.7 32.8 32.4 
+
+✓ ✓ ✓ 7.9 2.8 80.7 75.6 72.9 7.9 4.8 52.6 45.9 42.8 sampled from this limited support; when the candidates are uniformly poor or weakly differentiated, the resulting rank signal is uninformative or sensitive to small reward fluctuations. DAgger first expands the useful policy support by injecting expert-corrected trajectories at policy-induced states, increasing the likelihood that subsequent rollout groups contain feasible and meaningfully differentiated behaviors. The ablation supports this interpretation, although direct measurements of within-group action diversity and reward spread would be required to verify the mechanism. 
+
+4.4 Flow–Action Consistency Across Training Stages 
+
+We compare WNM-2D and WNM-3D after each training stage on the same fixed set of near-goal STOP snapshots, whose ground-truth motion magnitude is approximately 2.36 × 10 −4. Stage I, Stage II, and Stage III correspond to the checkpoints after offline A* supervision, DAgger adaptation, and DanceGRPO refinement, respectively. Evaluating all checkpoints on the same states avoids the state-distribution differences that make on-policy training averages unsuitable for direct comparison across stages or model variants. Table 3 reports the flow–action score Sflow −act , the motion-magnitude error Emotion = |Mpred −MGT |, and the action-side reward Raction . The three metrics are complementary: Sflow −act measures whether the generated visual motion agrees with the paired action, Emotion detects excessive or insufficient motion, and Raction 
+
+measures whether the action itself is useful for navigation. A high consistency score alone does not imply a correct action, particularly on the near-static STOP set. Overall, WNM-3D achieves higher flow–action scores and lower motion errors than WNM-2D at all three evaluated checkpoints. Its flow–action score exceeds that of WNM-2D by 0.0151 , 0.0157 , and 0.0172 after Stages I, II, and III, respectively. WNM-3D also achieves lower motion errors by 0.0022 , 0.0032 , and 0.0034 ,together with higher action rewards at every stage. These results show a consistent numerical advantage for geometry-aware conditioning in visual–action correspondence and motion calibration across the evaluated checkpoints. Both variants exhibit increasing flow–action scores and action rewards across the three stages. DAgger sub-stantially improves action quality and flow–action consistency, but temporarily increases the motion error on the near-goal STOP set. DanceGRPO subsequently reduces the motion error below its Stage-I level while further improving both the consistency score and action reward. This suggests that reward-guided refinement improves the correspondence between predicted visual motion and action without sacrificing navigation qual-ity. Because the evaluation is restricted to XY motion in the visual–action block used for receding-horizon execution and to near-goal states, however, it should not be interpreted as a measure of full future-view fidelity, yaw consistency, or perceptual agreement with simulator-rendered futures. 11 Table 3 Flow–action consistency across training stages. All checkpoints are evaluated on the same fixed near-goal STOP set; the flow-valid ratio is at least 0.9984 throughout. 
+
+Model Stage Sflow −act ↑ Emotion ↓ Raction ↑
+
+WNM-2D Stage I 0.3174 0.0300 -0.2194 Stage II 0.3507 0.0364 -0.1601 Stage III 0.3609 0.0289 -0.1440 WNM-3D Stage I 0.3325 0.0278 -0.1982 Stage II 0.3664 0.0332 -0.1425 Stage III 0.3781 0.0255 -0.1211 
+
+# 5 Conclusion 
+
+We presented WNM-3D, a geometry-conditioned generative world-action model for continuous vision-language navigation. WNM-3D converts geometry-aware representations from a frozen feed-forward geometry encoder into a shared scene-token prefix that conditions the joint generation of future visual latents and temporally aligned actions throughout block-causal denoising. On GN-Bench, WNM-3D outperforms prior navigation policies and its WNM-2D counterpart. Training-stage ablations show that DAgger provides the dominant closed-loop improvement by adapting the policy to policy-induced states, while DanceGRPO provides ad-ditional refinement after this adaptation but degrades performance when applied directly after offline su-pervision. On a fixed near-goal evaluation set, WNM-3D also achieves higher flow–action consistency and lower visual-motion error than WNM-2D. The current consistency analysis is restricted to XY motion in the visual–action block used for receding-horizon execution and does not assess yaw or full perceptual future-view fidelity. 
+
+# References 
+
+Jiazhao Zhang, Kunyu Wang, Rongtao Xu, Gengze Zhou, Yicong Hong, Xiaomeng Fang, Qi Wu, Zhizheng Zhang, and He Wang. Navid: Video-based vlm plans the next step for vision-and-language navigation. Robotics: Science and Systems , 2024. Jiazhao Zhang, Kunyu Wang, Shaoan Wang, Minghan Li, Haoran Liu, Songlin Wei, Zhongyuan Wang, Zhizheng Zhang, and He Wang. Uni-navid: A video-based vision-language-action model for unifying embodied navigation tasks. Robotics: Science and Systems , 2025a. An-Chieh Cheng, Yandong Ji, Zhaojing Yang, Zaitian Gongye, Xueyan Zou, Jan Kautz, Erdem Bıyık, Hongxu Yin, Sifei Liu, and Xiaolong Wang. Navila: Legged robot vision-language-action model for navigation. arXiv preprint arXiv:2412.04453 , 2024. Hongjun An, Wenhan Hu, Sida Huang, Siqi Huang, Ruanjun Li, Yuanzhi Liang, Jiawei Shao, Yiliang Song, Zihan Wang, Cheng Yuan, et al. Ai flow: Perspectives, scenarios, and approaches. Vicinagearth , 3(1):1, 2026. Jiawei Shao and Xuelong Li. Ai flow at the network edge. IEEE Network , 40(1):330–336, 2025. Amir Bar, Gaoyue Zhou, Danny Tran, Trevor Darrell, and Yann LeCun. Navigation world models. In Proceedings of the Computer Vision and Pattern Recognition Conference , pages 15791–15801, 2025. Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, et al. World action models are zero-shot policies. arXiv preprint arXiv:2602.15922 , 2026. Baining Zhao, Jiacheng Xu, Weicheng Feng, Xin Zhang, Zhaolu Wang, Haoyang Wang, Shilong Ji, Ziyou Wang, Jianjie Fang, Zhiheng Zheng, et al. Worldvln: Autoregressive world action model for aerial vision-language navigation. 
+
+arXiv preprint arXiv:2605.15964 , 2026. Stéphane Ross, Geoffrey Gordon, and Drew Bagnell. A reduction of imitation learning and structured prediction to no-regret online learning. In Proceedings of the fourteenth international conference on artificial intelligence and statistics , pages 627–635. JMLR Workshop and Conference Proceedings, 2011. 
+
+12 Xinhai Li, Xiaotao Zhang, Yuehao Huang, Jiankun Dong, Tianhang Wang, Sunyao Zhou, Yunzi Wu, Chengnuo Sun, Yunfei Ge, Qizhen Weng, et al. Gn0: Toward a unified paradigm for generation, evaluation, and policy learning in visual-language navigation. arXiv preprint arXiv:2606.03682 , 2026. Zeyue Xue, Jie Wu, Yu Gao, Fangyuan Kong, Lingting Zhu, Mengzhao Chen, Zhiheng Liu, Wei Liu, Qiushan Guo, Weilin Huang, et al. Dancegrpo: Unleashing grpo on visual generation. arXiv preprint arXiv:2505.07818 , 2025. Jiazhao Zhang, Anqi Li, Yunpeng Qi, Minghan Li, Jiahang Liu, Shaoan Wang, Haoran Liu, Gengze Zhou, Yuze Wu, Xingxing Li, et al. Embodied navigation foundation model. arXiv preprint arXiv:2509.12129 , 2025b. Yuxing Long, Wenzhe Cai, Hongcheng Wang, Guanqi Zhan, and Hao Dong. Instructnav: Zero-shot system for generic instruction navigation in unexplored environment. arXiv preprint arXiv:2406.04882 , 2024. Yuehao Huang, Liang Liu, Shuangming Lei, Yukai Ma, Hao Su, Jianbiao Mei, Pengxiang Zhao, Yaqing Gu, Yong Liu, and Jiajun Lv. Cogddn: A cognitive demand-driven navigation with decision optimization and dual-process thinking. In Proceedings of the 33rd ACM International Conference on Multimedia , pages 5237–5246, 2025. Hao Su, Yuehao Huang, Yukai Ma, Yong Liu, and Jiajun Lv. Sage-nav: Leveraging llm planning and alignment fusion for hierarchical scene graph-guided navigation. arXiv preprint arXiv:2606.25497 , 2026. Yucheng Deng, Pingrui Lai, Xinhai Li, Chenjia Bai, Xiaoheng Deng, Chengnuo Sun, Xuelong Li, and Hua Yang. Spacevln: A zero-shot vision-and-language navigation agent with online spatial cognitive memory and reasoning. 
+
+arXiv preprint arXiv:2606.08992 , 2026. Sunyao Zhou, Yunzi Wu, Tianhang Wang, Xinhai Li, Guang Chen, Lizheng Liu, Chenjia Bai, and Xuelong Li. Deconav: Dialog enhanced long-horizon collaborative vision-language navigation. arXiv preprint arXiv:2604.12486 , 2026a. Tianhang Wang, Xinhai Li, Fan Lu, Tianshi Gong, Jiankun Dong, Weiyi Xue, Sanqing Qu, Chenjia Bai, and Guang Chen. Conavbench: Collaborative long-horizon vision-language navigation benchmark. In The Fourteenth Interna-tional Conference on Learning Representations , 2026a. Yukai Ma, Honglin He, Selina Song, Wayne Wu, and Bolei Zhou. Aura: Multi-modal shared autonomy for urban navigation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 18171–18181, 2026a. Honglin He, Yukai Ma, Brad Squicciarini, Wayne Wu, and Bolei Zhou. From seeing to experiencing: Scaling navigation foundation models with reinforcement learning. arXiv preprint arXiv:2507.22028 , 2025. Hongcheng Wang, Andy Guan Hong Chen, Xiaoqi Li, Mingdong Wu, and Hao Dong. Find what you want: Learn-ing demand-conditioned object attribute space for demand-driven navigation. Advances in Neural Information Processing Systems , 36:16353–16366, 2023. Hongcheng Wang, Peiqi Liu, Wenzhe Cai, Mingdong Wu, Zhengyu Qian, and Hao Dong. Mo-ddn: a coarse-to-fine attribute-based exploration agent for multi-object demand-driven navigation. Advances in Neural Information Processing Systems , 37:64176–64214, 2024. Ning Yang, Yan Huang, Kaiwen Peng, Ziheng He, Kai Wang, Cui Miao, Kailin Lyu, Guo Li, Xiaofeng Wang, Zheng Zhu, et al. Wam-nav: Asymmetric latent world-action modeling for unified visual navigation. arXiv preprint arXiv:2606.04907 , 2026. Daichi Azuma, Taiki Miyanishi, Koya Sakamoto, Shuhei Kurita, Yaonan Zhu, Petr Khrapchenkov, Motoaki Kawanabe, Yusuke Iwasawa, and Yutaka Matsuo. Navwam: A navigation world action model for goal-conditioned visual navigation. arXiv preprint arXiv:2606.13494 , 2026. Hong Chen, Daqi Liu, Zehan Zhang, Haiguang Wang, Tianhao Lu, Longfei Yan, Haiyang Sun, Fangzhen Li, Hongwei Xie, Bing Wang, et al. Pondering the way: Spatial-perceiving world action model for embodied navigation. arXiv preprint arXiv:2606.29908 , 2026. Shengtao Zheng, Kai Li, Weichen Zhang, Yu Meng, Chen Gao, Xinlei Chen, Yong Li, and Xiao-Ping Zhang. Worldfly: A world-model-based vision-language-action model for uav navigation. arXiv preprint arXiv:2606.06147 , 2026. Lingfeng Zhang, Zeying Gong, Xiaoshuai Hao, Haoxiang Fu, Qiang Zhang, Mingliang Zhou, Hangjun Ye, Xiaojun Liang, Junwei Liang, and Wenbo Ding. Futurenav: Unified world-action modeling for vision-and-language naviga-tion. arXiv preprint arXiv:2606.30367 , 2026a. Yanghong Mei, Longteng Guo, Ming-Ming Yu, Guiyu Zhao, Xingjian He, and Jing Liu. Navwm: A unified navigation world model for foresight-driven planning. arXiv preprint arXiv:2606.24101 , 2026. 
+
+13 Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David Novotny. Vggt: Visual geometry grounded transformer. In Proceedings of the Computer Vision and Pattern Recognition Conference ,pages 5294–5306, 2025. Jianyuan Wang, Minghao Chen, Shangzhan Zhang, Nikita Karaev, Johannes Schönberger, Patrick Labatut, Piotr Bojanowski, David Novotny, Andrea Vedaldi, and Christian Rupprecht. VGGT-ω. arXiv preprint arXiv:2605.15195 ,2026b. Yang Zhou, Xiaofeng Wang, Hao Shao, Letian Wang, Guosheng Zhao, Jiangnan Shao, Jiagang Zhu, Tingdong Yu, Zheng Zhu, Guan Huang, et al. Drivedreamer-policy: A geometry-grounded world-action model for unified genera-tion and planning. arXiv preprint arXiv:2604.01765 , 2026b. Fulong Ma, Daojie Peng, Wenjun Yue, Jiahang Cao, Bintao Wang, Qiang Zhang, and Jun Ma. Geosem-wam: Geometry-and semantic-aware world action models. arXiv preprint arXiv:2606.03188 , 2026b. Jianjun Zhang, Jian Zhu, Taiyi Su, Chong Ma, Zitai Huang, Yi Xu, and Hanli Wang. Learning 4d geometric priors for inference-efficient world action models. arXiv preprint arXiv:2607.05468 , 2026b. Peter E Hart, Nils J Nilsson, and Bertram Raphael. A formal basis for the heuristic determination of minimum cost paths. IEEE transactions on Systems Science and Cybernetics , 4(2):100–107, 1968. Peter Anderson, Angel Chang, Devendra Singh Chaplot, Alexey Dosovitskiy, Saurabh Gupta, Vladlen Koltun, Jana Kosecka, Jitendra Malik, Roozbeh Mottaghi, Manolis Savva, et al. On evaluation of embodied navigation agents. 
+
+arXiv preprint arXiv:1807.06757 , 2018. 
+
+14 A Implementation and Evaluation Details 
+
+This appendix provides implementation and evaluation details omitted from the main text. We specify the model configuration, data construction procedure, optimization settings, complete Stage-III reward, and flow–action consistency protocol. Unless stated otherwise, we follow the notation of Sec. 3. 
+
+A.1 Architecture and Input Configuration 
+
+WNM-2D and WNM-3D share the same world–action backbone, prediction targets, block-causal attention layout, history-sampling rule, and receding-horizon execution procedure. Their architectural difference is the representation of observed visual context. WNM-2D uses the backbone’s native VAE-encoded RGB-history pathway, whereas WNM-3D constructs the clean history-conditioning prefix Ct with the frozen geometry encoder Egeo and trainable 3D Scene-to-Token Adapter Tϕ.At each replanning step, both variants receive a history Ht of K = 33 RGB observations sampled uniformly from the inclusive interval [I0, I t]. The world–action backbone operates at 160 × 320 . WNM-3D additionally resizes the same sampled history to 512 × 512 before applying VGGT-Ω. The prediction horizon comprises 
+
+BN v = 32 future RGB frames and BN a = 32 actions, partitioned into B = 4 aligned blocks with Nv = 8 
+
+frames and Na = 8 actions per block.   
+
+> Table 4 Architecture configuration used in the final implementation.
+> Configuration Value
+
+World–action initialization Wan2.2-TI2V-5B History length K 33 World–action input resolution 160 × 320 
+
+Geometry-encoder input resolution 512 × 512 
+
+Number of visual/action blocks B 4Future RGB frames per visual block Nv 8Actions per block Na 8Selected VGGT-Ω encoder blocks 5, 12, 18, and 24 (one-based) Number of selected encoder blocks L 4Common adapter width ds 512 Source memory K × Hs × Ws 33 × 32 × 32 
+
+Target lattice Tc × Hc × Wc 9 × 5 × 10 
+
+History-prefix length Nc (WNM-2D / WNM-3D) 450 / 450 Deformable resampling layers R 2Resampling heads / points per head 8 / 8 Spatiotemporal refinement blocks 2Trainable adapter parameters 23.97M 
+
+3D Scene-to-Token Adapter configuration. For each selected encoder block l, the adapter projects F(l) 
+
+> t
+
+to width ds and applies the content-adaptive encoder-level fusion in Eq. (7). The fused source memory is pooled onto a Tc × Hc × Wc target lattice to initialize the query content. A structured embedding Estruct —the sum of learned global, temporal, row, and column slots, a Fourier embedding of target coordinates, and a learned query-type embedding—is then added to the linearly projected pooled content. Each of the R = 2 
+
+anchored deformable-resampling layers uses 8 attention heads with 8 sampling points per head. Two factorized spatiotemporal blocks further refine the queries before the detail and coarse branches are projected to the DiT width d.
+
+WNM-2D prefix. WNM-2D uses the backbone’s native VAE-encoded RGB-history prefix and does not include Egeo or Tϕ. Its 33 RGB history frames produce 9 VAE latent frames, each contributing a 5 × 10 patch grid. The resulting prefix therefore contains 9 × 5 × 10 = 450 tokens of width d = 3072 , matching the prefix 15 length of WNM-3D. Neither WNM variant receives depth, camera pose, a bird’s-eye-view observation, or an explicit metric map at inference time. 
+
+A.2 Action Encoding, Decoding, and Execution 
+
+The policy represents the physical increments in Eq. (1) using the backbone’s fixed-width action vector. Before flow matching, the three physical dimensions are multiplied by sa = 4 , normalized with training-set action quantiles, and zero-padded to width da = 32 . At inference, the inverse transform is applied to the first three predicted dimensions. Let ba(t) 
+
+> j
+
+∈ [−1, 1] 3 denote the unpadded normalized prediction associated with 
+
+a(t) 
+
+> j
+
+. We decode it as 
+
+a(t) 
+
+> j
+
+= 1
+
+sa
+
+" ba(t) 
+
+> j
+
++ 1 2 ⊙ (q99 − q01 ) + q01 
+
+#
+
+, sa = 4 , (15) where q01 and q99 are the checkpoint-associated 1% and 99% action quantiles. The action coordinate system is anchored at the camera pose associated with the current observation It.Simulator pose is used only to transform predicted local increments for execution and reward computation and is never exposed to the policy. For j ∈ { 0, . . . , 31 }, the world position after applying action j is 
+
+pworld  
+
+> j+1
+
+= pworld 0 + RtjX
+
+> u=0
+
+
+
+∆x(t) 
+
+> u
+
+, ∆y(t)
+
+> u
+
+
+
+, (16) where Rt is the planar camera-to-navigation rotation at It. All planar increments are expressed in this fixed local frame; predicted yaw increments are accumulated separately and do not recursively rotate the XY increments. For chunk c ∈ { 1, . . . , B }, define its net translation magnitude as 
+
+Mc =
+
+> cN a−1
+
+X
+
+> j=( c−1) Na
+
+
+
+∆x(t) 
+
+> j
+
+, ∆y(t)
+
+> j
+
+
+
+> 2
+
+. (17) During Stage III, a chunk is classified as STOP when Mc ≤ δstop = 0 .15 m, and the selected chunk is frozen at its starting position rather than executed. Note that this reward-side STOP criterion is distinct from the deployment-time termination rule used by the GN-Bench evaluator, which is described in Appendix B.1. For collision-aware reward computation, occupied cells are dilated by 2 pixels and every predicted segment is tested against the resulting occupancy map. 
+
+A.3 Stage-I and Stage-II Training 
+
+Stage I: Offline A* SFT. We construct the offline training set from 16K instruction-conditioned trajectories generated by an A* expert. For each sampled trajectory, a valid replanning timestep is selected uniformly, and the observation context and subsequent 32-step visual–action targets are constructed at that timestep. Each WNM variant is trained for 20 epochs with LWA from Eq. (6). 
+
+Stage II: Closed-loop DAgger-SFT. Starting from its Stage-I checkpoint, each WNM variant is rolled out on the same 16K navigation tasks. At every policy-visited state, the A* expert provides a corrective action sequence, and the simulator renders the trajectory-consistent future observations. These policy-induced samples form the Stage-II DAgger datasets, which contain approximately 691K chunks for WNM-2D and 633K chunks for WNM-3D. Each variant is then optimized for 5 epochs with LWA .
+
+Flow-matching timesteps and loss weighting. Stages I and II use the same discrete training schedule with 1,000 indices. For each future block b, we sample 
+
+kb ∼ Uniform {0, . . . , 999 }, ¯σkb = 1 − kb
+
+1000 ,σb = 5¯ σkb
+
+1 + 4¯ σkb
+
+.
+
+(18) 16 The two VAE latent frames representing the eight RGB frames in block b and the corresponding eight action steps share σb; their visual and action Gaussian noise samples remain independent. The block-zero latent corresponding to the current target-prefix frame is assigned an independently sampled index from the same schedule. The timestep-dependent weight in Eq. (6) is defined on this shifted schedule as 
+
+qk = exp 
+
+"
+
+−2
+
+
+
+σk − 12
+
+2#
+
+, qmin = min  
+
+> 0≤r≤999
+
+qr ,wk = 1000 ( qk − qmin )
+
+P999  
+
+> j=0
+
+(qj − qmin ) .
+
+(19) Thus, the weights have unit mean over the 1,000 training indices. MSE w denotes the mean elementwise squared velocity error after weighting each block by its corresponding wk. For MSE w, Ma , the mask Ma sets the squared residuals of zero-padded action dimensions to zero before the same weighting and reduction are applied. We use equal coefficients for the visual and action terms, i.e., λa = 1 .Stages I and II use AdamW with an initial learning rate of 1 × 10 −5, β1 = 0 .95 , β2 = 0 .999 , ϵ = 10 −8, weight decay 1 × 10 −5, and a cosine schedule with a 5% warm-up and a zero terminal learning rate. Gradients are clipped to a maximum norm of 1.0. Training uses BF16 arithmetic, TF32 matrix multiplication, and 16 NVIDIA H100 GPUs. The global batch size is 256 for WNM-2D and 192 for WNM-3D; the latter is reduced to accommodate geometry-aware history encoding.    
+
+> Table 5 Stage-I and Stage-II training configuration.
+> Configuration Stage I Stage II
+
+Data source A* demonstrations Policy-specific DAgger Tasks / trajectories 16K 16K tasks WNM-2D chunks – 691K WNM-3D chunks – 633K Epochs 20 5Optimizer AdamW AdamW Initial learning rate 1 × 10 −5 1 × 10 −5
+
+Warmup ratio 5% 5% 
+
+Weight decay 1 × 10 −5 1 × 10 −5
+
+Global batch: WNM-2D / WNM-3D 256 / 192 256 / 192 GPUs 16 H100 16 H100 
+
+A.4 Stage-III Closed-Loop DanceGRPO 
+
+Stage III is initialized from the corresponding Stage-II checkpoint and uses approximately 96K policy-generated simulation records. Simulator-rendered future observations, expert trajectories, occupancy in-formation, and associated metadata define the visual, navigation, and stopping reward streams. These annotations are used exclusively for reward computation; Stage III does not include an auxiliary supervised 
+
+LWA term.  
+
+> A.4.1 Denoising-Stratum Counterfactual Rollouts
+
+Following Sec. 3.5, we partition the eligible denoising transitions into Ks strata {S k}Ks
+
+> k=1
+
+. The final configu-ration uses Ks = 4 and 
+
+S1 = {0, 1, 2}, S2 = {6}, S3 = {10 }, S4 = {13 , 14 , 15 }, (20) where each element is a zero-based transition index in the 16-step sampler. At every optimization step, one transition τk ∈ S k is sampled from each stratum, and the resulting set {τk}Ks 
+
+> k=1
+
+is shared by the entire condition batch. 17 For every conditioning instance i and stratum k, we generate two branches h ∈ { 1, 2}. A pair shares its initial visual and action latents and all exogenous SDE increments except at τk, where branch-specific noise is injected. Each condition therefore produces 2Ks = 8 complete world–action rollouts. Rewards are evaluated on the completed rollouts, but gradients are replayed only through the intervened transition 
+
+τk. Visual, navigation, and stopping rewards are standardized independently within each pair according to Eq. (10). Reward ties yield zero advantage, as do masked streams with fewer than two valid branches. The visual and action transitions use independent Gaussian SDE noise factors with stochasticity coefficients 
+
+ηv = 0 .70 , ηa = 0 .20 . (21) Transition log densities are reduced over their event dimensions before forming the modality-specific likelihood ratios rv and rac . As described in Sec. 3.5, the visual reward is routed through rv , whereas the navigation and stopping rewards of chunk c are routed through rac . 
+
+> A.4.2 Visual Reward and Flow–Action Consistency
+
+The visual reward combines a base future-view quality score with a flow–action consistency bonus: 
+
+Rv = Rvision -base + Rflow . (22) The base score evaluates the generated future frames in terms of structural similarity, pixel reconstruction, and temporal consistency: 
+
+Qv = 0 .60 SPyr -SSIM + 0 .25 (1 − Echarb ) + 0 .15 (1 − Etemp ) , (23) where SPyr -SSIM is our pyramid-averaged SSIM score. For the T evaluated frames, it is defined as 
+
+SPyr -SSIM = 14T
+
+> 4
+
+X
+
+> m=1
+> T
+
+X
+
+> t=1
+
+SSIM 
+
+
+
+Y(m) 
+
+> t
+
+, Y(m)
+
+> t, GT
+
+
+
+, (24) where scale m = 1 corresponds to 64 × 128 , and each subsequent scale is obtained by 2 × 2 average pooling with stride 2. This score is an arithmetic average of per-scale SSIM values and should not be interpreted as the standard multiplicative MS-SSIM index. Echarb is the Charbonnier reconstruction error, and Etemp 
+
+is the Charbonnier error between predicted and ground-truth temporal differences. Both error terms use 
+
+ϵ = 10 −3 and are clipped to [0 , 1] . A degradation factor Ddeg ∈ [0 , 1] downweights invalid, frozen, low-contrast, exposure-corrupted, flickering, or excessively dynamic generations: 
+
+Rvision -base = Ddeg Qv . (25) The first target-prefix frame is excluded, after which the RGB values are checked and clipped to [0 , 1] .The remaining frames are bilinearly resized with antialiasing to 64 × 128 . We set Ddeg = 0 for non-finite predictions, predictions with more than 1% of values outside [0 , 1] , or predictions whose mean per-frame RGB-value standard deviation is below 0.01. Otherwise, Ddeg is initialized to 1.0. It is capped at 0.10 for a frozen video, defined by MGT ≥ 0.01 and Mpred < max(0 .002 , 0.10 MGT ), or for prefix copying, defined by a mean ground-truth prefix change of at least 0.02 and a mean prediction-to-prefix error of at most 0.01. The factor is capped at 0.25 if the prediction has an RGB-value standard deviation below 0.03, a mean RGB intensity outside [0 .03 , 0.97] , more than 85% of its values at or below 0.02 or at or above 0.98, a maximum frame-mean intensity change exceeding max(0 .08 , 3∆ GT int ), or a motion magnitude exceeding max(0 .12 , 3MGT ).If several conditions apply, we use the smallest factor. Because receding-horizon inference executes At, 1 before replanning, the flow–action term is evaluated on the generated visual block aligned with At, 1. Let 
+
+∆pa =
+
+> Na−1
+
+X
+
+> j=0
+
+
+
+∆x(t) 
+
+> j
+
+, ∆y(t)
+
+> j
+
+
+
+∈ R2 (26) denote the cumulative XY displacement of the executed action block. The decoded sequence used for this comparison contains the current target-prefix frame followed by the aligned visual block’s Nv = 8 generated 18 future frames. These nine frames are converted to 64 × 128 grayscale images, and forward and backward DIS flow is computed for the resulting eight adjacent-frame pairs. The target-prefix frame is used only to form the first pair and is excluded from the future-frame visual-quality score. For each pair, we form a descriptor from the median (u, v ) flow in each cell of a 4 × 6 grid and the global p50, p75, and p90 flow-magnitude statistics; φflow is the mean of these eight descriptors. A ridge regressor is fitted on 480 randomly sampled ground-truth clips to calibrate the mapping from optical-flow descriptors to local camera motion: 
+
+baflow = Wflow φflow + bflow ∈ R3, (27) which estimates (∆ x, ∆y, ∆ψ). We define d∆pflow ∈ R2 as its first two components; the yaw component is used only for diagnostics. For a moving action block, the directional agreement is 
+
+sxy = max 0, ∆pT 
+
+> a
+
+d∆pflow 
+
+∥∆pa∥2∥d∆pflow ∥2
+
+!
+
+, (28) provided ∥∆pa∥2 ≥ δa and ∥d∆pflow ∥2 ≥ δf . If the action block is near stationary, ∥∆pa∥2 < δ a, we instead measure whether the generated video is also approximately stationary: 
+
+sxy = exp 
+
+"
+
+−
+
+ m90 
+
+δstat 
+
+2#
+
+, (29) where m90 is the p90 component of the temporally averaged flow descriptor. When the action requests clear motion but the inferred visual translation is below δf , we set sxy = 0 .For adjacent-frame pair q, flow confidence combines forward–backward consistency and image-texture relia-bility. The video-level confidence is 
+
+Cflow = median q=1 ,..., 8 (Cfb ,q Ctex ,q ) , (30) where Cfb ,q is the fraction of consistent pixels in pair q. Specifically, for a forward vector f (x) and backward flow b sampled at x+f (x), a pixel is consistent only if the destination is in bounds and ∥f (x)+ b(x+f (x)) ∥2 ≤
+
+1.0 + 0 .05 ∥f (x)∥2 pixels. The texture statistic gq is the mean magnitude of the 3 × 3 Sobel gradient in the preceding grayscale frame, and Ctex ,q = clip( gq /8, 0, 1) . The final consistency score and reward contribution are 
+
+Sflow −act = sxy Cflow , Rflow = 0 .05 Ddeg Sflow −act . (31) The inferred yaw component does not contribute to either Sflow −act or Rflow . 
+
+> Table 6
+
+Visual-reward and flow–action configuration.  
+
+> Parameter Value
+
+wpyr -ssim 0.60 
+
+wcharb 0.25 
+
+wtemp 0.15 Flow–action weight λflow 0.05 Action-motion threshold δa 0.05 m Flow-motion threshold δf 0.01 m Stationary-flow scale δstat 0.10 px Flow input resolution 64 × 128 
+
+Flow spatial pooling grid 4 × 6
+
+Flow descriptor statistics grid medians + p50/p75/p90 Flow calibration samples 480 randomly sampled ground-truth clips 19 A.4.3 Navigation Reward 
+
+For each valid action chunk c ∈ { 1, . . . , B }, the navigation reward combines signed geodesic progress, path-length agreement, goal-potential improvement, goal entry, collision avoidance, route adherence, forward mo-tion, and orientation consistency: 
+
+eRnav  
+
+> c
+
+= wP Pc + wLSlen  
+
+> c
+
++ wGGc + wentry Ientry 
+
+> c
+
+− wcollision Icollision  
+
+> c
+
+− wD Dc − wB Bc
+
+− wpath Y path  
+
+> c
+
+− wrate Y rate  
+
+> c
+
+− wgross Y gross  
+
+> c
+
+, (32) followed by 
+
+Rnav  
+
+> c
+
+= clip 
+
+ eRnav  
+
+> c
+
+, −1, 1
+
+
+
+. (33) The signed geodesic-progress term is 
+
+Pc = clip dsc − dec
+
+max  Lnav 
+
+> c, gt
+
+, δ L
+
+ , −1, 1
+
+!
+
+, (34) where dsc and dec are the geodesic distances from the endpoints of the navigation-scored portion of chunk c
+
+to the goal. This portion is truncated at the first goal-entry transition or an earlier execution termination. Accordingly, Lnav  
+
+> c, gt
+
+is the ground-truth path length over exactly these navigation-active transitions. The path-length agreement is 
+
+Slen  
+
+> c
+
+= exp 
+
+"
+
+−
+
+ |Lpred  
+
+> c
+
+− Lgt  
+
+> c
+
+|
+
+γLLgt  
+
+> c
+
++ βL
+
+2#
+
+, (35) where Lpred  
+
+> c
+
+and Lgt  
+
+> c
+
+are, respectively, the predicted and ground-truth path lengths over the full fixed horizon of Na transitions. In particular, Lpred  
+
+> c
+
+includes all actions originally predicted for chunk c, including actions subsequently removed by STOP or collision resolution. Thus, Lgt  
+
+> c
+
+differs from Lnav  
+
+> c, gt
+
+whenever navigation credit terminates before the end of the chunk; the two coincide otherwise. The goal-potential improvement is 
+
+Gc = Φ( dec ) − Φ( dsc), Φ( d) = exp( −d/τ g ). (36) The remaining terms follow the implementation definitions below. Let jenter > 0 denote the first predicted position inside the goal radius. We set Ientry  
+
+> c
+
+= 1 only for c = 1 + ⌊(jenter − 1) /N a⌋; a trajectory initialized inside the goal region does not receive an entry bonus. Navigation credit in the entry chunk terminates at jenter , and subsequent executed transitions are assigned to the stopping stream. Similarly, Icollision  
+
+> c
+
+= 1 
+
+only for the first chunk containing a segment that intersects an occupied or out-of-bounds cell after 2-pixel occupancy dilation. All subsequent chunks are masked. For each predicted point i in chunk c, let droute  
+
+> i
+
+denote its distance to the nearest segment of the complete ground-truth route. The normalized route-deviation term is 
+
+Dc = clip 
+
+q 1
+
+> nc
+
+P
+
+> i
+
+[( droute  
+
+> i
+
+− 0.75 m) +]2
+
+1.50 m , 0, 1
+
+ . (37) For predicted steps longer than 0.03 m, Bc is the mean of max( − cos ∠(∆ pi, tGT  
+
+> i
+
+), 0) , where tGT  
+
+> i
+
+is the tangent of the ground-truth route segment nearest the predicted step midpoint. We set Bc = 0 if no step satisfies the motion threshold. For the yaw terms, let θai be the cumulative predicted action yaw before step i, θpi the predicted-path heading relative to the first predicted XY step, and θGT  
+
+> i
+
+the corresponding ground-truth path heading. If the first XY step is numerically stationary, the canonical positive-X direction is used as the reference; subsequent stationary steps retain the most recent valid heading. In the final configuration, yaw terms are evaluated only for predicted XY steps longer than 0.03 m. Define dz 15 ◦ (e) = sign( e)( |e|− 15 ◦)+. Then Y path  
+
+> c
+
+is the mean of 12 [1 − cos(dz 15 ◦ (wrap( θai − θpi )))] , and Y rate  
+
+> c
+
+applies the same function to wrap(∆ ψi − ∆θpi ). Finally, Y gross 
+
+> c
+
+is the mean of clip[ − cos( | wrap( θai − θGT  
+
+> i
+
+)|), 0, 1] , which is nonzero only beyond a 90 ◦ gross-error threshold. 20 Table 7 Navigation-reward coefficients. 
+
+Parameter Value 
+
+wP 0.70 
+
+wL 0.15 
+
+wG 0.15 
+
+wentry 0.15 
+
+wcollision 0.40 
+
+wD 0.35 
+
+wB 0.30 
+
+wpath 0.12 
+
+wrate 0.04 
+
+wgross 0.08 
+
+δL 0.50 
+
+γL / βL 0.50 / 0.10 
+
+τg 0.75 
+
+A.4.4 Stopping Reward 
+
+Once the predicted trajectory enters the goal region, a potential–energy objective encourages it to settle near the goal while suppressing unnecessary translation and rotation. Let 
+
+U (d) = 12
+
+ drg
+
+2
+
+(38) be the goal potential, where dj is the occupancy-geodesic distance from pj to the goal (with Euclidean distance used when the geodesic query is invalid). The per-action energy is 
+
+Ej = ∥∆pj ∥2
+
+rg
+
++ wψ
+
+(|∆ψj | − δψ )+
+
+τψ
+
+. (39) The continuous stopping reward for chunk c is 
+
+Rc, well = X
+
+> j=( c−1) Na,...,cN a−1
+> j≥jenter
+
+[wU (U (dj ) − U (dj+1 )) − wE Ej ] . (40) For a chunk classified as STOP, let pc denote the trajectory position at the beginning of that chunk. We assign 
+
+Rc, hard =
+
+(
+
+rsucc , ∥pc − g∥2 ≤ rg ,rfail , otherwise . (41) For non-STOP chunks, Rc, hard = 0 . Leaving the goal region after entry incurs an indicator penalty Iexit  
+
+> c
+
+with coefficient wexit . The complete stopping reward is 
+
+Rstop  
+
+> c
+
+= clip  Rc, well + Rc, hard − wexit Iexit  
+
+> c
+
+, −1, 1 . (42) 
+
+A.4.5 Chunk Aggregation and Stage-III Objective 
+
+We aggregate the chunk-wise navigation and stopping losses in Eq. (13) as 
+
+Lnav =
+
+> B
+
+X
+
+> c=1
+
+αcLnav ,c ,
+
+> B
+
+X
+
+> c=1
+
+αc = 1 , (43) and 
+
+Lstop = 1
+
+B
+
+> B
+
+X
+
+> c=1
+
+Lstop ,c . (44) 21 Table 8 Stopping-reward configuration.  
+
+> Parameter Value
+
+Goal radius rg 1.5 m 
+
+wψ / δψ / τψ 0.18 / 0.02 / 0.25 
+
+wU / wE 0.60 / 0.20 STOP success reward rsucc 0.15 STOP failure reward rfail -0.50 Exit penalty wexit 1.0 The navigation weights emphasize early chunks because receding-horizon inference executes At, 1 before re-planning. For B = 4 , we use 
+
+(α1, α 2, α 3, α 4) = (8 , 4, 2, 1) 15 . (45) Substituting Eqs. (43) and (44) into Eq. (14) gives the implemented Stage-III objective, which contains no auxiliary LWA term.    
+
+> A.4.6 Stage-III Optimization Settings
+> Table 9 Main Stage-III optimization hyperparameters.
+> Parameter Value
+
+Global condition batch size 64 Rollouts per condition 2Ks = 8 
+
+Sampler transitions 16 Eligible sampler transitions 8Replayed branch transitions per condition 2Ks = 8 
+
+CFG scale 5Visual SDE coefficient ηv 0.70 Action SDE coefficient ηa 0.20 Advantage stabilizer ϵ 1 × 10 −4
+
+Visual clipping threshold εv 5 × 10 −4
+
+Action clipping threshold εa 0.01 Optimizer AdamW Learning rate 5 × 10 −6
+
+Stage-III updates 1,500 Action-side weight λact 0.25 Stopping weight λstop 0.50 Navigation chunk weights {αc}Bc=1 (8 , 4, 2, 1) /15 
+
+# B Evaluation Protocol 
+
+B.1 GN-Bench Closed-Loop Evaluation 
+
+We evaluate every WNM checkpoint on the official GN-Bench Seen and Unseen splits using the same receding-horizon inference procedure. The Seen and Unseen splits contain 1,000 and 5,000 episodes, respectively. The evaluator executes at most the first 8 returned actions before replanning. It emits STOP when the total translation of this block, P7 
+
+> j=0
+
+∥∆pj ∥2, is below 0.15 m; an individual action whose three components have absolute value at most 10 −3 also terminates the episode. These deployment checks are shared by WNM-2D and WNM-3D. Each checkpoint is evaluated once per episode with inference seed 1140. Navigation Error, Oracle Success, Success Rate, Trajectory Length, and SPL follow the benchmark definitions. We report 22 point estimates over all episodes and do not compute multi-seed standard deviations or bootstrap confidence intervals. 
+
+B.2 Flow–Action Consistency Evaluation 
+
+The consistency analysis uses a fixed set of 640 near-goal STOP snapshots shared across WNM-2D, WNM-3D, and all Stage-I/II/III checkpoints. Each snapshot records the simulator state, instruction, and observation history. We draw one stochastic sample per checkpoint and snapshot using a deterministic seed schedule rooted at 42, with a derived seed for each snapshot. Evaluating all checkpoints on identical states avoids the state-distribution mismatch that would arise from comparing checkpoint-specific on-policy training averages. For each sample, we compute Sflow −act using Eq. (31) and report the motion-magnitude error 
+
+Emotion = |Mpred − MGT | , (46) where Mpred and MGT use the same low-resolution frame-motion statistic. Specifically, 
+
+M (Y) = Mframe (Y), (47) where Mframe excludes the target-prefix frame, clips RGB values to [0 , 1] , and bilinearly resizes all remaining frames with antialiasing to 64 × 128 . It then averages the absolute differences between adjacent frames over time, RGB channels, and spatial locations: 
+
+M (Y) = 1(T − 1) CHW  
+
+> T−1
+
+X
+
+> t=1
+
+X
+
+> c,h,w
+
+|Y t+1 ,c,h,w − Y t,c,h,w |. (48) The mean ground-truth motion magnitude on this near-goal evaluation set is 2.3553 × 10 −4. We additionally report Raction as an action-quality diagnostic rather than a flow–action consistency metric. It is the early-chunk-weighted sum P 
+
+> c
+
+αc clip( eRnav  
+
+> c
+
++Rstop  
+
+> c
+
+, −1, 1) over active chunks; chunks masked after STOP or collision contribute zero. The flow-valid ratio is the fraction of samples with finite flow descriptors and inferred motion whose median confidence is at least 0.20. The ratio is at least 0.9984 for both WNM-2D and WNM-3D throughout the checkpoint comparison. Because this evaluation set is concentrated on near-goal STOP states, the results primarily measure whether generated visual motion is compatible with near-terminal policy actions. They are not a comprehensive measure of future-view fidelity, yaw consistency, or visual–action consistency over the full navigation-state distribution. 23
