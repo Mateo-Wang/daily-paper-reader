@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-10</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-11</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 18 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 28 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>14</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>16</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-10 20:17:22 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-11 21:51:41 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读14篇、速读4篇，共18篇论文，聚焦世界模型在机器人与自动驾驶场景的应用。</p>
-<p>最值得关注的是两篇9.0分工作：内镜导航世界模型《EndoWAM》与真实天气驾驶世界模型《RealWeather》，均展现强泛化能力。</p>
-<p>建议读者优先精读这两篇高分论文，理解世界模型如何提升复杂环境下的视觉导航与场景理解。</p>
+<p>今日精读16篇、速读12篇，重点聚焦具身智能与视觉-语言-动作模型方向。</p>
+<p>最值得关注的是《AdaDexGrasp》和《GWM-VLA》，分别以9.0分触及触觉融合抓取与几何感知世界建模。</p>
+<p>建议普通读者优先了解多模态融合与动作解码协同的进展，可追踪后续开源实现与评测。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">14 篇</strong>
+    <strong class="dpr-home-dashboard-count">16 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EndoWAM: A Grounded World-Action Model for Generalizable Endoscopic Navigation">EndoWAM: A Grounded World-Action Model for Generalizable Endoscopic Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="RealWeather: Realistic and Scene-Faithful Weather Translation with Driving World Models">RealWeather: Realistic and Scene-Faithful Weather Translation with Driving World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Game-Theoretic Inverse Reinforcement Learning for Modeling Competitive Human Driving: A Cut-in Prediction Study">Game-Theoretic Inverse Reinforcement Learning for Modeling Competitive Human Driving: A Cut-in Prediction Study</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AdaDexGrasp: Adaptive Dexterous Grasping via 3D Visuo-Tactile Representation Fusion">AdaDexGrasp: Adaptive Dexterous Grasping via 3D Visuo-Tactile Representation Fusion</span></li><li><span class="dpr-home-dashboard-paper-title" title="GWM-VLA: Geometry-Aware Latent World Modeling for Vision-Language-Action Learning">GWM-VLA: Geometry-Aware Latent World Modeling for Vision-Language-Action Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="CMU-Drive and V2V-VLA: Cooperative Multi-agent Unified Driving with Reasoning Benchmark and Vehicle-to-Vehicle Vision-Language-Action Models">CMU-Drive and V2V-VLA: Cooperative Multi-agent Unified Driving with Reasoning Benchmark and Vehicle-to-Vehicle Vision-Language-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>12</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -63,12 +63,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">4 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Unordered Landmark Visual Navigation">Unordered Landmark Visual Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="AutoIntervene: Calibrated Intervention for Action-Chunking Imitation Learning Policies">AutoIntervene: Calibrated Intervention for Action-Chunking Imitation Learning Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Lightweight 3D Object Detection via Mamba-Based Knowledge Distillation">Lightweight 3D Object Detection via Mamba-Based Knowledge Distillation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LIRA: Local Cross-Layer Information Routing for Vision-Language-Action Decoding">LIRA: Local Cross-Layer Information Routing for Vision-Language-Action Decoding</span></li><li><span class="dpr-home-dashboard-paper-title" title="V-Simba: Unleashing the Architectural Potential of RL in Visual Continuous Control">V-Simba: Unleashing the Architectural Potential of RL in Visual Continuous Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Auditing Instruction-Trajectory Mismatches in Multimodal Robot Demonstrations">Auditing Instruction-Trajectory Mismatches in Multimodal Robot Demonstrations</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>3</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 </div>
 

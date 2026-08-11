@@ -1,0 +1,333 @@
+Title: Auditing Instruction-Trajectory Mismatches in Multimodal Robot Demonstrations
+
+URL Source: https://arxiv.org/pdf/2608.07895v1
+
+Published Time: Tue, 11 Aug 2026 00:24:34 GMT
+
+Number of Pages: 8
+
+Markdown Content:
+IEEE ROBOTICS AND AUTOMATION LETTERS. PREPRINT VERSION. ACCEPTED JULY, 2026 1
+
+# Auditing Instruction–Trajectory Mismatches in Multimodal Robot Demonstrations 
+
+Simon Holk 1,2, Ryosuke Takanami 1,2, Tatsuya Matsushima 1,2, Yusuke Iwasawa 2, Yutaka Matsuo 2, Yueh-Hua Wu 1, and Kei Ota 1
+
+Abstract —Robot demonstration datasets used to train vision-language-action policies can contain a subtle but harmful failure mode: trajectories that are behaviorally correct but paired with the wrong language instruction. We study post-hoc au-diting of these Instruction–Trajectory Mismatches (ITMs). Unlike failed rollouts, ITMs often look plausible, and can corrupt the language–behavior mapping learned by the policy. We propose 
+
+Multimodal Probabilistic Fusion (MMPF), a training-free auditing framework that treats each modality as an expert, estimates a task-label distribution from local neighborhood agreement and global prototype similarity, and then fuses modalities with predictive-entropy weighting in a product of experts. Across LIBERO benchmarks with injected instruction mismatches and noisy real-robot data, MMPF achieves the strongest overall ITM detection and label correction accuracy. We also show that auditing improves most downstream policy learning in settings where language is needed to disambiguate the task. We demonstrate in real robot experiments that our method can achieve improved policy performance and show the trade-off of filtering demonstrations compared to relabeling. 
+
+Index Terms —Data Sets for Robot Learning, Learning from Demonstration. 
+
+I. INTRODUCTION 
+
+# ROBOT learning is rapidly shifting from training task-specific policies on small, curated datasets to train-ing generalist policies on large, heterogeneous collections of demonstrations [1], [2], [3], [4], [5], [6], [7]. As these datasets scale across tasks, labs, and embodiments, label quality can become a bottleneck. Manual verification of labels does not scale, and even a small rate of systematic annotation errors can corrupt the supervision used to train vision-language-action (VLA) models. Most robotics curation work focuses on execution-level problems such as failed rollouts, low-quality actions, or re-dundant and uninformative segments [8], [9], [10], [11], [12]. These are important failure modes, but instruction-conditioned learning introduces another one that is behaviorally subtle and 
+
+Manuscript received: May 24, 2026; Accepted: July 27, 2026. This paper was recommended for publication by Editor Wei Pan upon evaluation of the Associate Editor and Reviewers’ comments. 
+
+> 1
+
+Simon Holk, Ryosuke Takanami, Tatsuya Matsushima, Yueh-Hua Wu, and Kei Ota are with the AI Robot Association (AIRoA), Tokyo, Japan. 
+
+> 2
+
+Simon Holk, Ryosuke Takanami, Tatsuya Matsushima, Yusuke Iwa-sawa, and Yutaka Matsuo are with the Matsuo-Iwasawa Laboratory, Grad-uate School of Engineering, The University of Tokyo, Tokyo, Japan. 
+
+simon.holk@weblab.t.u-tokyo.ac.jp 
+
+© 2026 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media, including reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to servers or lists, or reuse of any copyrighted component of this work in other works. Demo:  Pick up bottle  
+
+> Faulty instruction: Place bottle in box
+> Camera Noise: Neglected head camera
+> Errors introduced during data collection
+> Data collection phase
+> Teleoperator
+> Probably
+> pick bottle
+> Can't see
+> anything Reaching
+> something
+> Task evidence & reliability estimate
+
+Wrist camera  Proprioception Head camera  
+
+> Pick up bottle
+> Place bottle in
+> box Instruction: Pick up bottle
+> Update based on all evidence
+> Optional: Flag noisy camera
+
+Fig. 1. Example ITM auditing case. The provided instruction is “Place bottle in box,” while the trajectory is more consistent with “Pick up bottle.” MMPF estimates a task distribution and reliability score for each modality, then combines them using a reliability-weighted product of experts. 
+
+less explored: Instruction–Trajectory Mismatch (ITM). We use ITM to describe episodes where the demonstrated behavior is coherent, but the paired natural-language instruction is semantically wrong (for example, labeling a pick as a place , or 
+
+close the oven as open the oven ). Such episodes can be harmful because they often look plausible in video and action space, pass standard quality filters, but can corrupt the mapping between language and behavior. Robot demonstrations are inherently multimodal . Multiple camera views, proprioception, and potentially other sensors all provide partial evidence about the task. At the same time, robot data are collected in the real world, where any one modality can become unreliable at times because of occlusion, poor viewpoint, sensor corruption, or task-dependent ambiguity. A head camera may miss the relevant object, a wrist camera may be occluded, and proprioception may be weakly informative for tasks distinguished mainly by object state. Effective audit-ing therefore should not rely on a single view and it should aggregate across modalities to triangulate potential ITMs. While recent work uses VLMs/LLMs to generate, relabel, or refine instructions for robot trajectories [13], [14], [15], [16], arXiv:2608.07895v1 [cs.RO] 8 Aug 2026 2 IEEE ROBOTICS AND AUTOMATION LETTERS. PREPRINT VERSION. ACCEPTED JULY, 2026 
+
+explicit post-hoc auditing of instruction–trajectory mismatches in an already-labeled robot dataset remains under-explored, especially when considering multimodality with potential dis-agreement or unreliable observations. In this work, we study offline task-instruction auditing :given a robot dataset in which most labels are correct, iden-tify episodes whose provided instruction does not match the demonstrated behavior. Our key hypothesis is that correctly labeled episodes lie in regions where multiple modalities pro-vide consistent evidence for the provided task, whereas ITMs exhibit multimodal evidence that disagrees with the instruc-tion. We propose Multimodal Probabilistic Fusion (MMPF), a classifier-free auditing framework that combines local neigh-borhood agreement, global prototype similarity, and entropy-weighted multimodal fusion. The contribution of MMPF lies in integrating these established components into a multimodal ITM auditing framework, together with the associated problem formulation and evaluation. Fig. 1 illustrates the ITM auditing setting along with a conceptual view of our framework. Our contributions are: 1) We formalize ITM auditing for multimodal robot demon-stration datasets. 2) We introduce MMPF, a classifier-free framework that es-timates task-label posteriors from embedding geometry and fuses modalities using reliability-weighted product-of-experts. 3) We show that MMPF achieves the best overall ranking performance and correction accuracy across LIBERO and real-robot benchmarks. 4) We show that auditing improves downstream policy learning most when language is needed for disambigua-tion, and that counterfactual evaluation reveals improved instruction grounding. II. Related work 
+
+A. Robotics data curation 
+
+A growing body of work studies data curation for imitation and language-conditioned robot learning. Some methods use task- or domain-specific quality heuristics, such as motion consistency or uncertainty measures [17], [18]. Others estimate data utility directly through mutual information, transition-level progress, influence functions, datamodels, or learned success classifiers [9], [12], [8], [10], [11]. Data-mixture methods such as ReMix [19] optimize the composition of heterogeneous robot datasets. These approaches mainly target trajectory quality, redundancy, or utility and typically only investigate observations assuming task instructions are correct. In contrast, we target behaviorally valid demonstrations paired with semantically incorrect instructions. 
+
+B. Task instruction labeling in robotics 
+
+A complementary line of work uses pretrained vision-language models to synthesize task instructions for robot trajectories [13], [14], [15], [20], [16]. These methods aim to create or enrich language supervision. This makes them valuable for scaling annotation, but less directly suited to the setting where a mostly correct human-designed dataset should be audited for semantic mismatches. Our goal is to preserve the human labor by auditing already labeled datasets, flag likely ITMs, and propose corrected task labels. Moreover, MMPF exploits the multimodality of robot data by treating each sensor stream as a separate expert with episode-dependent reliability. 
+
+C. Label error detection 
+
+Label-error detection has been studied through classifier-confidence methods such as Confident Learning [21], nearest-neighbor methods such as Deep kNN [22], and multimodal label-error detection [23]. Caption-error detection methods such as TRACED [24] are also related, but target image-caption data using VLM-guided editing trajectories. Unlike these settings, robot ITM auditing naturally involves multiple sensors, intermittently uninformative observations, and rea-soning over trajectories. MMPF performs post-hoc auditing directly from trajectory embeddings, without training a target classifier or running VLM inference. III. Method Given a dataset of 𝑁 robot episodes, each episode 𝑖 contains multimodal observations 𝑥 𝑖,𝑚 for modalities 𝑚 ∈ M and a potentially noisy task label ˜ 𝑦 𝑖 ∈ { 1, . . . , 𝐶 }. A modality-specific encoder 𝑓 𝑚 maps each trajectory to an embedding 𝑧 𝑖,𝑚 ∈ R𝐷 𝑚 .MMPF estimates a posterior 𝑝 (𝑦 | 𝑖 ) for the true task label by combining unimodal task evidence with an episode-specific reliability score 𝑟 𝑖,𝑚 . The current formulation assumes a finite set of canonical task labels, with multiple episodes available for each task. After acquiring the initial embeddings, MMPF has three steps as shown in Fig. 2. Each modality first estimates task evidence from local neighborhoods and global prototypes with the evidence being combined into a final posterior. Then predictive entropy converts each posterior into a reliability score. Finally, a reliability-weighted product of experts fuses all modalities into a final multimodal posterior. 
+
+A. Unimodal Evidence Estimation 
+
+For each episode and modality, we build a per-modality evidence distribution 𝑝 𝑚 (𝑦 | 𝑖 ) over task labels. This is performed by combining (a) local neighborhood agreement and (b) global prototype similarity. 
+
+a) Local evidence: Let N𝐾 (𝑖, 𝑚 ) be the indices of the 𝐾 
+
+nearest neighbors of 𝑧 𝑖,𝑚 among all episodes in modality 𝑚 ,under a distance 𝑑 (𝑚 ) (· , ·) (e.g., Euclidean on ℓ2-normalized embeddings). The queried episode itself is excluded from the set. We weight neighbors by an RBF kernel, 
+
+𝑤 (𝑚 ) 
+
+> 𝑖 𝑗
+
+= exp − 𝑑 (𝑚 ) (𝑧 𝑖,𝑚 , 𝑧 𝑗,𝑚 )
+
+𝜎 𝑚 
+
+!
+
+, 𝑗 ∈ N 𝐾 (𝑖, 𝑚 ), (1) where 𝜎 𝑚 > 0 is a per-modality bandwidth parameter set to the mean pairwise distance in our experiments, and convert the weighted label histogram into a distribution to predict the task label 𝑦 :
+
+𝑝 kNN  
+
+> 𝑚
+
+(𝑦 | 𝑖 ) =
+
+Í 𝑗 ∈ N 𝐾 (𝑖,𝑚 ) 𝑤 (𝑚 ) 
+
+> 𝑖 𝑗
+
+1[ ˜𝑦 𝑗 = 𝑦 ]
+
+Í𝐶 𝑦 ′=1
+
+Í 𝑗 ∈ N 𝐾 (𝑖,𝑚 ) 𝑤 (𝑚 ) 
+
+> 𝑖 𝑗
+
+1[ ˜𝑦 𝑗 = 𝑦 ′] . (2) HOLK et al. : AUDITING INSTRUCTION–TRAJECTORY MISMATCHES 3reliable less 
+
+> reliable
+> Calculate reliability Create embedding
+> Entropy
+> uncertainty in modality
+> Final multimodal posterior
+> Reliability-weighted PoE Predict task instruction
+> Local Evidence
+> neighborhood task voting
+
+## X  
+
+> Global Evidence
+> similarity to task prototype
+> For each modality Combine
+> Fig. 2. MMPF auditing framework. Each modality estimates a task-label distribution by combining local 𝑘 -NN neighborhood agreement with global prototype similarity. Predictive entropy provides per-modality reliability weights for product-of-experts fusion; disagreement with the provided instruction indicates an ITM.
+
+b) Global evidence: Local neighborhoods can be noisy when data are sparse or when embeddings cluster by nuisance factors. To capture the global manifold structure, we compute a prototype 𝜇 𝑐,𝑚 for each class c (the mean embedding of all instances labeled 𝑐 in modality 𝑚 ). The global distribution is derived from the distance to these prototypes: 
+
+𝑝 proto  
+
+> 𝑚
+
+(𝑦 | 𝑖 ) ∝ exp 
+
+
+
+− ∥𝑧 𝑖,𝑚 − 𝜇 𝑦,𝑚 ∥
+
+𝜏 𝑚 
+
+
+
+(3) where 𝜏 𝑚 > 0 is a per-modality temperature parameter set to the mean prototype distance in our experiments. 
+
+c) Local and global combination: We synthesize these two signals using a geometric mixture. This enforces a consensus constraint: a high probability requires support from both the local neighborhood and the global cluster center. We can control the trade-off with 𝜆 ∈ [ 0, 1]:log 𝑝 𝑚 (𝑦 | 𝑖 ) ∝ 𝜆 log 
+
+
+
+𝑝 kNN  
+
+> 𝑚
+
+(𝑦 | 𝑖 ) + 𝜖 
+
+
+
++ ( 1 − 𝜆 ) log 
+
+
+
+𝑝 proto  
+
+> 𝑚
+
+(𝑦 | 𝑖 ) + 𝜖 
+
+
+
+.
+
+(4) We renormalize after the geometric mixture. The small 𝜖 
+
+prevents zero-count kNN classes from producing undefined log probabilities. This yields the unimodal evidence distribution 
+
+𝑝 𝑚 (𝑦 | 𝑖 ), which serves as the task label prediction for modality 
+
+𝑚 .
+
+B. Modality reliability 
+
+In teleoperated robotics, individual modalities may provide weak or ambiguous evidence independently of the task label (e.g., camera occlusion, sensor noise, or visually similar be-haviors across tasks). We therefore compute a reliability score 
+
+𝑟 𝑖,𝑚 ∈ [ 0, 1] to gate the contribution of each modality based on its predictive confidence. We measure confidence using the normalized entropy of the distribution: 
+
+𝑟 𝑖,𝑚 = 1 − 𝐻 ( 𝑝 𝑚 (· | 𝑖 )) 
+
+log 𝐶 . (5) Thus, sharp unimodal posteriors receive higher weight, while diffuse posteriors contribute less to fusion. 
+
+C. Reliability-weighted multimodal fusion 
+
+We fuse unimodal distributions with a reliability-weighted PoE, which emphasizes agreement across experts more strongly than a mixture-of-experts [25]. Inspired by generalized PoE formulations [26], [27], we use entropy-derived reliability weights: log 𝑝 (𝑦 | 𝑖 ) ∝ ∑︁ 
+
+> 𝑚 ∈ M
+
+𝑟 𝑖,𝑚 log 𝑝 𝑚 (𝑦 | 𝑖 ) (6) The final task prediction is then represented as: ˆ𝑦 𝑖 = arg max    
+
+> 𝑦 ∈ { 1,...,𝐶 }
+
+𝑝 (𝑦 | 𝑖 )
+
+In addition to task auditing, episodes with globally low per-modality reliability (where any or all 𝑟 𝑖,𝑚 are near zero) can additionally be flagged as noisy regardless of the argmax prediction, indicating that there may be inherent problems in the observations. These could potentially be diagnosed manually or automatically filtered. IV. Experiments We evaluate our method as an offline task-instruction auditing 
+
+tool for robot demonstration datasets. Our experiments target three questions: 1) Detection and correction: Can the method identify and relabel instruction–trajectory mismatches more ac-curately than prior noisy-label baselines? 2) Robustness to modality corruption: Does reliability-weighted multimodal fusion remain effective when a modality is degraded? 3) Downstream semantics: When does better instruction auditing translate into better policy behavior, and when are the benefits better revealed by grounding-oriented evaluation than by standard clean-environment success alone? 
+
+A. Simulated setup a) Datasets: We use LIBERO [28] and evaluate on four standard suites: LIBERO-10, LIBERO-Goal, LIBERO-Object, and LIBERO-Spatial. Each trajectory provides two camera 4 IEEE ROBOTICS AND AUTOMATION LETTERS. PREPRINT VERSION. ACCEPTED JULY, 2026 
+
+views (head and wrist) and robot proprioception, which we treat as separate modalities. To better isolate instruction following, we additionally evalu-ate on a counterfactual variant of LIBERO-Object, denoted CF-Object . This benchmark follows the evaluation design proposed in [29]; because the original environment is not yet publicly available, we provide an independent re-implementation. The scene configuration is kept fixed but the task instruction is reassigned to a different object/task identity (e.g., the scene corresponds to pick up the alphabet soup , while the instruction is changed to pick up the milk ). This breaks spurious correlations between scene layout and task identity, and therefore probes whether the policy truly relies on the language instruction rather than solving the task from visual context alone. 
+
+b) Hyperparameters: All experiments use a fixed set of hyperparameters: 𝐾 =30 nearest neighbors, RBF bandwidth 𝜎 𝑚 
+
+and temperature 𝜏 𝑚 set to the mean pairwise distance for each modality, and mixing weight 𝜆 =0.5, which gives equal weight to local and global evidence and is not tuned per dataset. Trajectory embeddings are computed with Cosmos-Embed1 [30], applied uniformly across all visual modalities. For robot states, because no comparable general-purpose pretrained robot state encoder is available, we train a lightweight trajectory encoder and use its features as the embedding. At each timestep, the encoder concatenates all normalized robot-state and action variables available for the corresponding platform. It processes the resulting sequence using a four-layer Transformer (width 256, four heads, feed-forward width 1024, dropout 0.1) with learned-query attention pooling. It is trained transductively on all trajectories in each audited dataset using masked state-delta reconstruction, masked action reconstruction, inverse dynamics, and forward-versus-reversed trajectory classification, with respective loss weights 1 , 1, 0.5, 0.5. The resulting encoder is frozen before auditing. Task instructions and task labels are neither inputs nor loss targets; therefore, neither clean nor corrupted label information can leak into the encoder objective. 
+
+c) Noise Injection: For simulations, we inject 30% syn-thetic instruction-label noise into otherwise clean demonstra-tions. We consider two noise settings: (i) instance-dependent noise . We make label flips more likely for trajectories near task boundaries. For each episode, we compute its nearest neighbors in trajectory-embedding space and identify episodes whose closest neighbors include demonstrations from different tasks. We then sample corrupted episodes from these boundary-near regions and replace their label with a confusable task label, chosen from the nearest different-task neighbor. (ii) clustered noise . To simulate systematic annotation errors, we cluster demonstrations within each task into five clusters in embedding space. We then select one cluster per task and flip a fixed fraction of its labels to another task. Both synthetic corruption settings are constructed using the Cosmos-Embed1 video trajectory embeddings shared by all methods. 
+
+d) Baselines: We compare MMPF against several noisy-label detection baselines:  
+
+> •
+
+No Filtering: train directly on the corrupted dataset.  
+
+> •
+
+Confident Learning (CL) [21]: a widely used label-error detection method based on out-of-sample predicted probabilities from a supervised classifier.  
+
+> •
+
+Retrieval: a retrieval-style baseline that scores instruction– trajectory consistency using vision-language similarity; our implementation adapts the DIAL instruction-augmentation approach [13] to the auditing setting, applying CLIP-style scoring to the same pretrained trajectory embeddings used by MMPF.  
+
+> •
+
+LEMoN [23]: a label-error detection method combining nearest-neighbor evidence in representation space and label-embedding space. For a fair comparison, all baselines—including CL and LEMoN—are adapted to use the same Cosmos-Embed1 [30] trajectory and instruction embeddings used by MMPF, rather than on raw image features. For score-based baselines, decision thresholds are selected at the known synthetic noise prevalence. The Retrieval baseline additionally uses ridge regression to align the video and text embedding spaces. For the simulation, all end-policies are trained from scratch using smolvla [31] with three independent training seeds. 
+
+e) Evaluation metrics: We report both threshold-free and decision-level auditing metrics. AUROC and AUPRC evaluate how well each method ranks mislabeled episodes above clean ones. Precision, recall, and F1 evaluate the actual filtering/relabeling decision. For MMPF, we report this at the method’s native posterior-based decision rule. For score-based baselines, AUROC/AUPRC are computed directly from the continuous suspicion score, while F1 is reported at a prevalence-matched operating point under the synthetic 30% noise setting. We additionally report correction accuracy , defined among detected true ITMs: among episodes correctly flagged as mismatched, it measures the fraction for which the proposed replacement label matches the ground-truth task. Formally, CorrAcc = |{ 𝑖 ∈ I TP : ˆ𝑦 𝑖 = 𝑦 𝑖 }|/|I TP |, where ITP denotes the set of correctly detected ITMs. 
+
+B. Real-robot setup 
+
+We evaluate on two datasets in real-robot settings shown in Fig. 3. The first dataset, denoted Table , decomposes similar tabletop behavior into primitive actions: focus, navigation, picking, and placing. It includes two objects, a paper and a mug where the tasks are to focus on, navigate to, pick up, and place the target object. In total it has 1260 demonstrations split across all primitive actions. The second dataset, denoted Bottle-mug , contains two fami-lies of two-stage manipulation tasks in a shared tabletop/shelf setting: (i) picking up a bottle from the shelf and placing it into a target box, and (ii) picking up a mug and placing it at the missing corner of a rectangle on the table. Each episode includes head-camera observations, wrist-camera observations, and pro-prioception. This dataset has an additional 10% observation noise where the teleoperator neglects the head camera making the scene partially observable. In total, the dataset includes 2980 demonstrations. For the real-robot experiments, all policies are trained from scratch using pi0.5 [7]. In addition, we generate 30% uniform task instruction noise in the real-robot datasets. We use 10 evaluation rollouts per task for each real-robot policy. For the HOLK et al. : AUDITING INSTRUCTION–TRAJECTORY MISMATCHES 5
+
+Table results, each stage reports the pooled success rate across both objects. 
+
+C. Filtering instruction–trajectory mismatches 
+
+We first evaluate MMPF as an offline auditor for identifying instruction trajectory mismatches under instance-dependent and 
+
+clustered synthetic label noise. We report AUROC and AUPRC as threshold-free ranking metrics, together with F1 at each method. We further provide correction accuracy summarized for LIBERO and reported for the real-robot benchmarks. Table I summarizes the main LIBERO results, and Table II reports the real-robot results. Across the LIBERO suites, MMPF provides the strongest 
+
+overall auditing signal. Its clearest advantage is on threshold-free ranking, where MMPF consistently achieves the best AUROC/AUPRC, indicating that its multimodal posterior orders mismatched episodes above clean ones more reliably than the baselines. This advantage is especially important on the harder semantic settings. For example, on LIBERO-10 with instance-dependent noise, MMPF reaches 99.0 AUROC and 98.0 AUPRC, versus 88.2 and 77.9 for retrieval, even though retrieval is narrowly higher for F1 (89.0 vs. 88.9). On LIBERO-Spatial, LIBERO-Goal, and LIBERO-Object, MMPF is strongest on both ranking and practical filtering metrics, including near 100 F1 on several settings. Correction quality is another major strength. Across all eight LIBERO settings in Table I, MMPF attains 100.0% correction accuracy among detected true ITMs. The baselines are often competitive but less consistent: retrieval ranges from 76.2% to 98.1%, Confident Learning from 72.4% to 100.0%, and LEMoN from 72.5% to 100.0%. In other words, MMPF does not merely rank suspicious episodes well; when it proposes a replacement label, that proposal is also highly reliable. The high correction accuracy on LIBERO is aided by its controlled task structure, where task identities are relatively well separated and the synthetic mismatches follow the trajectory-embedding geometry. The real-robot experiments provide a more challenging complement, using uniform label noise across behaviorally similar tasks, while still showing strong correction performance. The same pattern transfers beyond simulation. Across both real-robot datasets, MMPF achieves the strongest overall au-diting performance. On the bottle-mug dataset, MMPF reaches 91.8 F1, 99.9 AUROC, and 99.8 AUPRC, while also obtaining the highest correction accuracy at 97.9%. On the table dataset, MMPF again performs best, reaching 94.3 F1, 99.6 AUROC, 99.3 AUPRC, and 94.9 correction accuracy. This suggests that MMPF provides both reliable ranking of suspicious demon-strations and accurate correction proposals across real-robot settings. These results support our central hypothesis: for ITM auditing in robotics, it is beneficial to combine local neighborhood agreement and global prototype structure across modalities. 
+
+D. Downstream policy learning after auditing 
+
+We next examine how instruction-label quality translates into better instruction-conditioned policy learning. Our belief is that after auditing, the dataset should better align language with demonstrated behavior. Whether this also improves standard clean-environment success depends on how strongly the bench-mark requires language to disambiguate the task. Recent work shows that policies can sometimes recover the intended behavior from scene context alone, even when instruction grounding is imperfect [29]. For each noisy training set, we apply each auditing method, filter out the flagged demonstrations, train a policy, and report clean-environment success rates in Table III. The clearest gains appear on suites where preserving the mapping between language and behavior matters most. MMPF improves success substantially on LIBERO-Goal (77.5 vs. 58.7 for no filtering) and LIBERO-Spatial (76.7 vs. 70.3), indicating that removing instruction–trajectory mismatches can materially improve policy learning when task semantics are harder to infer from context alone. The retrieval baseline reaches 66.0 on LIBERO-Goal and 68.0 on LIBERO-Spatial—above no filtering on both—but remains well below MMPF, suggesting that CLIP-style instruction–trajectory scoring alone is not sufficient for the harder semantic mismatch cases. At the same time, the gains are not uniform across all suites. On LIBERO-10, MMPF (51.2), retrieval (50.5), and the unfiltered baseline (51.0) perform similarly, while Confident Learning is marginally higher at 52.3. On LIBERO-Object, the unfiltered baseline and LEMoN both reach 86.2, slightly above MMPF at 83.2. Our interpretation is that some suites allow the policy to exploit regularities in scene layout and object configuration, reducing its dependence on the instruction at test time even when the training labels are semantically cleaner. We therefore perform a grounding-oriented analysis below on LIBERO-Object. 
+
+E. Grounding-oriented evaluation 
+
+To test whether the downstream gains reflect better language grounding rather than only generic control improvements, we evaluate on CF-Object, which follows the evaluation paradigm of [29] that proposes counterfactual benchmark construction to isolate genuine instruction dependence. A policy in this benchmark cannot simply rely on familiar visual context and must instead use the language instruction to select the correct object. Table IV reports both task success and object-level grounding metrics. MMPF consistently reduces interaction with the biased object while maintaining or improving interaction with the instructed object. The more interesting comparison is with the no filtering baseline which had the best performance on LIBERO-Object. MMPF increases faithful grasp rate from 28.3% to 41.4% and reduces biased grasp rate from 40.3% to 14.3% over this baseline. This suggests that the main downstream benefit of auditing is not merely better low-level control, but a cleaner alignment between task language and demonstrated behavior. 
+
+F. Ablation study 
+
+To assess the contribution of each design choice, we compare MMPF against ablated variants on the Bottle-mug robot benchmark (Table V), which best exposes differences in modality informativeness and reliability. Full MMPF achieves 6 IEEE ROBOTICS AND AUTOMATION LETTERS. PREPRINT VERSION. ACCEPTED JULY, 2026                                                                                                                      
+
+> TABLE I Instruction-auditing results on LIBERO benchmarks under instance-dependent and clustered label noise. Each cell reports F1 / AUROC / AUPRC (%). Best is bold and second best is underlined for each metric within a row.
+> Suite Noise MMPF (ours) Conf. Learn. Retrieval LEMoN LIBERO-10 Inst. 88.9 / 99.0 /98.0 82.1 / 91.3 / 82.4 89.0 / 88.2 / 77.9 74.6 / 93.6 / 86.0 Clust. 99.0 /100.0 /100.0 94.0 / 99.4 / 97.6 91.4 / 99.5 / 97.2 63.5 / 99.6 / 97.8 LIBERO-Spatial Inst. 99.6 /99.8 /99.4 64.8 / 74.6 / 61.9 79.9 / 78.3 / 61.2 60.8 / 83.1 / 71.8 Clust. 95.5 /99.9 /99.6 62.7 / 79.9 / 55.5 68.3 / 74.1 / 49.0 60.3 / 80.1 / 60.7 LIBERO-Object Inst. 100.0 /99.8 /99.6 93.0 / 99.4 / 98.6 98.9 / 97.1 / 94.0 88.2 / 97.9 / 95.6 Clust. 98.6 /100.0 /100.0 69.7 / 93.2 / 80.8 97.4 / 98.0 / 90.0 72.3 / 98.8 / 93.7 LIBERO-Goal Inst. 91.9 /99.2 /98.0 52.2 / 77.7 / 60.3 71.6 / 75.1 / 56.3 53.7 / 78.3 / 58.7 Clust. 90.2 /99.0 /96.9 55.6 / 76.9 / 55.6 68.5 / 78.7 / 61.8 55.7 / 79.9 / 66.5
+> TABLE II Real-robot instruction-auditing results across the two robot datasets. Decision-level metrics (%) Method Bottle-mug Table F1 Corr. F1 Corr. CL 66.8 67.2 78.3 85.6 Ret. 54.9 49.6 79.9 73.3 LEMoN 60.9 35.4 77.5 73.4 MMPF (ours) 91.8 97.9 94.3 94.9
+> Ranking metrics (%) Method Bottle-mug Table AUROC AUPRC AUROC AUPRC CL 99.6 99.4 98.5 96.9 Ret. 83.6 60.4 87.8 76.1 LEMoN 83.9 66.0 92.3 86.3 MMPF (ours) 99.9 99.8 99.6 99.3
+
+the best overall balance at 99.9% precision, 84.9% recall, and 91.8 F1. Restricting the method to a single modality group lowers F1 to 90.4 with proprioception only and 90.7 with visual observations only, showing that the modalities provide complementary evidence. Likewise, removing either evidence source hurts performance: Local only (kNN) falls to 89.5 F1, while Multimodal kNN only reaches 89.3, indicating that the local and global signals are both useful when combined properly. Removing reliability weighting reduces F1 from 91.8 to 89.4, mainly by lowering recall while keeping precision nearly unchanged. This supports the role of reliability weighting as a per-episode gate that suppresses uncertain modalities rather than simply sharpening predictions globally. The most extreme failure is the prototype-only variant, which attains 100.0% recall but only 33.3% precision, collapsing to 49.9 F1. However, by making use of the local neighborhood agreement, this balances out the coarseness of the global evidence improving the precision. Table VI shows that the same reliability signal used inside MMPF can also be thresholded to detect sensor-corrupted episodes. The table shows the combined precision and recall when it comes to detecting label error or sensor-corruption. Raising the threshold from 0.0 to 0.2 increases overall recall from 81.3% to 95.1%, driven mainly by better recovery of episodes with sensor-corruption (13.3% to 77.8%). In the main results we use the fixed conservative threshold of 0.1; Table VI   
+
+> Bottle Mug Table
+> Fig. 3. Real-robot environments used for downstream evaluation.
+
+reports sensitivity to this operating point. This supplementary feature can be used to analyze episodes that might have one or more broken sensors. 
+
+G. Robot experiment 
+
+We conduct two real-robot downstream evaluations. On the Table dataset, we evaluate conservative filtering, where demonstrations flagged as ITMs are removed from the training set. For both the Table dataset and Bottle-mug dataset we use correction-based curation where the demonstrations are kept but relabeled with the suggested task instruction. Table VII reports the downstream policy success rates. Look-ing first at filtering-based curation in the Table environment, MMPF obtains the highest observed average success across all primitive tasks, with a point estimate of 78.8% compared with 73.8% for the unfiltered baseline and 67.5% for CL. Correction-based curation yields a higher observed point estimate: when detected instruction errors are relabelled rather than removed, MMPF obtains an average success rate of 90.0%, compared with 85.0% for CL and 73.8% for the unfiltered baseline. Both CL and MMPF reach near-ceiling performance on the easier focus, navigation, and pick stages, while MMPF has the highest observed overall average and placement success under correction-based cleaning. The combined results reveal an important trade-off in small real-robot datasets. Conservative filtering can improve semanti-cally grounded stages by removing demonstrations with unreli-able instruction labels, as seen in the strong focus and navigation performance of MMPF even after data removal. However, filtering also reduces the amount of available demonstration data, which can hurt stages that depend more strongly on low-level control coverage. This is most visible in the placement task: MMPF obtains only 40.0% placement success under HOLK et al. : AUDITING INSTRUCTION–TRAJECTORY MISMATCHES 7
+
+TABLE III Clean-evaluation policy success (%). Each cell reports the mean and 95% Student-𝑡 confidence interval over three independent policy-training seeds. Intervals are clipped to [0, 100 ]. Best point estimate is bold and second best is underlined. Method L10 Goal Spatial Object CF-Obj No filt. 51.0 [41.6,60.4] 58.7 [50.6,66.7] 70.3 [58.3,82.4] 86.2 [75.6,96.7] 15.0 [6.0,24.0] CL 52.3 [46.0,58.7] 62.8 [60.2,65.4] 66.2 [53.5,78.9] 85.8 [80.8,90.9] 30.8 [28.1,33.5] Ret. 50.5 [43.6,57.4] 66.0 [59.5,72.5] 68.0 [58.1,77.9] 85.0 [67.6,100.0] 29.5 [24.1,34.9] LEMoN 17.0 [9.4,24.6] 45.3 [39.6,51.1] 66.7 [60.5,72.8] 86.2 [84.3,88.1] 24.5 [22.0,27.0] MMPF (ours) 51.2 [39.9,62.4] 77.5 [71.8,83.2] 76.7 [62.7,90.6] 83.2 [78.6,87.8] 30.9 [25.8,36.0] TABLE IV Grounding-oriented evaluation on CF-Object. F-T/F-G denote faithful touch/grasp rates (higher is better); B-T/B-G denote biased touch/grasp rates (lower is better). Best is bold and second best is underlined.                             
+
+> Method F-T ↑F-G ↑B-T ↓B-G ↓
+> Base 29.0 28.3 42.0 40.3 CL 40.6 40.6 19.8 19.6 Ret. 41.8 41.2 18.5 18.2 LEMoN 39.5 38.2 25.7 24.8 MMPF (ours) 42.2 41.4 14.4 14.3
+
+TABLE V Ablation of MMPF. Full MMPF attains the best overall F1. 
+
+Variant Prec ↑ Rec ↑ F1 ↑
+
+Proprio only 97.5 84.2 90.4 Visual only (all cameras) 96.6 85.5 90.7 Local only (kNN) 99.9 81.1 89.5 Global only (prototype) 33.3 100.0 49.9 No reliability weighting 99.7 81.0 89.4 Multimodal kNN only 99.7 80.9 89.3 MMPF (full) 99.9 84.9 91.8 
+
+filtering, but improves to 65.0% when the same type of detected mismatches are corrected instead of discarded. Thus, even with imperfect correction accuracy, correction-based curation can be preferable when the underlying trajectory remains a valid demonstration. The Bottle-mug dataset provides a more challenging correction-based setting. MMPF obtains the highest observed average success, reaching 77.5% compared with 62.5% for the unfiltered baseline and 60.0% for CL. CL does not improve over the unfiltered baseline on average, which is consistent with its lower correction accuracy of 67.2% compared with 97.9% for MMPF. Overall, these results show that MMPF is useful not only for detecting instruction–trajectory mismatches, but also for producing accurate correction labels. This becomes especially important in small robot datasets, where preserving valid control trajectories can be as important as removing semantically incorrect supervision. V. Conclusion We presented an offline auditing framework for detecting Instruction–Trajectory Mismatches (ITM) in multimodal robot demonstration datasets. Our method Multimodal Probabilistic Fusion requires no clean-label supervision and operates directly on pretrained trajectory embeddings. By treating each modality as an independent expert and gating its contribution via an 
+
+TABLE VI Effect of reliability thresholding on noisy-episode detection. We vary the threshold to mark noisy observations for the Bottle-mug setting. 
+
+Min Rel. Prec ↑ Rec ↑ Rec Obs ↑ Rec Label ↑
+
+0.0 99.9% 81.3% 13.3% 99.2% 0.1 99.9% 84.9% 30.0% 99.2% 0.2 97.3% 95.1% 77.8% 99.2% 
+
+TABLE VII Real-robot downstream policy success (%). Each Table stage pools 20 rollouts (10 per object), while each Bottle-mug stage contains 10 rollouts. The “All” column reports pooled success with 95% Wilson confidence intervals over 80 rollouts per Table condition and 40 per Bottle-mug condition.                                                             
+
+> Table: filtering-based cleaning Method All Focus Nav. Pick Place Unfilt. 73.8
+> [63.2,82.1] 95.0 85.0 65.0 50.0 CL 67.5
+> [56.6,76.8] 85.0 80.0 45.0 60.0
+> MMPF (ours) 78.8
+> [68.6,86.3] 100.0 100.0 75.0 40.0 Table: correction-based cleaning Method All Focus Nav. Pick Place Unfilt. 73.8
+> [63.2,82.1] 95.0 85.0 65.0 50.0 CL 85.0
+> [75.6,91.2] 100.0 100.0 100.0 40.0 MMPF (ours) 90.0
+> [81.5,94.8] 100.0 100.0 95.0 65.0
+> Bottle-mug: correction-based cleaning Method All Bottle pick Bottle place Mug pick Mug place Unfilt. 62.5
+> [47.0,75.8] 90 70 70 20 CL 60.0
+> [44.6,73.7] 100 50 60 30
+> MMPF (ours) 77.5
+> [62.5,87.7] 100 100 80 30
+
+entropy-based reliability score, the framework remains effective even when individual modalities provide weak or ambiguous evidence. Across synthetic and real-robot benchmarks, MMPF achieves the strongest overall ITM auditing performance. It consistently provides the best threshold-free detection scores, while also delivering strong practical cleaning performance. Reliability weighting improves performance while the minimum-reliability threshold offers an additional mechanism for surfacing poten-tially corrupt episodes in real-robot data. Downstream, filtering improves policy success rates on suites where language is a necessary guide for action selection (LIBERO-Goal, LIBERO-Spatial, CF-Object). The CF-Object grounding evaluation fur-8 IEEE ROBOTICS AND AUTOMATION LETTERS. PREPRINT VERSION. ACCEPTED JULY, 2026 
+
+ther shows that one primary benefit of auditing is improved instruction–behavior alignment rather than generic control improvement. We further showed in real-world experiments that we can attain an overall better success rate across tasks using MMPF. We showed that by performing correction-based curation rather than filtering, we improve the trade-off between learning low-level control behavior while maintaining semantic understanding. A limitation of MMPF is that it depends on the quality of the underlying trajectory embeddings. The post-embedding auditing stage is training-free, but it still requires representations in which task-relevant behavior is geometrically meaningful. Pretrained video and world-model embeddings are increas-ingly available, but less so for robot proprioception, where broadly reusable pretrained encoders are not yet standard. In our experiments, this required training a lightweight robot-state trajectory encoder. MMPF also assumes a finite set of canonical task instructions and performs auditing as discrete label correction. This assumption covers many existing robot instruction datasets and related relabeling pipelines, but does not yet address fully open-vocabulary task descriptions. Future work could support open-vocabulary descriptions by replacing hard task classes with soft neighborhoods in instruction-embedding space, allowing semantically equivalent paraphrases to share evidence. Performing this extension on an open-ended VLA dataset with paraphrases, scene diversity, and naturally occurring label noise remains future work. Another interesting direction is to utilize automatic label synthesising methods with our auditing framework to improve the integrity of generated instructions. Finally, there is no limit in how many modalities can be used so future work could investigate how adding more modalities like touch could improve auditing. References 
+
+[1] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn, K. Gopalakrishnan, K. Hausman, A. Herzog, J. Hsu et al. , “Rt-1: Robotics transformer for real-world control at scale,” arXiv preprint arXiv:2212.06817 , 2022. [2] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart, S. Welker, A. Wahid et al. , “Rt-2: Vision-language-action models transfer web knowledge to robotic control,” in Conference on Robot Learning .PMLR, 2023, pp. 2165–2183. [3] A. O’Neill, A. Rehman, A. Maddukuri, A. Gupta, A. Padalkar, A. Lee, A. Pooley, A. Gupta, A. Mandlekar, A. Jain et al. , “Open x-embodiment: Robotic learning datasets and rt-x models: Open x-embodiment collab-oration 0,” in 2024 IEEE International Conference on Robotics and Automation (ICRA) . IEEE, 2024, pp. 6892–6903. [4] Octo Model Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna, T. Kreiman, C. Xu et al. , “Octo: An open-source generalist robot policy,” arXiv preprint arXiv:2405.12213 , 2024. [5] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi et al. , “Openvla: An open-source vision-language-action model,” arXiv preprint arXiv:2406.09246 , 2024. [6] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, L. X. Shi, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky, “ 𝜋 0:A vision-language-action flow model for general robot control,” 2024. [Online]. Available: https://arxiv.org/abs/2410.24164 [7] Physical Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai et al. , “ 𝜋 0.5: a vision-language-action model with open-world generalization,” arXiv preprint arXiv:2504.16054 , 2025. [8] C. Agia, R. Sinha, J. Yang, R. Antonova, M. Pavone, H. Nishimura, M. Itkina, and J. Bohg, “Cupid: Curating data your robot loves with influence functions,” arXiv preprint arXiv:2506.19121 , 2025. [9] J. Hejna, S. Mirchandani, A. Balakrishna, A. Xie, A. Wahid, J. Tompson, P. Sanketi, D. Shah, C. Devin, and D. Sadigh, “Robot data curation with mutual information estimators,” arXiv preprint arXiv:2502.08623 , 2025. [10] S. Dass, A. Khaddaj, L. Engstrom, A. Madry, A. Ilyas, and R. Mart´ ın-Mart´ ın, “Datamil: Selecting data for robot imitation learning with datamodels,” arXiv preprint arXiv:2505.09603 , 2025. [11] A. S. Chen, A. M. Lessing, Y. Liu, and C. Finn, “Curating Demonstrations using Online Experience,” in Proceedings of Robotics: Science and Systems , Los Angeles, CA, USA, June 2025. [12] Y. Zhang, Y. Xie, H. Liu, R. Shah, M. Wan, L. Fan, and Y. Zhu, “Scizor: A self-supervised approach to data curation for large-scale imitation learning,” arXiv preprint arXiv:2505.22626 , 2025. [13] T. Xiao, H. Chan, P. Sermanet, A. Wahid, A. Brohan, K. Haus-man, S. Levine, and J. Tompson, “Robotic skill acquisition via in-struction augmentation with vision-language models,” arXiv preprint arXiv:2211.11736 , 2022. [14] G.-C. Kang, J. Kim, K. Shim, J. K. Lee, and B.-T. Zhang, “Clip-rt: Learning language-conditioned robotic policies from natural language supervision,” 
+
+arXiv preprint arXiv:2411.00508 , 2024. [15] J. Zhang, K. Pertsch, J. Zhang, and J. J. Lim, “Sprint: Scalable policy pre-training via language instruction relabeling,” in 2024 IEEE International Conference on Robotics and Automation (ICRA) . IEEE, 2024, pp. 9168– 9175. [16] C. Glossop, W. Chen, A. Bhorkar, D. Shah, and S. Levine, “Cast: Counterfactual labels improve instruction following in vision-language-action models,” arXiv preprint arXiv:2508.13446 , 2025. [17] M. Sakr, J. Zhang, H. M. V. d. Loos, D. Kulic, and E. Croft, “Consistency matters: Defining demonstration data quality metrics in robot learning from demonstration,” ACM Transactions on Human-Robot Interaction ,2024. [18] P. Valle, C. Lu, S. Ali, and A. Arrieta, “Evaluating uncertainty and quality of visual language action-enabled robots,” arXiv preprint arXiv:2507.17049 , 2025. [19] J. Hejna, C. Bhateja, Y. Jiang, K. Pertsch, and D. Sadigh, “Re-mix: Optimizing data mixtures for large scale imitation learning,” arXiv preprint arXiv:2408.14037 , 2024. [20] N. Blank, M. Reuss, M. R¨ uhle, ¨ O. E. Ya˘ gmurlu, F. Wenzel, O. Mees, and R. Lioutikov, “Scaling robot policy learning via zero-shot labeling with foundation models,” arXiv preprint arXiv:2410.17772 , 2024. [21] C. Northcutt, L. Jiang, and I. Chuang, “Confident learning: Estimating uncertainty in dataset labels,” Journal of Artificial Intelligence Research ,vol. 70, pp. 1373–1411, 2021. [22] D. Bahri, H. Jiang, and M. Gupta, “Deep k-nn for noisy labels,” in 
+
+International Conference on Machine Learning . PMLR, 2020, pp. 540– 550. [23] H. Zhang, A. Balagopalan, N. Oufattole, H. Jeong, Y. Wu, J. Zhu, and M. Ghassemi, “Lemon: Label error detection using multimodal neighbors,” arXiv preprint arXiv:2407.18941 , 2024. [24] G. I. Afriat, R. Lucas, X. Meng, Y. Hou, Y. Zhu, and R. Mazumder, “Seeing what’s wrong: A trajectory-guided approach to caption error detection,” 
+
+Openreview , 2025. [25] G. E. Hinton, “Training products of experts by minimizing contrastive divergence,” Neural computation , vol. 14, no. 8, pp. 1771–1800, 2002. [26] A. Joshi, N. Gupta, J. Shah, B. Bhattarai, A. Modi, and D. Stoyanov, “Generalized product-of-experts for learning multimodal representations in noisy environments,” in Proceedings of the ACM International Con-ference on Multimodal Interaction (ICMI) , 2022, pp. 83–93. [27] Y. Cao and D. J. Fleet, “Generalized product of experts for automatic and principled fusion of gaussian process predictions,” arXiv preprint arXiv:1410.7827 , 2014. [28] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone, “Libero: Benchmarking knowledge transfer for lifelong robot learning,” Advances in Neural Information Processing Systems , vol. 36, pp. 44 776–44 791, 2023. [29] Y. Fang, Y. Feng, D. Jing, J. Liu, Y. Yang, Z. Wei, D. Szafir, and M. Ding, “When vision overrides language: Evaluating and mitigating counterfactual failures in vlas,” arXiv preprint arXiv:2602.17659 , 2026. [30] NVIDIA, “Cosmos world foundation model platform for physical ai,” 
+
+arXiv preprint arXiv:2501.03575 , 2025, cosmos-Embed1 trajectory em-bedding model. [31] M. Shukor, D. Aubakirova, F. Capuano, P. Kooijmans, S. Palma, A. Zoui-tine, M. Aractingi, C. Pascal, M. Russi, A. Marafioti et al. , “Smolvla: A vision-language-action model for affordable and efficient robotics,” arXiv preprint arXiv:2506.01844 , 2025.

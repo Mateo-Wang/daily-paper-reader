@@ -1,0 +1,613 @@
+Title: WA-SpecDec: World-Aware Speculative Decoding for Vision-Language-Action Models
+
+URL Source: https://arxiv.org/pdf/2608.08725v1
+
+Published Time: Tue, 11 Aug 2026 01:22:59 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# WA-SpecDec: World-Aware Speculative Decoding for Vision-Language-Action Models 
+
+Zikang Wen and Yuning Zhang and Dong Yuan 
+
+The University of Sydney Sydney, Australia 
+
+{zikang.wen,yuning.zhang1,dongyuan}@sydney.edu.au 
+
+Abstract 
+
+Vision-language-action (VLA) policies gen-erate robot controls autoregressively, making closed-loop latency dominated by repeated target-model forward passes. Speculative de-coding reduces this cost by verifying blocks of draft action tokens in parallel, and recent VLA methods further relax token-level ac-ceptance because small differences in action-token space often map to similar continuous controls. However, this relaxation remains scene-agnostic. A fixed token-distance toler-ance treats the same action-token deviation as equally safe across states, although devia-tions that are harmless in free space can cause collisions or grasp failures near contact. We propose WA-SpecDec, a world-aware specu-lative decoding framework that injects world-model-derived physical scene awareness dur-ing the VLA prefill stage, producing shared world-aware prefill states for draft proposal and target verification without changing the relaxed acceptance rule. Across three state-of-the-art relaxed acceptance schemes, WA-SpecDec preserves higher task success un-der looser relaxation and enables longer ac-cepted prefixes. At comparable-success op-erating points, WA-SpecDec achieves a 1.5×
+
+matched-success speedup over VLA specula-tive decoding alone and reduces near-contact failure (NCF) by 18 .6% on average relative to the corresponding speculative baselines. 
+
+1 Introduction 
+
+Vision-language-action (VLA) models extend language-conditioned robot control and embodied multimodal modeling into executable robot policies (ichter et al., 2023; Driess et al., 2023). Modern robot transformers map language-conditioned vi-sual observations to action tokens or continuous commands that are decoded into robot control sig-nals (Brohan et al., 2023; Zitkovich et al., 2023). Cross-embodiment datasets and open-source gen-eralist policies further make this action-generation Target Action   
+
+> token deviation
+> 15cm Accepted Action
+> Safe far from object
+> Target Action Risk near contact
+> 1cm
+
+# 💥 
+
+> Target Action
+> token deviation
+> Accepted Action
+
+Figure 1: Motivation for world-aware speculative de-coding. The same draft–target deviation can be safe in free space but risky near contact. 
+
+interface a practical foundation for embodied con-trol (O’Neill et al., 2024; Kim et al., 2025). How-ever, token-generating VLA policies still rely on re-peated target-model forward passes during autore-gressive action decoding, which makes closed-loop latency a key bottleneck for fast observe–decide– act cycles. Speculative decoding reduces this cost by using a lightweight draft model to propose multiple fu-ture tokens that are verified in parallel by the target model (Leviathan et al., 2023). Subsequent specu-lative sampling and feature-aware drafting methods further improve this acceleration paradigm for au-toregressive decoding (Chen et al., 2023; Li et al., 2024b). In VLA decoding, exact token agreement is often too restrictive because small differences in action-token space can map to similar continuous controls. Recent VLA speculative decoding meth-ods therefore adopt relaxed acceptance , accepting a draft token when it lies within a tolerance ρ of the target token in action-token space (Wang et al., 2025). Kinematic and hybrid variants further adapt this idea to embodied action spaces (Zheng et al., 2026a,b). These methods improve accepted length 1arXiv:2608.08725v1 [cs.RO] 9 Aug 2026 and wall-clock speed, but they also shift the key reliability question from exact token matching to whether an accepted token deviation is physically safe in the current scene. Whether an accepted action-token deviation is safe is inherently scene-dependent. The same de-viation can be benign during free-space motion, but near contact it may change whether the robot grasps, collides, misses the target, or enters the wrong contact phase. This creates a representa-tional bottleneck for relaxed speculative decod-ing. Before action decoding, standard VLA poli-cies construct a multimodal prefill input from lan-guage tokens and projected visual patch embed-dings, which is then encoded into hidden states for autoregressive action generation. Although image-text and self-supervised pretraining provide strong semantic and spatial representations (Zhai et al., 2023; Oquab et al., 2024), these visual features are not explicitly trained to preserve predictive phys-ical state such as object pose evolution, gripper– object distance, or contact phase (Nair et al., 2023; Radosavovic et al., 2023). As a result, relaxed veri-fication applies a global token-distance test while the physical cost of an accepted deviation varies across scenes. Figure 1 illustrates this mismatch. A tolerated deviation may be safe when the gripper is far from the object, but unsafe near contact. A scene-agnostic relaxed decoder must therefore keep 
+
+ρ conservative to preserve task success, which lim-its accepted length and speedup. Looser relaxation improves acceptance, but can admit physically in-consistent actions. To address this mismatch, we propose World-Aware Speculative Decoding for Vision-Language-Action Models (WA-SpecDec), the first framework to introduce world-model-derived physical scene awareness into VLA speculative decoding (Wu et al., 2023). WA-SpecDec injects this aware-ness before prefill computation, producing world-aware prefill hidden states shared by draft pro-posal and target verification, rather than modify-ing the relaxed acceptance rule. Specifically, WA-SpecDec enriches visual patch embeddings with a World-Aware Bias module, which maps current-observation world tokens into spatially aligned bi-ases and is trained with action prediction together with an auxiliary next-frame latent objective. At inference, it uses only the current observation and performs no future-frame prediction. By condition-ing both proposal and verification on the same phys-ically informed prefill hidden states, WA-SpecDec improves relaxed speculative decoding while pre-serving the original VLA action-token interface. Our contributions are threefold: • We identify a scene-dependent reliability bot-tleneck in relaxed VLA speculative decoding, where a fixed token-distance tolerance can accept deviations whose physical cost varies between free-space and near-contact states. • We propose WA-SpecDec, the first frame-work that incorporates world-model-derived physical scene awareness into VLA specula-tive decoding by injecting a spatially aligned World-Aware Bias before prefill computation, producing shared world-aware prefill hidden states while leaving the relaxed acceptance rule unchanged. • We introduce near-contact failure (NCF), a new metric to measure contact-sensitive degra-dation and evaluate WA-SpecDec on four LIBERO task suites across ρ-based, kine-matic, and hybrid relaxed acceptance schemes. WA-SpecDec enables longer accepted prefixes at comparable task success, achieves a 1.5×
+
+matched-success speedup, and reduces NCF by 18 .6% on average relative to the corre-sponding speculative baselines. 
+
+2 Background and Related Work 
+
+2.1 Acceleration for VLA Models 
+
+Language-conditioned robot control first connected pretrained language models to robotic affordances (ichter et al., 2023) and embodied multimodal rea-soning (Driess et al., 2023). Robot transform-ers then showed that large-scale sequence poli-cies can map language-conditioned visual obser-vations to executable robot actions across diverse manipulation tasks. More recent VLA and gen-eralist robot policies extend this direction with cross-embodiment data (O’Neill et al., 2024), open-source action-token policies (Octo Model Team et al., 2024; Pertsch et al., 2025), and action-chunk or flow-based control heads (Black et al., 2025). These systems improve broad task transfer and gen-eralization, but token-generating VLA policies still inherit the latency profile of autoregressive decod-ing (Zitkovich et al., 2023; Kim et al., 2025). At each control step t, a VLA policy receives a language instruction x and visual observation ot,and predicts discrete action tokens at, 1: H that are 2detokenized into continuous robot control. A single target decoding step is 
+
+pθ(ai | x, o t, a <i ), (1) where θ denotes the target VLA and a<i are previ-ous action tokens. The observation is encoded into visual patch embeddings and combined with text tokens to form the prefill input. Because closed-loop control repeatedly invokes this decoder over multi-token action horizons, latency scales with the number of target decoding rounds. Acceleration therefore requires reducing target forward passes while preserving the VLA action-token interface and task success (Yang et al., 2026). 
+
+2.2 Speculative Decoding and Relaxed Verification 
+
+Speculative decoding accelerates autoregressive generation by using a lightweight draft model to propose several future tokens and a larger target model to verify them in parallel (Leviathan et al., 2023; Chen et al., 2023). Follow-up work improves this paradigm through big–little decoding (Kim et al., 2023), tree-based verification (Miao et al., 2024), auxiliary decoding heads (Cai et al., 2024), retrieval (He et al., 2024), feature-level drafting (Li et al., 2024b), or self-speculation (Zhang et al., 2024). These methods reduce the number of target decoding rounds by accepting multiple draft tokens after one target verification pass. For VLA policies, exact token matching is often overly restrictive because nearby action tokens can detokenize to similar continuous controls. Recent VLA speculative decoding methods therefore intro-duce relaxed verification (Wang et al., 2025), with kinematic and hybrid variants adapting acceptance to embodied action spaces (Zheng et al., 2026a,b). A common relaxed acceptance rule is 
+
+Accept ρ(ˆ ai) = ⊮[d(ˆ ai, a ⋆i ) ≤ ρ] , (2) where d(·, ·) measures token-space or detokenized action-space distance, a⋆i is the target token, and 
+
+ρ is the tolerance. Larger ρ accepts longer draft prefixes and improves speed, while smaller ρ keeps the executed sequence closer to the target decoder. The limitation is that this tolerance is global, while the physical cost of an accepted deviation is state-dependent. Although a⋆i is conditioned on the current observation, the accept/reject decision still compresses scene-dependent control risk into a fixed distance threshold. The same draft–target deviation can be harmless in free-space motion but harmful near contact, where manipulation de-pends on contact configuration and local interaction dynamics (Suomalainen et al., 2022; Pang et al., 2023). A small displacement may change whether the gripper reaches, grasps, collides, or enters the wrong contact phase (Dong et al., 2021). Thus, aggressive relaxation improves accepted length but can admit physically unsafe actions, forcing con-servative tolerances to preserve task success. WA-SpecDec addresses this bottleneck by improving the shared conditioning state used by proposal and verification, rather than changing the relaxed ac-ceptance rule itself. 
+
+2.3 World Representations for Scene-Aware Decoding 
+
+The reliability of relaxed VLA verification depends not only on the acceptance rule, but also on the scene representation encoded into the shared prefill hidden states. Modern visual backbones provide strong semantic and spatial features (Oquab et al., 2024; Zhai et al., 2023), yet their pretraining objec-tives are not designed to preserve control-critical variables such as object pose, gripper–object dis-tance, contact phase, and occlusion (Majumdar et al., 2023). Since token-based VLA policies use visual patch embeddings to form the multi-modal prefill input for both drafting and verifica-tion, missing physical detail can affect the target reference and draft proposal together (Karamcheti et al., 2023). World representations provide a complemen-tary source of predictive physical structure. VAEs and latent world models learn compact representa-tions through reconstruction and future prediction (Kingma and Welling, 2014; Ha and Schmidhuber, 2018). Latent dynamics models support predictive control from pixels (Hafner et al., 2019; Hansen et al., 2024), while recent video-predictive repre-sentation learning shows that latent compressors and feature-prediction objectives retain cues useful for physical change (Bardes et al., 2024; Wan et al., 2025). WA-SpecDec uses this complementarity to make relaxed speculative decoding more reliable. Instead of adding a post-hoc acceptor, changing ρ,or building a larger draft model, it injects a world-model-derived physical-scene bias into visual patch embeddings before prefill computation. The result-ing world-aware prefill hidden states are shared by draft proposal and target verification, preserv-ing the original VLA action-token interface and 3Environment & Task  §3.3 : World-Aware Target Model  
+
+> Causal mask Text branch
+> Text embedding
+> Multimodal assembly
+> ...
+> Task instruction
+> Pick up the white plate and place it in the open white drawer.
+> Observation
+> Text tokens
+> ...
+> ...
+> Visual branch
+> Projected visual patch embeddings
+> ...
+> World-aware
+> visual tokens
+> ...
+> Projector
+> (MLP)
+> 🔥
+> Vision
+> backbone
+> ❄️
+
++
+
+> Current Frame
+> ...
+
+§3.2 : World-Aware Bias Module  Spatial VideoEncoder (4 layers)   
+
+> 🔥
+> Projector
+> (MLP)
+> 🔥
+> World tokens
+> ... Spatial Align
+> Patchify + Linear
+> VAE latent map
+> Training-only auxiliary head
+> (discarded at inference) VideoHead
+> 🔥
+> Predicted next-frame latent map
+> VAE
+> Encoder ❄️
+> MSE Loss
+> Target next-frame latent map VAE
+> Encoder ❄️
+> Next Frame
+> Current Frame
+> Language model (LLM)
+> LoRA trainable adapters
+> 🔥
+> World bias
+> ...
+> World-Aware Prefill hidden states
+> ...
+> Accepted action tokens
+> 5
+> …
+
+✓ ×✓
+
+> Action
+> De-tokenization
+> …
+
+Draft Model Figure 2: The overall WA-SpecDec architecture. World-aware bias module adds a spatially aligned world bias wt
+
+to visual patch embeddings before prefill computation, yielding world-aware prefill hidden states shared by draft proposal and target verification. The auxiliary next-frame prediction head is used only during training. 
+
+relaxed acceptance rule while giving both sides of speculative decoding access to the same predictive scene signal. 
+
+3 WA-SpecDec Framework 
+
+3.1 Overview 
+
+WA-SpecDec injects physical-world awareness into relaxed VLA speculative decoding by modifying the visual inputs that produce shared prefill hidden states, rather than changing the acceptance inter-face. As shown in Figure 2, at each control step the policy receives a language instruction x and current observation It, and outputs accepted action tokens that are detokenized into continuous robot commands. The speculative decoding loop remains unchanged. A lightweight draft model proposes ac-tion tokens, the target VLA verifies them in parallel with a relaxed acceptance rule, and the accepted prefix is executed. The key difference is that both proposal and verification are conditioned on world-aware prefill hidden states instead of hidden states produced from a purely semantic vision-language input. WA-SpecDec introduces a World-Aware Bias (WAB) module to produce a spatially aligned physical-scene bias wt from the current observa-tion. This bias is added to the existing visual patch embeddings before prefill computation, so the target-side multimodal sequence length is un-changed and the original VLA action-token inter-face is preserved. During training, WAB is shaped by the action prediction objective and an auxiliary next-frame latent objective. The auxiliary branch is used only for representation learning and is re-moved at inference, so deployment requires only the current frame and performs no future-frame prediction. The resulting world-aware prefill hidden states serve as the common conditioning state for the tar-get and draft models. The target uses these states to define the reference distribution for relaxed verifi-cation, while the draft model is distilled to propose tokens from the same states. WA-SpecDec there-fore does not introduce a new acceptance rule or a post-hoc acceptor. Instead, it changes the target ref-erence that existing relaxed acceptance rules com-pare against. This design is intended to improve the acceptance–success frontier and the contact-sensitive reliability measured by near-contact fail-ure. A physically better-conditioned reference can support longer accepted prefixes under looser re-laxation while reducing failures that occur after the policy has entered near-contact states. Because WAB adds no extra multimodal tokens, the added computation remains limited to the compact bias path. Section 3.2 describes how WAB computes the 4spatially aligned world bias, and Section 3.3 ex-plains how this bias produces the world-aware pre-fill hidden states and target reference used for draft-ing and verification. 
+
+3.2 World-Aware Bias Module 
+
+The World-Aware Bias (WAB) module provides the physical-scene signal used to enrich the vi-sual inputs that produce VLA prefill hidden states. Given the current RGB observation It, it produces a spatially-aligned bias wt that has the same shape as the VLA visual patch embeddings. Rather than appending extra world tokens to the multimodal sequence, WAB modulates existing visual tokens before prefill computation, allowing physical in-formation to affect prefill hidden states without increasing the target-side sequence length. WAB starts from a frozen VAE latent space: 
+
+Zt = Evae (It) ∈ RB×Hz ×Wz ×Cvae . (3) The encoder Evae maps It to a latent scene map 
+
+Zt, where B is the batch size, Hz and Wz are the latent spatial resolution, and Cvae is the VAE chan-nel dimension. We keep this encoder frozen so that WAB learns only a lightweight adaptation path on top of a stable reconstructive representation. This latent representation is complementary to the se-mantic vision backbone because it retains spatial appearance and layout details that are useful for contact-sensitive control. The latent map is then adapted into world tokens: 
+
+Ut = Fω(ϕtok (Zt)) ∈ RB×S×C , S = Hz Wz .
+
+(4) The tokenization map ϕtok flattens the VAE spatial grid and applies a linear projection to produce S
+
+latent tokens of width C. The spatial VideoEncoder 
+
+Fω then refines these tokens into Ut. This step keeps the VAE latent grid as the source of spatial structure, while allowing the trainable WAB path to emphasize action-relevant factors such as object pose, occlusion, and local gripper–object geometry. To make these world tokens usable by the VLA visual branch, WAB aligns them to the visual patch grid and projects them to the VLA hidden width: 
+
+wt = fbias (SpatialAlign( Ut)) ∈ RB×Nv ×H .
+
+(5) Here, Nv is the number of VLA visual patches and H is the hidden width of the projected visual embeddings. SpatialAlign( ·) reshapes Ut to its two-dimensional latent grid, interpolates it to the visual patch resolution, and flattens it back to a token sequence. The projector fbias maps each aligned world token to the VLA hidden width. As a result, wt can be added directly to the visual patch embeddings Vt ∈ RB×Nv ×H , giving each patch a location-specific physical-scene bias. WAB is trained not only through action predic-tion but also through a dense next-frame latent pre-diction objective. From the current-frame world tokens, a training-only VideoHead gη predicts the next-frame VAE latent map: 
+
+Lvideo = 1
+
+Hz Wz Cvae 
+
+∥gη(Ut) − Evae (It+1 )∥22 .
+
+(6) The next frame It+1 is used only during training to form the target latent map, and η denotes the Video-Head parameters. Because the loss is computed over the full latent grid rather than a pooled rep-resentation, it encourages Ut to preserve spatially-resolved cues predictive of short-term scene change. This supervision is particularly relevant for relaxed VLA decoding, where small token deviations can become unsafe near contact. The overall training loss combines the action-token objective with this auxiliary latent prediction term: 
+
+L = Laction + λLvideo . (7) The scalar λ controls the strength of the auxiliary objective. The VideoHead is discarded after train-ing, so inference uses only the current observation 
+
+It and does not perform future-frame prediction. The learned WAB path therefore adds only the current-frame bias wt at test time. This bias is later encoded into the world-aware prefill hidden states shared by both the target and draft, keeping proposal and verification conditioned on the same spatially grounded scene signal. 
+
+3.3 World-Aware Target Model 
+
+Figure 2 shows how the target model becomes world-aware before any action token is decoded. Let the frozen visual backbone and multimodal projector produce visual patch embeddings Vt ∈
+
+RB×Nv ×H . WAB produces the spatially-aligned bias wt ∈ RB×Nv ×H from Equation 5, which matches the shape of Vt, and the target injects it as a residual world-conditioned modulation. 
+
+V wa  
+
+> t
+
+= Vt + wt, (8) The addition is element-wise across visual patches, so each patch receives its own location-specific 5bias. Although the operation is additive, wt is not a free parameter because it is computed from VAE latent tokens that retain reconstructive scene detail and is shaped by the dense next-frame latent objec-tive in Equation 6. The added direction is therefore trained to summarize scene factors predictive of short-term physical change, such as pose, occlu-sion, and contact configuration, rather than only image–text semantics. Injecting it before prefill computation makes this physical-scene direction participate in the transformer’s query, key, value, and feed-forward projections, so it becomes part of the hidden states and key–value cache used to produce subsequent action-token logits. The world-aware visual tokens are concatenated with text embeddings Tx,
+
+P wa  
+
+> t
+
+= [ Tx; V wa  
+
+> t
+
+]. (9) The LoRA-adapted target language model converts this input into prefill hidden states, 
+
+hwa  
+
+> t
+
+= Prefill θ+∆ θ(P wa  
+
+> t
+
+) , (10) where θ denotes the pretrained VLA parameters and ∆θ denotes the trainable LoRA adapter. This placement is central because the world representa-tion is not used as a post-hoc acceptor, but changes the target reference token itself. Because wt is added to existing visual tokens rather than ap-pended as extra world tokens, P wa  
+
+> t
+
+has the same sequence length as the original multimodal prefill input. WA-SpecDec therefore injects a per-patch physical-scene prior while preserving the patch-level semantic content of Vt and avoiding addi-tional target self-attention cost. The action objective in Equation 7 trains this world-aware target to predict demonstration action tokens. For a training set D of instruction, observa-tion, and action-token sequences, we use 
+
+Laction = − X 
+
+> (x,I t,a ⋆
+> 1: H)∈D
+> H
+
+X
+
+> i=1
+
+log pwa  
+
+> θ
+
+(a⋆i | x, I t, a ⋆<i ) ,
+
+(11) with 
+
+pwa  
+
+> θ
+
+(ai | x, I t, a <i ) ≜ pθ+∆ θ(ai | hwa  
+
+> t
+
+, a <i ) .
+
+(12) Together with Lvideo , this objective updates WAB and ∆θ while keeping the VAE and base visual stack frozen. The VideoHead affects the target only through training-time gradients into WAB. This stage defines the target policy that WA-SpecDec accelerates. We do not claim distribution preser-vation with respect to the vanilla VLA, but with respect to the world-aware target pwa  
+
+> θ
+
+.At inference, relaxed verification is unchanged except for the reference distribution. Given a draft token ˆai, the target produces 
+
+awa  
+
+> i
+
+= arg max  
+
+> a
+
+pwa  
+
+> θ
+
+(a | x, I t, a <i ) , (13) and applies the same distance test as Equation 2, 
+
+Accept wa  
+
+> ρ
+
+(ˆ ai) = ⊮[d(ˆ ai, a wa  
+
+> i
+
+) ≤ ρ] . (14) WA-SpecDec therefore acts below the acceptance policy rather than replacing it. Any relaxed accep-tance rule that compares draft proposals with target references can use the world-aware reference. This is where acceleration enters. Because the target and draft share the same physical-scene-aware pre-fill hidden states, the draft is encouraged to match a better-conditioned reference, yielding longer ac-cepted prefixes at fixed reliability and fewer target verification rounds. Since wt adds no tokens, this gain is not offset by extra target-side attention cost. The same world-aware prefill hidden states are used for drafting. After training the world-aware target, we freeze it and distill a lightweight draft model qϕ against its output distribution, 
+
+Ldraft = E(x,I t,a <i )
+
+h
+
+KL  pwa  
+
+> θ
+
+(· | x, I t, a <i ) ∥
+
+qϕ(· | hwa  
+
+> t
+
+, a <i )i
+
+.
+
+(15) Sharing hwa  
+
+> t
+
+couples proposal and verification un-der the same physical-scene conditioning. The draft is not strengthened in isolation. It proposes tokens from the same world-aware prefill hidden states that also define the target reference. In de-ployment, WAB computes wt once per observa-tion. The draft model proposes γ tokens from hwa  
+
+> t
+
+,and the target verifies them in parallel using Equa-tion 14. The accepted prefix is executed, while the first rejected draft token is replaced by the corre-sponding target token before the next speculative round. 
+
+4 Experiments 
+
+4.1 Experimental Setup Target policies. We evaluate WA-SpecDec across multiple target policies and evaluation set-tings. Our primary LIBERO experiments use a 6Decoding Method Spatial Object Goal Long Relaxation Policy Succ. Spd. NCF Succ. Spd. NCF Succ. Spd. NCF Succ. Spd. NCF – AR: OpenVLA 82.8 1.00 × 73.3 69.8 1.00 × 49.7 78.2 1.00 × 46.8 57.8 1.00 × 45.5                                                                               
+
+> ρStandard SpecDec 79.4 1.26 ×78.6 63.0 1.13 ×60.0 69.6 1.23 ×64.5 49.4 1.18 ×52.2
+> ρWA-SpecDec 83.0 1.54 ×72.9 68.8 1.24 ×48.7 75.8 1.32 ×46.3 56.2 1.21 ×44.7 KERV Standard SpecDec 80.2 1.52 ×75.8 63.4 1.54 ×63.9 70.8 1.61 ×61.6 48.6 1.41 ×54.1 KERV WA-SpecDec 83.4 1.59 ×72.3 68.4 1.64 ×48.1 77.6 1.67 ×47.3 52.8 1.45 ×42.8 HeiSD Standard SpecDec 77.4 1.74 ×69.0 68.0 2.26 ×63.8 70.8 2.10 ×66.4 50.4 1.71 ×51.6 HeiSD WA-SpecDec 80.4 1.77 ×65.3 70.6 2.31 ×49.0 78.0 2.12 ×43.6 57.0 1.79 ×42.3
+
+Table 1: Main comparison on four LIBERO task suites under identical relaxation schemes. Succ. denotes task success rate (%), Spd. denotes wall-clock speedup over the AR target, and NCF follows the definition in Section 4.1. Speedup includes the WAB overhead for WA-SpecDec.                              
+
+> Relax. Policy Succ. Spd. NCF –AR ActionCodec 95.8 1.00 ×76.2
+> ρStandard SpecDec 88.6 1.18 ×88.7 WA-SpecDec 95.2 1.25 ×70.8 KERV Standard SpecDec 91.2 1.57 ×84.1 WA-SpecDec 95.6 1.72 ×77.3 HeiSD Standard SpecDec 88.0 2.41 ×86.7 WA-SpecDec 94.2 2.63 ×72.4
+
+Table 2: Performance of the stronger ActionCodec tar-get policy on LIBERO-Goal. Standard SpecDec and WA-SpecDec use the same target policy and decoding configuration under each relaxation scheme. Relax. de-notes the relaxation scheme. 
+
+fine-tuned OpenVLA policy (Kim et al., 2025). To assess whether the effectiveness of WA-SpecDec extends to stronger target policies, we addition-ally consider an ActionCodec (Dong et al., 2026) target on LIBERO and UniVLA (Bu et al., 2025) on SIMPLER-Env (Li et al., 2024a). We further evaluate OpenVLA on SIMPLER-Env, allowing us to separately assess generalization across envi-ronments and across target-policy strengths. For each setting, the autoregressive variant of the corre-sponding target policy, denoted AR target , serves as the reliability reference. 
+
+Baselines and verifiers. We compare WA-SpecDec against Standard SpecDec , namely stan-dard speculative decoding without world-aware conditioning, corresponding to the Spec-VLA base-line (Wang et al., 2025), under the same target policy and decoding configuration. We consider three relaxed verification schemes: the ρ-based token-distance verifier (Wang et al., 2025), KERV 
+
+(Zheng et al., 2026a), and HeiSD (Zheng et al., 2026b). KERV incorporates kinematic information into verification, whereas HeiSD combines token-and kinematic-level criteria. Across all settings, the target model, verifier, and decoding configura-tion are held fixed between Standard SpecDec and WA-SpecDec, thereby isolating the contribution of world-aware conditioning. 
+
+Benchmarks and task suites. We evaluate WA-SpecDec on two manipulation benchmarks. Our primary evaluation is conducted on LIBERO (Liu et al., 2023), covering LIBERO-Spatial, LIBERO-Object, LIBERO-Goal, and LIBERO-Long. These suites span diverse manipulation behaviors, includ-ing reaching, grasping, placement, object reloca-tion, and long-horizon task execution, with varying degrees of contact sensitivity. To assess general-ization beyond LIBERO, we additionally evaluate on SIMPLER-Env (Li et al., 2024a) using four manipulation tasks: Carrot, Stack, Spoon, and Egg-plant. 
+
+Metrics. Task success is the percentage of eval-uation episodes completing the language-specified manipulation task. Accepted length is the average number of draft action tokens accepted per target verification step. Wall-clock speedup is measured relative to the AR target and includes draft pro-posal, target verification, WAB computation, and cache updates. NCF (Near-contact failure) mea-sures contact-sensitive failure among unsuccessful rollouts. For each failed episode, we compute the minimum simulator-state distance from the gripper fingertip sites to either the task-relevant object or the target receptacle across timesteps. NCF is the percentage of failed episodes whose minimum dis-tance falls below a threshold δ before termination. 7Spec. + rho Spec. + KERV Spec. + HeiSD WA + rho WA + KERV WA + HeiSD         
+
+> LIBERO-Spatial
+> 40 60 80
+> LIBERO-Object LIBERO-Goal
+> 2345640 60 80
+> LIBERO-Long
+> 23456Accepted length Success (%)
+
+Figure 3: Accepted-length–success frontiers on four LIBERO task suites. Each curve sweeps relaxation within a fixed relaxed acceptance rule. Solid lines de-note WA-SpecDec and dashed lines denote Standard SpecDec. 
+
+Implementation details. Appendix A provides implementation details. Code and evaluation scripts will be released upon acceptance. 
+
+4.2 Main Results on LIBERO 
+
+Table 1 presents the main results with OpenVLA under three relaxed verifier families, including ρ,KERV, and HeiSD. Across all verifier families and task suites, WA SpecDec consistently achieves a better tradeoff between reliability and acceleration than Standard SpecDec, remaining closer to the AR target while retaining net wall clock acceleration. Under the ρ verifier, WA SpecDec improves suc-cess from 63 .0 to 68 .8 on Object, from 69 .6 to 75 .8
+
+on Goal, and from 49 .4 to 56 .2 on Long, while remaining comparable to the AR target on Spa-tial. These gains are obtained without sacrificing speed. For example, speedup increases from 1.26 ×
+
+to 1.54 × on Spatial and from 1.23 × to 1.32 × on Goal. The same pattern holds with stronger relaxed verifiers. With HeiSD, WA SpecDec improves suc-cess from 70 .8 to 78 .0 on Goal and from 50 .4 to 
+
+57 .0 on Long, while also achieving comparable or higher speedup. Together, these results show that world aware conditioning complements exist-ing relaxed verification rules and remains effective across different verifier designs. Importantly, the gains are not specific to the OpenVLA target. Table 2 evaluates the same decoding framework with the stronger Action-Codec target on LIBERO Goal, whose AR policy achieves 95 .8% success. Across all three relax-ation schemes, WA SpecDec preserves substan-tially more of the AR target performance than Stan-dard SpecDec while also achieving higher speedup. Under ρ, success increases from 88 .6% to 95 .2% 
+
+while speedup improves from 1.18 × to 1.25 ×.With KERV, WA SpecDec reaches 95 .6% success, nearly matching the 95 .8% AR target, while accel-erating inference by 1.72 ×, compared with 91 .2% 
+
+success and 1.57 × speedup for Standard SpecDec. Under HeiSD, WA SpecDec achieves 94 .2% suc-cess at 2.63 × speedup, whereas Standard SpecDec achieves 88 .0% success at 2.41 ×. These results demonstrate that the benefit of world aware condi-tioning persists with a substantially stronger target policy and is therefore compatible with improve-ments to the underlying VLA action representation. The NCF results further support the contact sen-sitive motivation. Across all Standard SpecDec and WA SpecDec pairs in Table 1, WA SpecDec reduces NCF by 18 .6% on average relative to the corresponding speculative baselines. The same pat-tern is observed with ActionCodec, where NCF decreases from 88 .7 to 70 .8 under ρ, from 84 .1
+
+to 77 .3 under KERV, and from 86 .7 to 72 .4 un-der HeiSD. Since NCF measures failures after the policy has entered the near contact region, these reductions indicate that the success improvements are concentrated in states where small accepted ac-tion deviations are more likely to cause collision, missed grasp, or placement failure. This suggests that WA SpecDec improves not only decoding effi-ciency but also the reliability of accepted actions in contact sensitive states. Figure 3 provides a complementary view through the full acceptance and success frontier over a wider relaxation sweep. Within each verifier family, the WA SpecDec curves generally shift up-ward and to the right relative to Standard SpecDec. The upward shift indicates higher task success at comparable accepted length, while the rightward shift indicates longer accepted prefixes at compa-rable success. Because longer accepted prefixes reduce the number of target verification rounds per action sequence, this frontier shift provides further evidence that WA SpecDec enables more reliable acceleration rather than simply accepting more per-missive draft predictions. 
+
+4.3 Generalization to SIMPLER Env 
+
+To evaluate whether the effectiveness of WA SpecDec extends beyond LIBERO, we further con-duct experiments on four tasks in SIMPLER Env using both OpenVLA and the stronger UniVLA 8Decoding Method Carrot Stack Spoon Eggplant Relaxation Policy Succ. Spd. Succ. Spd. Succ. Spd. Succ. Spd. – AR: OpenVLA 25.00 1.00 × 12.50 1.00 × 33.33 1.00 × 16.67 1.00 ×                                                      
+
+> ρStandard SpecDec 16.67 1.31 ×8.33 1.27 ×20.83 1.14 ×12.50 1.28 ×
+> ρWA-SpecDec 29.17 1.53 ×12.50 1.34 ×33.33 1.43 ×20.83 1.54 ×
+> KERV Standard SpecDec 12.50 1.41 ×8.33 1.52 ×16.67 1.53 ×12.50 1.66 ×
+> KERV WA-SpecDec 25.00 1.78 ×16.67 1.67 ×41.67 1.72 ×25.00 1.87 ×
+> HeiSD Standard SpecDec 25.00 2.16 ×12.50 1.80 ×29.17 2.13 ×12.50 2.14 ×
+> HeiSD WA-SpecDec 33.33 2.98 ×20.83 2.42 ×41.67 2.60 ×25.00 2.56 ×
+
+Table 3: Performance with the OpenVLA target policy on four SIMPLER Env tasks. Succ. denotes task success rate (%) and Spd. denotes wall clock speedup over the corresponding AR target. Standard SpecDec and WA-SpecDec use the same target policy and decoding configuration under each relaxation scheme.                                                                             
+
+> Decoding Method Carrot Stack Spoon Eggplant Relaxation Policy Succ. Spd. Succ. Spd. Succ. Spd. Succ. Spd. –AR: UniVLA 0.625 1.00 ×0.208 1.00 ×0.583 1.00 ×0.833 1.00 ×
+> ρStandard SpecDec 0.417 1.26 ×0.042 1.19 ×0.375 1.23 ×0.708 1.20 ×
+> ρWA-SpecDec 0.583 1.43 ×0.208 1.56 ×0.625 1.38 ×0.875 1.48 ×
+> KERV Standard SpecDec 0.375 1.44 ×0.125 1.50 ×0.375 1.43 ×0.667 1.71 ×
+> KERV WA-SpecDec 0.625 1.67 ×0.208 1.74 ×0.583 1.78 ×0.833 1.92 ×
+> HeiSD Standard SpecDec 0.542 2.31 ×0.083 2.04 ×0.583 1.95 ×0.750 2.23 ×
+> HeiSD WA-SpecDec 0.708 2.78 ×0.250 2.55 ×0.625 2.67 ×0.917 2.36 ×
+
+Table 4: Performance with the stronger UniVLA target policy on four SIMPLER Env tasks. Succ. denotes task success rate and Spd. denotes wall clock speedup over the corresponding AR target. Standard SpecDec and WA-SpecDec use the same target policy and decoding configuration under each relaxation scheme. 
+
+target policy. Tables 3 and 4 report results un-der the same three relaxation schemes used in our LIBERO evaluation. Across both target policies, all four tasks, and all three relaxation schemes, WA SpecDec consistently improves both task success and wall clock speedup over Standard SpecDec. These results show that the benefit of world aware conditioning generalizes beyond LIBERO and re-mains effective across different target policies. Table 3 reports the results with OpenVLA. Under 
+
+ρ, WA SpecDec improves average success across the four tasks from 14 .6% to 24 .0% while increas-ing average speedup from 1.25 × to 1.46 ×. With KERV, average success increases from 12 .5% to 
+
+27 .1% , together with an improvement in speedup from 1.53 × to 1.76 ×. The same trend holds under HeiSD, where WA SpecDec achieves 30 .2% av-erage success at 2.64 × speedup, compared with 
+
+19 .8% success at 2.06 × for Standard SpecDec. The consistent gains across all four tasks indicate that world aware conditioning improves the reliabil-ity and acceleration tradeoff under different relaxed verification rules in the SIMPLER Env setting. Table 4 further evaluates WA SpecDec with the stronger UniVLA target policy. Under ρ, average success improves from 0.386 to 0.573 while aver-age speedup increases from 1.22 × to 1.46 ×. With KERV, average success improves from 0.386 to 
+
+0.562 and speedup from 1.52 × to 1.78 ×. Under HeiSD, WA SpecDec achieves an average success of 0.625 at 2.59 × speedup, compared with 0.490 
+
+at 2.13 × for Standard SpecDec. WA SpecDec therefore retains its advantage when paired with a stronger VLA policy, supporting its compatibility with improvements in the underlying target model as well as its generalization to a different manipu-lation benchmark. 
+
+4.4 Robustness to Relaxed Tolerance 
+
+Table 5 isolates the effect of the ρ-based relaxed acceptance rule by comparing Spec-VLA and WA-SpecDec under the same tolerance values. As ρ
+
+increases, Spec-VLA degrades sharply, with mean success dropping from 67 .7 at ρ = 5 to 55 .1 at 9– ρ = 5 ρ = 10 ρ = 15 ρ = 20                                                      
+
+> Suite AR target Spec-VLA WA-SpecDec Spec-VLA WA-SpecDec Spec-VLA WA-SpecDec Spec-VLA WA-SpecDec
+> Spatial 82.8% 79.0% 82.4% 79.4% 83.0% 76.0% 80.8% 72.6% 78.4%
+> Object 69.8% 64.2% 69.0% 63.0% 68.8% 61.8% 66.4% 57.0% 65.8%
+> Goal 78.2% 73.2% 76.4% 69.6% 75.8% 66.4% 72.4% 58.2% 66.8%
+> Long 57.8% 54.2% 57.2% 49.4% 56.2% 40.6% 48.2% 32.4% 43.0%
+> Mean 72.2% 67.7% 71.3% 65.4% 71.0% 61.2% 67.0% 55.1% 63.5%
+
+Table 5: Effect of progressively increasing the relaxation tolerance ρ on task success across four LIBERO task suites. Spec-VLA and WA-SpecDec are compared under the same ρ-based relaxed acceptance rule at each tolerance value.                   
+
+> Method Success Accepted Len. Speedup AR target 72.2% –1.00 ×
+> WA target-only 73.5% –0.97 ×
+> Spec-VLA 65.4% 3.59 1.20 ×
+> WA w/o video loss 69.4% 4.09 1.31 ×
+> WA-SpecDec full 71.0% 4.22 1.34 ×
+
+Table 6: Component ablation averaged over four LIBERO task suites. Speculative variants use ρ = 10 .“–“ denotes N/A for accepted length. 
+
+ρ = 20 . WA-SpecDec degrades more gracefully, maintaining mean success of 71 .3, 71 .0, 67 .0, and 
+
+63 .5 from ρ = 5 to ρ = 20 . This fixed-rule com-parison shows that the gain does not come from changing the acceptance rule, but from making the same permissive rule less damaging through shared world-aware prefill hidden states and a more physi-cally informed target reference. 
+
+4.5 Robustness to the NCF Threshold 
+
+Our default NCF threshold of 2 cm is physically motivated by the approximate width of one grip-per finger in the LIBERO simulator, providing a meaningful scale for identifying failures that oc-cur after the policy enters a contact sensitive re-gion. This threshold is fixed independently of the observed improvement and is not selected to max-imize the difference between WA SpecDec and Standard SpecDec. To evaluate whether the NCF conclusion depends on this particular choice, we additionally measure NCF using thresholds of 1, 2,
+
+3, and 4 cm across all four LIBERO task suites. Table 7 shows that WA SpecDec achieves lower NCF than Standard SpecDec under every relaxation scheme and at every evaluated threshold. Averaged across ρ, KERV, and HeiSD, WA SpecDec reduces NCF by 12 .54 , 11 .77 , 10 .87 , and 8.03 percentage points at thresholds of 1, 2, 3, and 4 cm, respec-tively. The improvement therefore persists over a broad range of definitions of the near contact region rather than depending on the default 2 cm threshold. The reduction is largest at the tighter 1 cm and 
+
+2 cm thresholds, where contact geometry is most critical to manipulation success. This pattern is con-sistent with the motivation of WA SpecDec, since small accepted action deviations become increas-ingly consequential as the gripper approaches the object or receptacle. These results show that the NCF conclusion is robust to the threshold choice, while the default 2 cm threshold retains a direct physical interpretation in the LIBERO environ-ment. 
+
+4.6 Ablation Study 
+
+Table 6 ablates the main components of WA-SpecDec at ρ = 10 . WA target-only adds WAB to the autoregressive target without speculative draft-ing or relaxed acceptance, improving reliability but running slightly slower due to WAB overhead. This shows that physical-scene conditioning improves the target reference but does not accelerate decod-ing alone. Spec-VLA improves speed but incurs a large success drop. Adding WAB without the auxiliary video loss partly recovers this gap, while the full model achieves the best accepted length and speedup with success closest to the AR target. These results show that both shared world-aware prefill states and predictive latent supervision are needed for the acceleration–reliability trade-off. 
+
+5 Conclusion 
+
+In this study, we presented WA-SpecDec, a world-aware speculative decoding framework for VLA models. By injecting world-model-derived phys-ical scene awareness before prefill computation, WA-SpecDec conditions draft proposal and tar-get verification on shared world-aware prefill hid-den states, improving relaxed decoding without changing the acceptance rule. Experiments on 10 Relax. Policy 1 cm 2 cm 3 cm 4 cm – AR 36.83 51.17 59.72 62.87        
+
+> ρStandard SpecDec 44.64 60.89 67.93 72.35
+> ρWA SpecDec 35.20 50.26 58.07 63.12 KERV Standard SpecDec 46.85 61.46 68.15 73.34 KERV WA SpecDec 32.82 49.24 56.75 62.78 HeiSD Standard SpecDec 45.31 60.72 67.43 70.21 HeiSD WA SpecDec 31.17 48.25 56.07 65.90
+
+Table 7: Sensitivity of NCF to the near contact distance threshold on LIBERO. Values are averaged across the four task suites. 
+
+four LIBERO task suites show that WA-SpecDec achieves a better reliability–acceleration trade-off, preserving higher success under looser relaxation, enabling longer accepted prefixes, and reducing near-contact failure while retaining speedup. These results suggest that physically informed shared con-ditioning is an effective approach for improving the reliability of accelerated VLA action decoding. 
+
+Ethics Statement 
+
+This work evaluates efficient VLA decoding in sim-ulated manipulation environments using publicly available research artifacts, including the LIBERO benchmark and existing VLA/model components. It does not involve human subjects, personal data, or real-world robot deployment. All external mod-els, datasets, and simulators are used only for re-search evaluation, and any released code and evalu-ation scripts will follow their licenses and terms of use. Future real-world use should follow standard robot deployment practices, including task-specific validation, appropriate supervision, safety checks, and compliance with the licenses of the underlying models, datasets, and simulators. 
+
+References 
+
+Adrien Bardes, Quentin Garrido, Jean Ponce, Xinlei Chen, Michael Rabbat, Yann LeCun, Mido Assran, and Nicolas Ballas. 2024. Revisiting feature predic-tion for learning visual representations from video. 
+
+Transactions on Machine Learning Research . Fea-tured Certification. Kevin Black, Noah Brown, Danny Driess, Adnan Es-mail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, and 6 oth-ers. 2025. A vision-language-action flow model for general robot control. In Proceedings of Robotics: Science and Systems , LosAngeles, CA, USA. Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman, Alexander Herzog, Jasmine Hsu, and 1 others. 2023. Rt-1: Robotics transformer for real-world control at scale. Robotics: Science and Systems XIX .Qingwen Bu, Yanting Yang, Jisong Cai, Shenyuan Gao, Guanghui Ren, Maoqing Yao, Ping Luo, and Hongyang Li. 2025. Univla: Learning to act any-where with task-centric latent actions. arXiv preprint arXiv:2505.06111 .Tianle Cai, Yuhong Li, Zhengyang Geng, Hongwu Peng, Jason D. Lee, Deming Chen, and Tri Dao. 2024. Medusa: Simple LLM inference acceleration frame-work with multiple decoding heads. In Forty-first International Conference on Machine Learning .Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste Lespiau, Laurent Sifre, and John Jumper. 2023. Accelerating large language model decoding with speculative sampling. arXiv preprint arXiv:2302.01318 .Siyuan Dong, Devesh K Jha, Diego Romeres, Sangwoon Kim, Daniel Nikovski, and Alberto Rodriguez. 2021. Tactile-rl for insertion: Generalization to objects of unknown geometry. In 2021 IEEE International Con-ference on Robotics and Automation (ICRA) , pages 6437–6443. IEEE. Zibin Dong, Yicheng Liu, Shiduo Zhang, Baijun Ye, Yifu Yuan, Fei Ni, Jingjing Gong, Xipeng Qiu, Hang Zhao, Yinchuan Li, and Jianye Hao. 2026. Ac-tioncodec: What makes for good action tokenizers. 
+
+Preprint , arXiv:2602.15397. Danny Driess, Fei Xia, Mehdi S. M. Sajjadi, Corey Lynch, Aakanksha Chowdhery, Brian Ichter, Ayzaan Wahid, Jonathan Tompson, Quan Vuong, Tianhe Yu, Wenlong Huang, Yevgen Chebotar, Pierre Ser-manet, Daniel Duckworth, Sergey Levine, Vincent Vanhoucke, Karol Hausman, Marc Toussaint, Klaus Greff, and 3 others. 2023. PaLM-e: An embodied multimodal language model. In Proceedings of the 40th International Conference on Machine Learning ,volume 202 of Proceedings of Machine Learning Research , pages 8469–8488. PMLR. David Ha and Jürgen Schmidhuber. 2018. Recurrent world models facilitate policy evolution. In Ad-vances in Neural Information Processing Systems 31 ,pages 2451–2463. Curran Associates, Inc. https: //worldmodels.github.io .Danijar Hafner, Timothy Lillicrap, Ian Fischer, Ruben Villegas, David Ha, Honglak Lee, and James David-son. 2019. Learning latent dynamics for planning from pixels. In International Conference on Machine Learning , pages 2555–2565. 
+
+11 Nick Hansen, Hao Su, and Xiaolong Wang. 2024. Td-mpc2: Scalable, robust world models for continuous control. In International Conference on Learning Representations , volume 2024, pages 47376–47405. Zhenyu He, Zexuan Zhong, Tianle Cai, Jason Lee, and Di He. 2024. Rest: Retrieval-based speculative de-coding. In Proceedings of the 2024 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Tech-nologies (Volume 1: Long Papers) , pages 1582–1595. brian ichter, Anthony Brohan, Yevgen Chebotar, Chelsea Finn, Karol Hausman, Alexander Herzog, Daniel Ho, Julian Ibarz, Alex Irpan, Eric Jang, Ryan Julian, Dmitry Kalashnikov, Sergey Levine, Yao Lu, Carolina Parada, Kanishka Rao, Pierre Sermanet, Alexander T Toshev, Vincent Vanhoucke, and 26 others. 2023. Do as i can, not as i say: Grounding language in robotic affordances. In Proceedings of The 6th Conference on Robot Learning , volume 205 of Proceedings of Machine Learning Research , pages 287–318. PMLR. Siddharth Karamcheti, Suraj Nair, Annie S Chen, Thomas Kollar, Chelsea Finn, Dorsa Sadigh, and Percy Liang. 2023. Language-Driven Representation Learning for Robotics. In Proceedings of Robotics: Science and Systems , Daegu, Republic of Korea. Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov, Ethan P Foster, Pannag R Sanketi, Quan Vuong, Thomas Kollar, Benjamin Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey Levine, Percy Liang, and Chelsea Finn. 2025. Openvla: An open-source vision-language-action model. In Proceedings of The 8th Conference on Robot Learning , volume 270 of 
+
+Proceedings of Machine Learning Research , pages 2679–2713. PMLR. Sehoon Kim, Karttikeya Mangalam, Suhong Moon, Ji-tendra Malik, Michael W Mahoney, Amir Gholami, and Kurt Keutzer. 2023. Speculative decoding with big little decoder. Advances in Neural Information Processing Systems , 36:39236–39256. Diederik P. Kingma and Max Welling. 2014. Auto-encoding variational bayes. In Proceedings of the 2nd International Conference on Learning Represen-tations (ICLR) , Banff, Canada. Yaniv Leviathan, Matan Kalman, and Yossi Matias. 2023. Fast inference from transformers via spec-ulative decoding. In International Conference on Machine Learning , pages 19274–19286. PMLR. Xuanlin Li, Kyle Hsu, Jiayuan Gu, Karl Pertsch, Oier Mees, Homer Rich Walke, Chuyuan Fu, Ishikaa Lu-nawat, Isabel Sieh, Sean Kirmani, Sergey Levine, Jiajun Wu, Chelsea Finn, Hao Su, Quan Vuong, and Ted Xiao. 2024a. Evaluating real-world robot ma-nipulation policies in simulation. arXiv preprint arXiv:2405.05941 .Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. 2024b. Eagle: Speculative sampling requires rethinking feature uncertainty. In International Con-ference on Machine Learning , pages 28935–28948. PMLR. Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. 2023. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Process-ing Systems , 36:44776–44791. Arjun Majumdar, Karmesh Yadav, Sergio Arnaud, Jason Ma, Claire Chen, Sneha Silwal, Aryan Jain, Vincent-Pierre Berges, Tingfan Wu, Jay Vakil, and 1 others. 2023. Where are we in the search for an artificial visual cortex for embodied intelligence? Advances in Neural Information Processing Systems , 36:655–677. Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang, Xiaoxiang Shi, and 1 others. 2024. Specinfer: Accelerating large language model serving with tree-based speculative inference and verification. In Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3 , pages 932–949. Suraj Nair, Aravind Rajeswaran, Vikash Kumar, Chelsea Finn, and Abhinav Gupta. 2023. R3m: A universal visual representation for robot manipula-tion. In Conference on Robot Learning , pages 892– 909. PMLR. Octo Model Team, Dibya Ghosh, Homer Walke, Karl Pertsch, Kevin Black, Oier Mees, Sudeep Dasari, Joey Hejna, Charles Xu, Jianlan Luo, To-bias Kreiman, You Liang Tan, Pannag Sanketi, Quan Vuong, Ted Xiao, Dorsa Sadigh, Chelsea Finn, and Sergey Levine. 2024. Octo: An open-source general-ist robot policy. In Proceedings of Robotics: Science and Systems , Delft, Netherlands. Maxime Oquab, Timothée Darcet, Théo Moutakanni, Huy V. Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel HAZIZA, Francisco Massa, Alaaeldin El-Nouby, Mido Assran, Nicolas Ballas, Wojciech Galuba, Russell Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rabbat, Vasu Sharma, and 7 others. 2024. DINOv2: Learning robust visual features without supervision. Trans-actions on Machine Learning Research . Featured Certification. Abby O’Neill, Abdul Rehman, Abhiram Maddukuri, Abhishek Gupta, Abhishek Padalkar, Abraham Lee, Acorn Pooley, Agrim Gupta, Ajay Mandlekar, Ajinkya Jain, Albert Tung, Alex Bewley, Alex Her-zog, Alex Irpan, Alexander Khazatsky, Anant Rai, Anchit Gupta, Andrew Wang, Anikait Singh, and 260 others. 2024. Open x-embodiment: Robotic learn-ing datasets and rt-x models : Open x-embodiment collaboration0. In 2024 IEEE International Con-ference on Robotics and Automation (ICRA) , pages 6892–6903. 
+
+12 Tao Pang, HJ Terry Suh, Lujie Yang, and Russ Tedrake. 2023. Global planning for contact-rich manipulation via local smoothing of quasi-dynamic contact models. 
+
+IEEE Transactions on robotics , 39(6):4691–4711. Karl Pertsch, Kyle Stachowicz, Brian Ichter, Danny Driess, Suraj Nair, Quan Vuong, Oier Mees, Chelsea Finn, and Sergey Levine. 2025. FAST: Efficient Ac-tion Tokenization for Vision-Language-Action Mod-els. In Proceedings of Robotics: Science and Systems ,LosAngeles, CA, USA. Ilija Radosavovic, Tete Xiao, Stephen James, Pieter Abbeel, Jitendra Malik, and Trevor Darrell. 2023. Real-world robot learning with masked visual pre-training. In Conference on Robot Learning , pages 416–426. PMLR. Markku Suomalainen, Yiannis Karayiannidis, and Ville Kyrki. 2022. A survey of robot manipulation in contact. Robotics and Autonomous Systems ,156:104224. Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianxiao Yang, and 1 others. 2025. Wan: Open and advanced large-scale video generative models. 
+
+arXiv preprint arXiv:2503.20314 .Songsheng Wang, Rucheng Yu, Zhihang Yuan, Chao Yu, Feng Gao, Yu Wang, and Derek F Wong. 2025. Spec-vla: speculative decoding for vision-language-action models with relaxed acceptance. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 26916–26928. Philipp Wu, Alejandro Escontrela, Danijar Hafner, Pieter Abbeel, and Ken Goldberg. 2023. Day-dreamer: World models for physical robot learning. In Conference on robot learning , pages 2226–2240. PMLR. Yantai Yang, Yuhao Wang, Zichen Wen, Luo Zhongwei, Chang Zou, Zhipeng Zhang, Chuan Wen, and Lin-feng Zhang. 2026. Efficientvla: Training-free accel-eration and compression for vision-language-action models. Advances in Neural Information Processing Systems , 38:40891–40914. Xiaohua Zhai, Basil Mustafa, Alexander Kolesnikov, and Lucas Beyer. 2023. Sigmoid loss for lan-guage image pre-training. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) , pages 11975–11986. Jun Zhang, Jue Wang, Huan Li, Lidan Shou, Ke Chen, Gang Chen, and Sharad Mehrotra. 2024. Draft& verify: Lossless large language model acceleration via self-speculative decoding. In Proceedings of the 62nd Annual Meeting of the Association for Compu-tational Linguistics (Volume 1: Long Papers) , pages 11263–11282. Zihao Zheng, Zhihao Mao, Maoliang Li, Jiayu Chen, Xinhao Sun, Zhaobo Zhang, Donggang Cao, Hong Mei, and Xiang Chen. 2026a. Kerv: Kinematic-rectified speculative decoding for embodied vla mod-els. arXiv preprint arXiv:2603.01581 .Zihao Zheng, Zhihao Mao, Sicheng Tian, Maoliang Li, Jiayu Chen, Xinhao Sun, Zhaobo Zhang, Xuanzhe Liu, Donggang Cao, Hong Mei, and 1 others. 2026b. Heisd: Hybrid speculative decoding for embodied vision-language-action models with kinematic aware-ness. arXiv preprint arXiv:2603.17573 .Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin Wu, Paul Wohlhart, Stefan Welker, Ayzaan Wahid, and 1 others. 2023. Rt-2: Vision-language-action models transfer web knowl-edge to robotic control. In Conference on Robot Learning , pages 2165–2183. PMLR. 
+
+A Implementation details 
+
+We use the same fine-tuned OpenVLA target policy across all methods. The evaluation covers four LIBERO task suites: LIBERO-Spatial, LIBERO-Object, LIBERO-Goal, and LIBERO-Long. For evaluation, we run 50 rollouts per task, resulting in 500 evaluation episodes per suite. All methods are evaluated under the same task splits, rollout budget, and simulator settings. For NCF computation, we define a near-contact state using simulator-state geometry. For each failed episode, we compute the minimum distance from the gripper fingertip sites to either the task-relevant object or the target receptacle over all timesteps. The episode is counted as a near-contact failure if this minimum distance falls below a fixed threshold δ = 2 cm before termination. The same threshold is used across all methods, task suites, and relaxation settings. For WA-SpecDec, the auxiliary next-frame la-tent prediction loss is weighted by λ = 0 .1. The world-aware signal is extracted from the frozen Wan 2.2 VAE encoder, which we use only as a latent compressor rather than invoking the Wan 2.2 video generation pipeline. Given the cur-rent RGB observation It, the frozen Wan 2.2 VAE encoder produces a spatial latent map Zt ∈
+
+RB×Hz ×Wz ×Cvae , which serves as the VAE feature space for the World-Aware Bias module. The latent map is tokenized, linearly projected, and processed by a four-layer spatial VideoEncoder before being spatially aligned to the VLA visual patch grid. The auxiliary VideoHead is used only during training and is discarded at inference, so inference does not run next-frame prediction, VAE decoding, or video generation. 13 Algorithm 1 WA-SpecDec training and inference 
+
+Input: Training set D = {(x, I t, I t+1 , a ⋆ 
+
+> 1: H
+
+)}, where x is the instruction, It the current image, It+1 the training-only next image, a⋆ 
+
+> 1: H
+
+the demonstration action tokens, and H the number of action tokens decoded for one control query. Frozen VAE encoder Evae , visual embeddings Vt, text embeddings Tx, and frozen base VLA parameters θ. Trainable modules: token projector ϕtok , spatial VideoEncoder Fω over VAE latent tokens, bias projector fbias , training-only latent prediction head gη , and LoRA adapter ∆θ. Auxiliary weight λ. Draft model qϕ, proposal operator Draft ϕ, block length γ, distance d,tolerance ρ, candidate action token a, and detokenizer Detok .
+
+Output: Trained target pwa  
+
+> θ
+
+, trained draft qϕ, and continuous control sequence u1: H for a current query (x, I t).
+
+Train the world-aware target 
+
+1: for each minibatch of samples (x, I t, I t+1 , a ⋆ 
+
+> 1: H
+
+) from D do 
+
+2: Zt ← Evae (It) ▷ Eq. 3 3: Ut ← Fω (ϕtok (Zt)) ▷ Eq. 4 4: wt ← fbias (SpatialAlign( Ut)) ▷ Eq. 5 5: V wa  
+
+> t
+
+← Vt + wt and P wa  
+
+> t
+
+← [Tx, V wa  
+
+> t
+
+] ▷ Eqs. 8–9 6: hwa  
+
+> t
+
+← Prefill θ+∆ θ (P wa  
+
+> t
+
+) ▷ Eq. 10 7: Compute Laction from pwa  
+
+> θ
+
+and a⋆ 
+
+> 1: H
+
+. ▷ Eq. 11 8: Compute Lvideo from gη (Ut) and Evae (It+1 ). ▷ Eq. 6 9: L ← L action + λLvideo ▷ Eq. 7 10: Update ϕtok , Fω , fbias , gη , and ∆θ by minimizing L, keeping the frozen modules fixed. 11: end for 
+
+12: Freeze pwa  
+
+> θ
+
+and train qϕ by minimizing Ldraft . ▷ Eqs. 12, 15 
+
+Run one inference control query 
+
+13: Discard gη and do not use It+1 or Lvideo at inference. 14: Compute Zt, Ut, wt, V wa  
+
+> t
+
+, P wa  
+
+> t
+
+, and hwa  
+
+> t
+
+from the current (x, I t). ▷ Eqs. 3, 4, 5, 8–10 15: A ← () and i ← 1
+
+16: while i ≤ H do 
+
+17: r ← min( γ, H − i + 1) and J ← { i, . . . , i + r − 1}
+
+18: ˆai:i+r−1 ← Draft ϕ(hwa  
+
+> t
+
+, A, r )
+
+19: In one target verification pass, compute awa  
+
+> j
+
+← arg max a pwa  
+
+> θ
+
+(a | hwa  
+
+> t
+
+, a <j ) for all j ∈ J. ▷ Eq. 13 20: Use prefix a<j = ( A, ˆai:j−1) for each verified position j.21: m ← 0
+
+22: while m < r and d(ˆ ai+m, a wa 
+
+> i+m
+
+) ≤ ρ do ▷ Eq. 14 23: Append ˆai+m to A and set m ← m + 1 
+
+24: end while 
+
+25: if m < r then 
+
+26: Append awa  
+
+> i+m
+
+to A ▷ replace the first rejected draft token 27: i ← i + m + 1 
+
+28: else 
+
+29: i ← i + m
+
+30: end if 
+
+31: end while 
+
+32: u1: H ← Detok( A)
+
+33: return u1: H
+
+For speculative tree decoding, we set the maxi-mum number of tree nodes to 50, the tree depth to 4, and use the top-8 tokens to construct the draft tree. The same draft and verifier settings are used for Spec-VLA and WA-SpecDec under each re-laxed acceptance rule. For the matched-speedup comparison in Table 1, we set ρ = 10 for the ρ-based verifier, while KERV and HeiSD use their default verifier settings. For the tolerance-sweep experiment, we evaluate ρ ∈ { 5, 10 , 15 , 20 }.Training uses a batch size of 32 and 1,000 warm-up steps. We use the OpenVLA-7B target pol-icy. Wall-clock speedup is measured relative to au-toregressive target decoding on the same hardware setup. The total computational budget for train-ing, distillation, and evaluation is approximately 192 GPU hours, corresponding to 48 wall-clock hours on four NVIDIA RTX A6000 GPUs. The reported speedup includes all inference-time costs, including draft proposal, target verification, WAB computation, and key–value cache updates. 
+
+B Pseudocode 
+
+Algorithm 1 summarizes the training and inference procedure of WA-SpecDec. The input block col-lects the notation used throughout the algorithm, and the output block specifies the trained models and the continuous control sequence returned for a current query. At inference, the training-only aux-iliary branch is removed, and WA-SpecDec uses only the current instruction–observation pair while applying the original relaxed acceptance rule with-out modification. 14 Environment & Task  
+
+> open the middle drawer of the cabinet
+> WA-SpecDec accepted draft chunk:
+> [143, 121, 124, 132, 132, 134, 256]
+> WA-SpecDec verification model output:
+> [141, 116, 124, 134, 128, 136, 256]
+> Spec-VLA accepted draft chunk:
+> [135, 112, 117, 129, 124, 141, 256]
+> Spec-VLA verification model output:
+> [138, 119, 122, 131, 119, 135, 256]
+> Success near contact Failure near contact
+
+Figure 4: Case study of accepted action chunks under relaxed verification with ρ = 10 for the task “open the middle drawer of the cabinet.” Green denotes the WA-SpecDec accepted chunk and successful near-contact execution, while red denotes the Spec-VLA accepted chunk and near-contact failure. 
+
+C Case Study 
+
+Figure 4 shows a representative near-contact case for the task “open the middle drawer of the cabi-net.” Both Spec-VLA and WA-SpecDec produce an accepted action chunk under relaxed verifica-tion with ρ = 10 . Although both chunks satisfy the same token-distance acceptance criterion, their execution outcomes differ substantially. The Spec-VLA chunk is accepted in token space, but the resulting trajectory fails near the drawer-contact region. In contrast, WA-SpecDec completes the drawer-opening motion successfully. This example illustrates a failure mode of token-distance-based relaxed acceptance in contact-sensitive states. A draft chunk that remains close to the verifier output in token space can still lead to task-ineffective motion when execution depends on fine-grained geometry near an object surface or handle. WA-SpecDec mitigates this issue by injecting world-aware information into the shared prefill hidden states, so that both draft proposal and target verification are conditioned on additional physical scene structure. In this case, the accepted WA-SpecDec chunk is better aligned with the near-contact execution requirement, improving reliabil-ity without changing the relaxed acceptance rule itself. 15
