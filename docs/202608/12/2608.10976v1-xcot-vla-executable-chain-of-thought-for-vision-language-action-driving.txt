@@ -1,0 +1,744 @@
+Title: XCoT-VLA: Executable Chain-of-Thought for Vision-Language-Action Driving
+
+URL Source: https://arxiv.org/pdf/2608.10976v1
+
+Published Time: Wed, 12 Aug 2026 01:12:46 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# XCoT-VLA: Executable Chain-of-Thought for Vision-Language-Action Driving 
+
+Foundation Model Team, XPeng Inc. 
+
+Abstract 
+
+Vision-Language-Action (VLA) models can connect scene understanding, semantic reasoning, and trajectory generation for autonomous driving. However, verbose natural-language Chain-of-Thought (CoT) is poorly suited to real-time control because it is open-ended, costly to decode, and difficult to optimize as an action-facing representation. We propose XCoT-VLA , which replaces descriptive ratio-nales with compact executable CoT tokens learned from automatically constructed Reason–Action supervision. Logged trajectories provide action evidence, while scene context supplies causal semantics. The predicted XCoT sequence remains in context and conditions fixed trajectory queries through shared multimodal self-attention. Deterministic token-function routing applies the Reason FFN to XCoT tokens and the Control FFN to trajectory queries for flow-matching trajectory gen-eration. We further introduce XCoT Policy Optimization (XCPO) as an optional refinement extension in the same executable token space. XCoT-VLA reduces longitudinal ADE from 1.645 to 1.323 on a general-distribution set and lateral FDE from 1.616 to 0.648 in lane-change scenarios. By representing driving-oriented reasoning with only 2–6 executable XCoT tokens, our method substantially re-duces autoregressive reasoning overhead and remains within the real-time planning budget. These results demonstrate that driving-oriented reasoning can be compact, executable, and directly connected to trajectory generation. 
+
+Keywords: Autonomous Driving, Vision-Language-Action Models, Chain-of-Thought, Reinforce-ment Learning XCoT-VLA 
+
+Driving Context Reasoning Interface      
+
+> Camera observations
+> Prompt / task
+> Follow the route
+> Ego status
+> Vel. / Acc. / history
+> Route command
+> Move forward / turn
+> vs.
+> 2–6 vs. 40–80 tokens Action-facing reasoning Better planning, lower latency
+> Trajectory Gen. & XCPO
+> Verbose CoT
+> Natural-language reasoning “The light ahead is red, so I should slow down and stop …” “The route requires a left turn …” Long Open-ended Indirect
+> Executable XCoT
+> Compact action-token reasoning
+> 2–6 tokens
+> Decision-critical Compact Executable
+> DECELERATE RED_LIGHT_HOLD EOS NAV_LEFT_LANE_CHANGE
+> XCoT Tokens Q_traj
+> VLM
+> Reason FFN Control FFN
+> Trajectory head
+> 24 queries + FM decoder
+> Rollout Environment Reward
+> XCPO
+> reasoning side policy refinement
+
+21 3
+
+> Long-form decoding
+
+Figure 1: Overview of XCoT-VLA. Given multimodal driving context, XCoT-VLA replaces verbose natural-language CoT with 2–6 compact executable action tokens that capture decision-critical driving intents and condition flow-matching trajectory generation. The same XCoT space also supports XCPO for reward-driven reasoning-policy refinement with a frozen execution stack. Technical Report. arXiv:2608.10976v1 [cs.AI] 11 Aug 2026 FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+1 Introduction 
+
+Vision-language models (VLMs) have made substantial progress in visual understanding, instruction following, and multimodal reasoning [1–3]. Chain-of-Thought (CoT) further enables large language and vision-language models to perform explicit intermediate reasoning before producing final predic-tions [4, 5]. Building on these advances, Vision-Language-Action (VLA) models extend semantic understanding and reasoning to physical control. They have been explored in both robotics [6–8] and autonomous driving [9–12], where high-level semantics must ultimately be translated into executable actions. In this work, we focus on autonomous driving, where reasoning and trajectory generation must oper-ate continuously under strict real-time constraints. Recent driving VLM/VLA methods increasingly introduce language-based reasoning or CoT-style intermediate representations to improve semantic understanding and decision making [12–15]. However, verbose natural-language CoT is not necessar-ily an effective interface for control. Free-form rationales may contain information irrelevant to the immediate decision, their linguistic structure is only implicitly connected to executable motion, and autoregressive token-by-token decoding introduces additional latency [16]. The key question is therefore not whether driving VLA models should reason, but what form of reasoning should be exposed to the trajectory generator . We argue that such reasoning should be 
+
+decision-critical , retaining only semantics that affect driving behavior; compact , requiring limited autoregressive decoding; and executable , directly conditioning continuous trajectory generation. To this end, we propose XCoT-VLA , an autonomous-driving VLA framework based on Executable Chain-of-Thought (XCoT), as illustrated in Figure 1. Instead of generating unrestricted natural-language rationales, XCoT represents reasoning as a short sequence of executable semantic-action tokens. Tokens such as LEFT_TURN_PREPARE , DECELERATE , and RED_LIGHT_HOLD directly encode decision-critical driving intents and their control-relevant semantics. In our driving setting, only 
+
+2–6 XCoT tokens are typically required to represent the reasoning needed for trajectory generation, substantially reducing autoregressive reasoning overhead while satisfying the real-time planning budget. XCoT-VLA learns this representation from structured Reason–Action supervision. Logged trajecto-ries provide action evidence, while scene context provides causal semantics such as navigation intent, traffic rules, road structure, and surrounding interactions. During inference, the predicted XCoT sequence conditions fixed trajectory queries through shared multimodal self-attention. Deterministic token-function routing processes XCoT tokens with the Reason FFN and trajectory queries with the Control FFN for flow-matching trajectory generation [17]. The same executable token space can further support XCoT Policy Optimization (XCPO), which refines the reasoning policy using trajectory-level rewards while keeping the action-side executor fixed. Our contributions are summarized as follows: • Executable CoT for real-time driving VLA. We introduce XCoT, a compact action-facing reasoning representation that replaces verbose free-form CoT with executable semantic-action tokens, reducing autoregressive reasoning overhead under real-time driving con-straints. • Decoupled reasoning–action computation. We construct XCoT supervision from logged action evidence and causal scene semantics, and use shared multimodal attention with separate Reason and Control FFN branches to connect reasoning with continuous trajectory generation. • Deployment-oriented evaluation. Experiments on general-distribution planning, lane-changing scenarios, inference latency, training stability, and qualitative trajectory analysis show that XCoT improves decision-centric planning while remaining compatible with real-time inference. Although evaluated on autonomous driving, the underlying principle of XCoT can extend to other latency-sensitive VLA systems: reasoning exposed to the action generator should be decision-critical, compact, and directly executable rather than verbose free-form language. 2FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+2 Related Work 
+
+2.1 Vision-Language-Action Models 
+
+A key question in Vision-Language-Action (VLA) models is how high-level multimodal representa-tions are translated into actions. In robotics, RT-2 and OpenVLA formulate actions as discrete tokens that can be predicted within a language-model backbone [6, 7], while π0 adopts flow-based contin-uous action generation for general robot control [8]. Related VLM/VLA systems in autonomous driving connect visual observations and language representations with driving decisions or continuous trajectory generation [11, 18, 19]. XCoT-VLA differs in the role of discrete tokens. XCoT tokens are not final low-level actions; instead, they serve as an intermediate semantic-action interface between multimodal reasoning and continuous control. They explicitly encode decision-critical intent while directly conditioning downstream trajectory generation. 
+
+2.2 Reasoning Interfaces for Action Generation 
+
+Language-based intermediate reasoning has been increasingly explored for decision making. Driv-eLM organizes driving knowledge through structured question-answer reasoning, LingoQA focuses on language-based driving understanding, and Reason2Drive introduces chain-based reasoning for driving decisions [13, 14, 20]. Recent methods further integrate reasoning with planning or policy op-timization [12, 15]. Most of these approaches represent intermediate reasoning using natural language or structured textual forms. XCoT instead focuses on the reasoning-to-action interface: it compresses control-relevant semantics into a short sequence of executable semantic-action tokens. This represen-tation directly conditions action generation while avoiding the unnecessary autoregressive overhead of verbose free-form reasoning. 
+
+2.3 Structured Action Spaces and Policy Optimization 
+
+Structured action representations provide an alternative to directly exploring low-level continuous action spaces. Options introduce temporally abstract decisions [21], while latent-action methods learn compact intermediate representations for reinforcement learning and control [22, 23]. Recent work further learns latent action spaces from language or video for downstream decision making [24, 25]. Reasoning models have also begun to optimize intermediate decision processes using reinforcement learning [26, 27]. XCPO follows this structured-optimization perspective but operates in an explicit and interpretable XCoT space rather than an unconstrained language or latent space. It evaluates sampled XCoT sequences through their induced trajectories and optimizes the reasoning policy while keeping the execution stack fixed. 
+
+3 Method 
+
+We model autonomous driving as a Partially Observable Markov Decision Process (POMDP) [28, 29]. At each decision step, the ego vehicle receives a multimodal observation ot containing the current visual context, the task prompt, ego status (including velocity, acceleration, and historical trajectory), and the high-level navigation command. The reasoning pathway first autoregressively predicts an XCoT action-token sequence zt. Conditioned on both ot and zt, the flow-matching trajectory head predicts a future motion sequence 
+
+ut = {(alon ,h , ∆ψh)}Hh=1 ∈ RH×2,
+
+where alon ,h and ∆ψh denote longitudinal acceleration and yaw change at future step h, respec-tively. The trajectory head then temporally integrates this sequence, using the current ego state as initialization, to obtain the ego-centric coordinate trajectory 
+
+τt = Itraj (ut; st) = {(xt,h , y t,h )}Hh=1 ∈ RH×2.
+
+In our implementation, H = 24 . Here, XCoT policy rollout refers only to autoregressive token sampling during XCPO; motion decoding and temporal integration are deterministic model operations. The goal of XCoT-VLA is to expose a reasoning signal that is useful for trajectory generation rather than to produce a verbose natural-language explanation. 3FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+The method is organized around one central supervision chain: logged trajectory + scene context → Reason–Action supervision 
+
+→ executable XCoT action-token sequence → trajectory decoding .
+
+In other words, XCoT tokens are not introduced as arbitrary labels. They are constructed offline from logged driving through a data-construction pipeline that links observed motion with its causal scene semantics. This section first presents the XCoT training-data construction pipeline and the resulting executable token space, and then describes model training and optional policy refinement. 
+
+Notation. At decision step t, ot and st denote the multimodal observation and current ego state, respectively. The executable XCoT sequence is zt = ( zt, 1, . . . , z t,M t ), with zt,m ∈ V XCoT . We use h to index future motion steps and α for flow-matching time. Offline XCoT supervision labels carry the superscript ∗; hats denote Stage-I model predictions when they are contrasted with their supervision targets. 
+
+3.1 XCoT Training Data Construction 
+
+We formulate label construction as an offline data-construction pipeline that maps each logged sample 
+
+(ot, τ t) to an executable XCoT sequence z∗ 
+
+> t
+
+. The pipeline consists of two stages: (i) Reason–Action pair construction, which extracts the observed action and grounds it in scene semantics; and (ii) semantic compression, which tokenizes the resulting Reason–Action pair into a compact canonical XCoT sequence. The complete pipeline is: 
+
+(ot, τ t) fact 
+
+−−→ atfground 
+
+−−−−→ (r∗ 
+
+> t
+
+, at) gXCoT 
+
+−−−−→ z∗ 
+
+> t
+
+. (1) The logged future trajectory is used only to construct training labels and is unavailable at inference time. The overall construction process is illustrated in Figure 2, including action-evidence extraction, semantic grounding, and XCoT semantic compression. XCoT Training Data Construction        
+
+> 1Logged Scene Retrieval 2Action Evidence Extraction 3Semantic Grounding 4Semantic Compression
+> Current observation
+> 3s history + 6s future
+> Logged trajectory traffic and map context Infer lane change and deceleration
+> Traffic rule red light ahead Determine why the action occurs Generate XCoT supervision labels/policy
+
+## ���
+
+> Lane condition left-turn lane available
+> Longitudinal Profile
+> Velocity Time
+> Lateral Maneuver
+> Offset (Δy) Time
+> +δ_LC (Threshold) Trigger Lane Change
+> KEEP_SPEED → STOP LANE_KEEPING → LEFT_LANE_CHANGE
+> Safety pedestrian / hazard
+> Navigation route requires left turn
+> Selected Reason-Action Pair
+> Reason
+> • Route requires left turn • Red light ahead
+> Action evidence
+> • Move to the left-turn lane • Decelerate to hold LEFT_TURN_PREPARE DECELERATE RED_LIGHT_HOLD EOS EOS
+> Compression
+> 1234
+
+Figure 2: Offline XCoT training-data construction pipeline. The logged future trajectory provides longitudinal and lateral action evidence, while scene context supplies navigation-, rule-, interaction-, and safety-related causes. The selected Reason–Action pair is then mapped to a canonical XCoT sequence. 
+
+3.1.1 Reason–Action Pair Construction 
+
+This stage recovers both the observed driving behavior and the causal scene semantics that justify it. 4FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+Step 1: Extract action evidence from the logged trajectory. Given a logged trajectory segment 
+
+τt, we extract longitudinal and lateral behavior over the -3 s–6 s horizon: 
+
+at = fact (τt) =  alon  
+
+> t
+
+, alat 
+
+> t
+
+ . (2) The resulting at is an offline evidence representation derived from velocity, acceleration, lane-relative displacement, and trajectory geometry. It identifies the observed behavior—such as speed maintenance, deceleration-to-hold, lane keeping, or a leftward maneuver—but does not by itself determine the driving intent. 
+
+Step 2: Ground the observed action in scene semantics. Because the same geometric motion can have different causes, we infer candidate reasons from the scene context conditioned on at:
+
+Rt = freason (ot, at) = {r(k) 
+
+> t
+
+}Kk=1 . (3) The candidates cover navigation intent, road structure, traffic rules, surrounding-agent interactions, and safety constraints. Because all candidates share the same trajectory-derived action evidence at,semantic grounding selects only the most consistent reason: 
+
+r∗ 
+
+> t
+
+= fground (ot, at) = arg max  
+
+> r(k)
+> t∈R t
+
+Scons 
+
+
+
+r(k) 
+
+> t
+
+| ot, at
+
+
+
+. (4) Thus, fground comprises candidate generation by freason followed by consensus selection. In practice, a small set of vision-language experts is queried with a fixed prompt over ot and at. Their free-form explanations are not used directly as labels. Instead, rule templates, keyword cues, and embedding similarity map each explanation to a provisional taxonomy signature used only to align the experts. The consensus score Scons measures agreement among these signatures and selects the causal reason. Final XCoT token composition and ordering are performed only by gXCoT in the subsequent semantic-compression stage. Thus, language serves only as an offline source of causal supervision. 
+
+3.1.2 XCoT Tokenization via Semantic Compression 
+
+Given the Reason–Action pair constructed in the preceding stage, we tokenize it through semantic compression: 
+
+z∗ 
+
+> t
+
+= gXCoT (r∗ 
+
+> t
+
+, at) = ( z∗
+
+> t, 1
+
+, . . . , z ∗ 
+
+> t,M t
+
+), z∗ 
+
+> t,m
+
+∈ V XCoT . (5) Here gXCoT is a taxonomy-based semantic compression function over a fixed, interpretable vocabulary. Semantic compression maps free-form causal semantics and trajectory-derived action evidence into a short canonical sequence while preserving the primary maneuver, longitudinal adjustment, and decision-critical navigation, rule, interaction, or safety constraints. The sequence length satisfies 
+
+Mt ≤ Mmax , with Mmax = 6 in our implementation; the evaluated labels contain 2–6 action-facing XCoT tokens, followed by a separately appended EOS. The pipeline does not learn or invent new tokens; it assigns a canonical executable sequence to each logged scene. An XCoT token is an executable semantic-action token. The unified vocabulary covers longitudinal-control intents such as KEEP_SPEED and DECELERATE ; lateral or navigation-conditioned maneuvers such as LANE_KEEPING , NAV_LEFT_LANE_CHANGE , RIGHT_TURN_PREPARE , and RIGHT_EXIT_PREPARE ;and rule-, interaction-, environment-, or safety-conditioned intents such as RED_LIGHT_HOLD ,
+
+> LEFT_OVERTAKE
+
+, VISIBILITY_CAUTION , and HAZARD_YIELD . All labels belong to the same prediction space and can be composed to express a primary maneuver together with longitudinal adjustments and context-specific modifiers. Representative XCoT tokens and their executable semantics are summarized in Table 1. A driving decision can require multiple XCoT tokens. For example, a pedestrian-aware right turn may be represented by RIGHT_TURN_PREPARE , DECELERATE , and HAZARD_YIELD , while an overtaking maneuver in congestion may combine NAV_LEFT_LANE_CHANGE , LEFT_OVERTAKE , and DECELERATE .The sequence should be interpreted as a canonical composition of executable intents rather than as a dense frame-level temporal trace. The label-construction pipeline places the primary lateral or navigation maneuver first, followed by optional interaction or longitudinal-control intents and then environment-, rule-, or safety-conditioned modifiers. This deterministic schema avoids multiple equivalent permutations of the same decision. Sequences are terminated with EOS and padded only for batching. 5FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+Table 1: Representative XCoT action tokens. The vocabulary includes symmetric maneuver tokens (e.g., left/right lane changes); only representative examples are listed. All tokens remain executable semantic-action representations in the same prediction space. 
+
+XCoT token Driving semantics Executable meaning 
+
+KEEP_SPEED Longitudinal control Maintain the current speed. 
+
+LANE_KEEPING Lateral control Maintain the current lane. 
+
+NAV_LEFT_LANE_CHANGE Navigation lane change Change left according to the navigation intent. 
+
+EFFICIENCY_LEFT_LANE_CHANGE Efficiency lane change Change left to improve driving efficiency. 
+
+RED_LIGHT_HOLD Traffic-rule action Stop or remain stopped for a red light. 
+
+LEFT_TURN_PREPARE Navigation preparation Prepare for a navigation-required left turn. 
+
+LEFT_TURN Navigation action Execute the left-turn maneuver. 
+
+HAZARD_YIELD Safety action Yield to a safety-critical road user or obstacle. Text Prompt  
+
+> Stage II: Decoder-Frozen Policy Optimization (XCPO)
+> VLM Model
+> Supervision: Reason–Action supervision provides provides executable XCoT labels z*. Loss ：Token CE + flow-matching loss
+> Stage I: Reason–Action Supervised SFT
+
+12     
+
+> XCoT EOS
+> ...
+> Qtraj
+> Trajectories
+> XCoT
+> A(τ)
+> ...
+> A2(τ 2)An(τ n)
+> ...
+> Ego status vel., acc., history traj.
+> Prompt task requirements
+> Drive command route / nav intent
+> Tokenizer
+> Control FFN Reason FFN Self-Attention
+> ...
+> N × Transformer blocks
+> ... ... Flow matching Trajectory Decoder
+
+XCoT policy update only 
+
+> Encoder
+
+VLM Model  
+
+> ... ...
+> traj query 1 Control FFN Reason FFN Self-Attention XCoT sequence 1 XCoT XCoT sequence 2 XCoT XCoT sequence n XCoT Qtraj
+> Qtraj
+> Qtraj
+> traj query 2 traj query n traj query 1
+> ...
+> V
+> ：relative advantage of trajectory
+
+Group relative advantage evaluation           
+
+> Trajectory
+> V... VVTTT...
+> XCoT EOS Qtraj XCoT
+> XCoT Sequence
+> TTTTTFlow matching Trajectory Decoder {z 1, z 2, ..., z M, EOS}
+> τ1
+> τ2
+> τn
+> ...
+> u1
+> u2
+> un
+> ...
+> τ1
+> τ2
+> τn
+> ...
+> Motion sequences
+> ...
+> Trajectory sequence
+> A1(τ 1)u1
+> u2
+> un
+> ...
+> u1
+> u2
+> un
+> ... ...
+> VLM Model V
+
+Figure 3: Overview of XCoT-VLA training and deterministic token-function routing. All valid non-trajectory tokens are processed by the Reason FFN, while only the 24 trajectory queries are processed by the Control FFN. Both branches interact through shared multimodal self-attention. In Stage II, the visual front-end, self-attention, Control FFN, and trajectory head are parameter-frozen, whereas the Reason FFN and XCoT prediction head remain trainable. Consequently, the execution stack remains fixed, but the non-trajectory representations conditioning the trajectory queries may change across policy iterations. 
+
+3.2 Decoupled Reasoning-Control Architecture 
+
+The overall XCoT-VLA architecture, deterministic token-function routing, and two-stage training procedure are illustrated in Figure 3. XCoT-VLA uses a VLA backbone with a flow-matching 6FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+trajectory decoder inspired by recent action-generation models [8]. The model contains a reasoning pathway that predicts XCoT action tokens and a control pathway that converts observation-conditioned trajectory queries into continuous future motion. We denote the fixed set of 24 learnable trajectory queries by Qtraj ∈ R24 ×d, with one query assigned to each future motion step. All token positions first interact through shared multimodal self-attention. After attention, deterministic token-function routing assigns every valid non-trajectory token—including visual, text, task-prompt, ego-status, drive-command, and autoregressive XCoT tokens—to the Reason FFN. Only the 24 trajectory-query positions are assigned to the Control FFN. The architecture therefore contains exactly two FFN branches: the Reason FFN and the Control FFN. Let Hl−1 ∈ RN ×d be the token-feature matrix at the input of layer l. The layer first aggregates multimodal context through shared self-attention: 
+
+˜Hl = Hl−1 + SelfAttn  Norm( Hl−1) . (6) We explicitly pass token-function masks to the two FFN branches. Let mReason  
+
+> t,j
+
+and mControl  
+
+> j
+
+denote the masks for positions processed by the Reason FFN and Control FFN, respectively. Accordingly, 
+
+mReason  
+
+> t,j
+
+covers valid non-trajectory positions, while mControl  
+
+> j
+
+covers the 24 trajectory-query positions. The routed update is 
+
+hlj = ˜hlj + mReason  
+
+> t,j
+
+FFN Reason 
+
+
+
+Norm( ˜hlj )
+
+
+
++ mControl  
+
+> j
+
+FFN Control 
+
+
+
+Norm( ˜hlj )
+
+
+
+.
+
+(7) For each valid token position, the Reason and Control masks form a disjoint partition: 
+
+mReason  
+
+> t,j
+
++ mControl  
+
+> j
+
+= 1 , mReason  
+
+> t,j
+
+mControl  
+
+> j
+
+= 0 . (8) Padding positions are excluded from both masks. The Control mask is fixed over the 24 learnable trajectory-query positions, whereas the Reason mask covers all remaining valid positions and is sample-dependent because input and XCoT sequence lengths can vary. Each trajectory query represents one future motion step and is decoded into a longitudinal-acceleration and yaw-change pair, yielding ut ∈ R24 ×2. The trajectory head then temporally integrates the predicted sequence to obtain τt = Itraj (ut; st). Unlike standard MoE routing, this routing is deterministic and uses no learned router. The Reason branch processes the complete non-trajectory context and autoregressively predicts 
+
+ˆzt = (ˆ zt, 1, . . . , ˆzt, ˆMt ) until EOS or Mmax . Because self-attention precedes FFN routing, trajectory queries can attend to observation and XCoT representations even though their FFN updates are produced only by FFN Control . The Control branch generates ˆut with the flow-matching trajectory head and temporally integrates it into the coordinate trajectory ˆτt.
+
+3.3 Stage I: Supervised XCoT and Flow-Matching Training 
+
+Stage I trains two coupled capabilities: predicting executable XCoT tokens from observations, and generating trajectories conditioned on these tokens. Let θreason denote the parameters of the Reason FFN and XCoT prediction head. The reasoning pathway is supervised by the XCoT sequence produced by the offline data-construction pipeline: 
+
+LXCoT = −E(ot,z ∗ 
+
+> t)∼D
+> Mt+1
+
+X
+
+> m=1
+
+log πθreason (z∗ 
+
+> t,m
+
+| ot, z ∗
+
+> t,<m
+
+), z∗ 
+
+> t,M t+1
+
+= EOS . (9) Padding tokens are masked out of the loss. During Stage-I training, the trajectory decoder is conditioned on teacher-forced XCoT labels z∗ 
+
+> t
+
+, while the reasoning pathway is trained to predict the same sequence autoregressively. At inference time, the decoder is conditioned on the predicted sequence ˆzt.For trajectory generation, we use Conditional Flow Matching (CFM) [17, 30]. Let 
+
+ut = {(alon ,h , ∆ψh)}Hh=1 
+
+be the expert future motion sequence and let x1 = vec( ut) ∈ R48 for H = 24 . Let x0 ∼ N (0 , I 48 )
+
+be Gaussian noise. For flow time α ∈ [0 , 1] , define the interpolation xα = (1 − α)x0 + αx 1. Given 7FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+conditioning context c formed from XCoT tokens and trajectory queries, the velocity network vθ is trained to predict the target velocity: 
+
+LFM = Eα,x 0,x 1,c ∥vθ (xα; α, c ) − (x1 − x0)∥22 . (10) The combined Stage-I objective is: 
+
+LSFT = λXCoT LXCoT + λFM LFM . (11) Here, λXCoT and λFM weight the XCoT prediction and flow-matching objectives, respectively. Unless otherwise stated, λXCoT = 1 , and λFM is tuned on a validation split. At inference time, the flow-matching module integrates the learned ODE over flow time α ∈ [0 , 1] to obtain the predicted future motion sequence 
+
+ˆut = {(ˆ alon ,h , ∆ ˆψh)}Hh=1 .
+
+The trajectory head subsequently performs temporal integration over the physical prediction horizon to obtain 
+
+ˆτt = Itraj (ˆ ut; st).
+
+Flow-time ODE integration over α and temporal integration over the future motion steps h are distinct operations, and neither operation is referred to as an XCoT policy rollout. 
+
+3.4 Stage II: XCoT Policy Optimization 
+
+Stage II optionally refines the XCoT reasoning policy using trajectory-level rewards while keeping the execution stack fixed. During XCPO, the visual encoder, shared multimodal self-attention, Control FFN, and flow-matching trajectory head are frozen as θfrozen exec . The deterministic temporal-integration operator has no trainable parameters and is applied after motion generation. Only the Reason FFN and XCoT prediction head, parameterized by θreason , are updated. Given an observation o, the old policy samples a group of G XCoT sequences, each of which is decoded by the frozen executor: 
+
+zi ∼ πθold (· | o), τi = F o, z i; θold , θ frozen exec 
+
+ , i = 1 , . . . , G, (12) where F includes reasoning-conditioned representation computation and flow-matching motion gen-eration under the frozen learned modules, followed by parameter-free temporal trajectory integration. Each trajectory receives 
+
+Ri = X
+
+> k
+
+wkrk(τi), Ai = Ri − μR
+
+σR + ϵ , (13) where μR and σR are the mean and standard deviation within the rollout group. The collected trajectories and rewards are treated as fixed samples during optimization; gradients are propagated only through the autoregressive XCoT log-probabilities. Following group-relative policy optimization [26], we use a clipped sequence-level objective. With 
+
+ρi = exp 
+
+"Mi+1 X
+
+> m=1
+
+log πθreason (zi,m | o, z i,<m )
+
+πθold (zi,m | o, z i,<m )
+
+#
+
+, zi,M i+1 = EOS , (14) the XCPO loss is 
+
+LXCPO = − Eo
+
+"
+
+1
+
+G
+
+> G
+
+X
+
+> i=1
+
+min( ρiAi, clip( ρi, 1 − ε, 1 + ε)Ai)
+
+#
+
++ β Eo[DKL (πθreason (· | o) ∥ πref (· | o))] ,
+
+(15) where πref is the Stage-I checkpoint. XCPO samples only in the discrete XCoT space. Although the parameters of the execution stack remain frozen, updating the Reason FFN can change the representations that condition trajectory queries in subsequent rollout collection. 
+
+Evaluation scope. XCPO is an optional policy-refinement extension and is not quantitatively evaluated in the current version. Its intended benefits should be assessed mainly with closed-loop metrics, including route completion, collisions, rule violations, interventions, and comfort, rather than ADE/FDE alone. 8FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+4 Experiments 
+
+4.1 Experimental Setup Training Data. Our model is trained on a large-scale hybrid dataset containing approximately 3.6 million unique samples , as summarized in Table 2. The training corpus consists of three components: • General SFT (3.1M samples): The main training corpus is collected from large-scale logged driving data and automatically labeled using our Reason–Action construction pipeline. • Human-Annotated (200k samples): For complex interactive scenarios where automatic annotation can be ambiguous, human annotators provide high-quality Reason–Action super-vision. • Targeted Lane-Change (320k samples): We additionally mine lane-change scenarios to strengthen lateral planning. Their XCoT labels are generated using rule-based heuristics to ensure precise geometric alignment between semantic actions and logged trajectories. 
+
+Table 2: Composition of the training data.           
+
+> Training Component Supervision Source Samples
+> General SFT Automatic Reason–Action labeling 3,100,000 Human-Annotated Human Reason–Action annotation 200,000 Targeted Lane-Change Rule-based XCoT labeling 320,000
+> Total Mixed supervision 3,620,000
+
+Implementation Details. We train our model in two stages. In Stage I (SFT), we utilize the full mixed dataset to jointly train the Reason FFN and Control FFN. In Stage II (XCPO), we apply our XCoT Policy Optimization on a subset of safety-critical and complex interaction scenarios to further refine the reasoning policy. The model is trained using the AdamW optimizer with a peak learning rate of 4 × 10 −5 for Stage I and 1 × 10 −4 for Stage II. 
+
+4.2 Evaluation Protocol 
+
+We evaluate XCoT-VLA from three complementary perspectives: open-loop planning accuracy, reasoning-interface efficiency, and optimization stability. The open-loop evaluation uses a general-distribution set and a lane-change set. We additionally profile latency under a 12 Hz planning budget, analyze the stability of XCoT fine-tuning, and present qualitative trajectory cases covering dense traffic, navigation-guided preemptive lane changes, traffic-light compliance, and efficiency-driven lane changes. For open-loop planning, we report directional Average Displacement Error (ADE) and Final Dis-placement Error (FDE) in an ego-centric route-aligned coordinate frame. Our default evaluation horizon is 6 s , corresponding to H = 24 future steps. Therefore, unless explicitly marked as ADE-2s ,all ADE and FDE values in this section are computed over the full 6 s horizon and are denoted as 
+
+ADE-6s and FDE-6s , respectively. The additional ADE-2s metric averages displacement error over the first 2 s ( H2s = 8 steps) and is reported only in the training-stability analysis. Let ˆτi = {(ˆ xi,h , ˆyi,h )}Hh=1 and τi = {(xi,h , y i,h )}Hh=1 denote the predicted and ground-truth trajec-tories for sample i, respectively, where x and y are the longitudinal and lateral coordinates. For a set of N samples, the full-horizon directional ADE metrics are 
+
+ADE -6s -Long = 1
+
+N H 
+
+> N
+
+X
+
+> i=1
+> H
+
+X
+
+> h=1
+
+|ˆxi,h − xi,h | ,
+
+ADE -6s -Lat = 1
+
+N H 
+
+> N
+
+X
+
+> i=1
+> H
+
+X
+
+> h=1
+
+|ˆyi,h − yi,h | .
+
+(16) 9FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+The corresponding terminal errors at 6 s are 
+
+FDE -6s -Long = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+|ˆxi,H − xi,H | ,
+
+FDE -6s -Lat = 1
+
+N
+
+> N
+
+X
+
+> i=1
+
+|ˆyi,H − yi,H | .
+
+(17) For the short-horizon diagnostic, we additionally report 
+
+ADE -2s -Long = 1
+
+N H 2sNX
+
+> i=1
+> H2s
+
+X
+
+> h=1
+
+|ˆxi,h − xi,h | ,
+
+ADE -2s -Lat = 1
+
+N H 2sNX
+
+> i=1
+> H2s
+
+X
+
+> h=1
+
+|ˆyi,h − yi,h | .
+
+(18) The predicted coordinates used by these metrics are obtained from the temporally integrated output of the trajectory head, ˆτi = Itraj (ˆ ui; si). All displacement metrics are reported in meters, and lower values indicate better trajectory accuracy. Unlike conventional Euclidean ADE/FDE, these metrics separately measure longitudinal and lateral displacement errors. Relative improvement is computed as (baseline − method) /baseline .We compare four controlled variants: Trajectory only , Verbose CoT , Latent tokens , and XCoT-VLA .Here, Trajectory only denotes our standard trajectory-supervised SFT baseline. They share the same visual backbone, trajectory decoder, prediction horizon, and open-loop evaluation protocol unless stated otherwise. Table 3 summarizes their reasoning interfaces and supervision. 
+
+Table 3: Controlled model variants used in the experiments. 
+
+Variant Reasoning inter-face Supervision Decoder / training 
+
+Trajectory only(SFT) None Logged trajectories only Same trajectory decoder without explicit reasoning tokens. Verbose CoT Natural-language-style rationale Verbose semantic supervi-sion Same decoder with a long, descrip-tive reasoning interface. Latent tokens Compact semantic tokens Compressed labels with-out joint Reason–Action assignment Same decoder and training data, but without the causal-reason and maneuver semantics used by XCoT. 
+
+XCoT-VLA Executable XCoT sequence Reason–Action supervi-sion from trajectory and scene context Shared self-attention with separate Reason and Control FFN branches. 
+
+4.3 Main Results: Open-Loop Planning 
+
+Table 4 reports the main open-loop results. XCoT-VLA achieves the best performance on all reported metrics for both evaluation sets. On the general set, ADE-6s-Long decreases from 1.6452 to 1.3233 and FDE-6s-Long from 4.3541 to 3.0887 relative to Trajectory only. The gains are larger on the lane-change set, where ADE-6s-Lat decreases from 0.5941 to 0.3091 and FDE-6s-Lat from 1.6160 to 0.6484. Verbose CoT does not consistently improve lateral accuracy, while Latent tokens help but remain behind the full Reason–Action supervision of XCoT-VLA. These results indicate that executable reasoning is particularly effective for route-conditioned lateral decisions. 10 FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+Table 4: Open-loop planning results on the general-distribution and lane-change evaluation sets. ADE-6s and FDE-6s are computed over the full 6 s prediction horizon. Lower is better. 
+
+Set Method ADE-6s-Lat ADE-6s-Long FDE-6s-Lat FDE-6s-Long 
+
+General Trajectory-only(SFT) 0.2609 1.6452 0.7352 4.3541 Verbose CoT 0.2798 1.4382 0.7822 3.5045 Latent tokens 0.2511 1.3738 0.6804 3.2861 
+
+XCoT-VLA 0.2162 1.3233 0.5765 3.0887 
+
+Lane-change Trajectory-only(SFT) 0.5941 1.8221 1.6160 4.8399 Verbose CoT 0.3589 1.6217 0.7692 3.8088 Latent tokens 0.3347 1.5453 0.7102 3.5303 
+
+XCoT-VLA 0.3091 1.4552 0.6484 3.2258 
+
+4.4 Ablation: XCoT and Navigation Supervision 
+
+Table 5 separates the contribution of XCoT supervision from that of targeted navigation data. XCoT alone reduces ADE-6s-Lat by 18.3% and FDE-6s-Lat by 25.1% relative to the trajectory-only SFT baseline. Adding navigation supervision further reduces ADE-6s-Lat to 0.4518 and FDE-6s-Lat to 1.1122. The smaller longitudinal changes are consistent with this ablation primarily affecting route-conditioned lateral intent. 
+
+Table 5: Ablation on XCoT reasoning and targeted navigation data on a controlled lane-change diagnostic split. ADE-6s and FDE-6s are computed over the full 6 s prediction horizon. Lower is better. This split should not be compared numerically with Table 4. 
+
+Method XCoT Nav. ADE-6s-Lat ADE-Long FDE-6s-Lat FDE-6s-Long 
+
+Trajectory-only(SFT) – – 0.5941 1.8221 1.6160 4.8399 XCoT only ✓ × 0.4856 1.8418 1.2106 4.8458 
+
+XCoT + Nav. ✓ ✓ 0.4518 1.7977 1.1122 4.7230 
+
+4.5 Efficiency of Executable XCoT 
+
+XCoT replaces a verbose natural-language rationale with a compact 2–6-token executable interface. In typical driving reasoning, a conventional CoT rationale may span dozens of autoregressive tokens to describe the scene, explain causal factors, and articulate the intended maneuver; in our setting, 40–80 tokens is a representative range for such verbose CoT outputs. Here, time to first token (TTFT) denotes the latency from submitting the multimodal input to generating the first reasoning token, including input-context prefill and the initial decoding step. We measure an inter-token latency of 3.25 ms on an H100 and estimate the total reasoning-interface latency as TTFT + 3 .25 M , where 
+
+M is the number of generated reasoning tokens. Table 6 reports the conservative worst case using 
+
+M = 80 for Verbose CoT and M = 6 for XCoT-VLA. XCoT-VLA remains below the 83.3 ms budget for all evaluated input lengths, whereas Verbose CoT exceeds this budget throughout. This analysis covers only the reasoning interface and excludes perception preprocessing, trajectory postprocessing, and full-stack scheduling overhead. 
+
+Table 6: Worst-case reasoning-interface latency on an H100. Results use each method’s maximum output length; the 12 Hz budget is 83.3 ms. 
+
+Method Output tokens Worst-case latency (ms) Within 12 Hz budget 2K 3.5K 5K 6K 
+
+Verbose CoT 40–80 279.1 287.8 298.2 306.8 ×
+
+XCoT-VLA 2–6 38.6 47.3 57.7 66.3 ✓
+
+11 FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+4.6 Training Stability 
+
+Table 7 compares the trajectory-only SFT baseline with joint and decoupled XCoT fine-tuning (FT). Joint XCoT FT causes a pronounced longitudinal degradation: ADE-6s-Long increases from 1.2997 to 1.6005 and ADE-2s-Long from 0.2774 to 1.1684. Decoupled XCoT FT preserves short-horizon longitudinal accuracy and improves ADE-6s-Lat from 0.2302 to 0.1872 and FDE-6s-Lat from 0.5710 to 0.4690. Its remaining weakness is long-horizon longitudinal accuracy, where ADE-6s-Long and FDE-6s-Long remain above the SFT baseline. These results support separating the Reason and Control FFN branches during XCoT fine-tuning. 
+
+Table 7: Training stability under joint and decoupled XCoT fine-tuning. ADE-6s/FDE-6s use the full 6 s horizon, while ADE-2s uses the first 2 s. Lower is better. 
+
+Training strategy ADE-6s-Lat ADE-6s-Long ADE-2s-Lat ADE-2s-Long FDE-6s-Lat FDE-6s-Long 
+
+Trajectory-only(SFT) 0.2302 1.2997 0.0360 0.2774 0.5710 3.2521 
+
+Joint XCoT FT 0.2774 1.6005 0.0355 1.1684 0.7313 3.2854 
+
+Decoupled XCoT FT 0.1872 1.3330 0.0313 0.2766 0.4690 3.3864 Qualitative Comparison: XCoT vs. SFT     
+
+> Navigation-Guided Preemptive Lane Change
+> Turn right in 381 meters.
+> Proactive Lane Change
+> LANE_KEEPING NAV_RIGHT_LANE_CHANGE ACCELERATE LANE_KEEPING NAV_RIGHT_LANE_CHANGE KEEP_SPEED
+> Split right in 392 meters. You are in a 4-lane segment ("Ahead or Left", "Ahead", "Ahead", "Right") lasting until 362 meters. Please position your vehicle in the 1st lane from the right ASAP before exiting this segment.
+> 392 meters 381 meters
+
+✅ ✅    
+
+> Efficiency Lane Change
+> Slight right in 102 meters.
+> Traffic Compliance
+> LANE_KEEPING RED_LIGHT_HOLD EFFICIENCY_LEFT_LANE_CHANGE ACCELERATE
+> 243 meters 102 meters Split right in 684 meters. In 243 meters, enter a 3-lane segment ("Ahead", "Ahead", "Ahead or Right") lasting until 289 meters.
+
+✅✅
+
+Figure 4: Qualitative comparison between XCoT (blue) and the trajectory-only SFT baseline (red). Compared with SFT, XCoT consistently exhibits more proactive driving behaviors, including earlier lane changes in dense traffic and navigation-guided scenarios, proactive compliance with traffic-light constraints, and efficiency-driven lane changes with traffic-adaptive acceleration, leading to smoother and more efficient trajectory planning. 
+
+12 FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+4.7 Qualitative Analysis 
+
+Figure 4 presents four representative open-loop cases covering dense-traffic lane changes, navigation-guided preemptive lane changes, traffic-light compliance, and efficiency-driven lane changes. Com-pared with the SFT baseline, XCoT exhibits more proactive and context-aware behaviors, including earlier lane changes, proactive responses to traffic-light constraints, and traffic-adaptive acceleration for efficient maneuvering. These cases illustrate how executable XCoT tokens translate route, lateral, longitudinal, and traffic-rule semantics into improved trajectory planning. 
+
+5 Conclusion 
+
+We presented XCoT-VLA, which replaces verbose natural-language CoT with 2–6 executable semantic-action tokens learned from Reason–Action supervision. All non-trajectory tokens are processed by the Reason FFN, while trajectory queries use the Control FFN to generate continuous motion after shared multimodal self-attention. XCoT-VLA improves open-loop planning accuracy, particularly in lane-change scenarios, while substantially reducing autoregressive reasoning cost. These results support compact, action-facing reasoning as a practical interface between semantic understanding and trajectory generation. Nevertheless, XCoT currently has limited capability for interactive negotiation with surrounding agents, remains sensitive to traffic-rule perception errors, and shows smaller improvements in longitudinal comfort. Future work will strengthen interaction-and uncertainty-aware reasoning, extend XCoT to richer rule-governed scenarios, and quantitatively evaluate XCPO using closed-loop safety, route-completion, and comfort metrics. 
+
+6 Contributors 
+
+We sincerely thank every member of the team for their dedication and valuable contributions. This work reflects our ongoing efforts in advancing reasoning-driven Vision-Language-Action models for autonomous driving. XCoT-VLA introduces a compact and executable reasoning interface that directly connects multimodal scene understanding with trajectory generation. 
+
+Advisors : Hang Zhang, Honggou Yang, Xianming Liu 
+
+Project Lead : Qiman Wu 
+
+Contributors : Yue He *, Shaman Tang *, Dong Xing *, Hui Xue *, Lvjie Chen, Menglin Li, Hanlin Chen, Hua Zhou, Yizhao Wang, Anhua Liu, Yuheng Zhang, Mingyuan Wang, Rui Xin, Jiahui Hu, Da Zhu, Yuhua Wei, Pengfei Diao, Shuang Su, Minghao Li, Haojie Yang, Siqi Liu, Kai Yang, ZhenKang Wu, Weichao Huang. 
+
+> *
+
+Core contribution. 
+
+References        
+
+> [1] Jean-Baptiste Alayrac, Jeff Donahue, Pauline Luc, et al. Flamingo: a visual language model for few-shot learning. In Advances in Neural Information Processing Systems , volume 35, 2022. [2] Junnan Li, Dongxu Li, Silvio Savarese, et al. BLIP-2: Bootstrapping language-image pre-training with frozen image encoders and large language models. In Proceedings of the 40th International Conference on Machine Learning , volume 202 of Proceedings of Machine Learning Research , pages 19730–19742. PMLR, 2023. [3] Haotian Liu, Chunyuan Li, Qingyang Wu, et al. Visual instruction tuning. In Advances in Neural Information Processing Systems , volume 36, 2023. [4] Jason Wei, Xuezhi Wang, Dale Schuurmans, et al. Chain-of-thought prompting elicits reasoning in large language models. In Advances in Neural Information Processing Systems , volume 35, pages 24824–24837, 2022. [5] Xuezhi Wang, Jason Wei, Dale Schuurmans, et al. Self-consistency improves chain of thought reasoning in language models. In International Conference on Learning Representations , 2023. URL
+> https://openreview.net/forum?id=1PL1NIMMrw .[6] Brianna Zitkovich, Tianhe Yu, Sichun Xu, et al. RT-2: Vision-language-action models transfer web knowledge to robotic control. In Proceedings of The 7th Conference on Robot Learning , volume 229 of
+> Proceedings of Machine Learning Research , pages 2165–2183. PMLR, 2023.
+
+13 FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+[7] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, et al. OpenVLA: An open-source vision-language-action model. In Proceedings of the 8th Conference on Robot Learning , 2024. [8] Kevin Black, Noah Brown, Danny Driess, et al. π0: A Vision-Language-Action Flow Model for General Robot Control. In Proceedings of Robotics: Science and Systems , Los Angeles, CA, USA, 2025. doi: 10.15607/RSS.2025.XXI.010. [9] Xiaoyu Tian, Junru Gu, Bailin Li, et al. DriveVLM: The convergence of autonomous driving and large vision-language models, 2024. [10] Hao Shao, Yuxuan Hu, Letian Wang, et al. LMDrive: Closed-loop end-to-end driving with large language models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 15120–15130, 2024. [11] Xingcheng Zhou, Xuyuan Han, Feng Yang, et al. OpenDriveVLA: Towards end-to-end autonomous driving with large vision language action model, 2025. [12] Zewei Zhou, Tianhui Cai, Seth Z. Zhao, et al. AutoVLA: A vision-language-action model for end-to-end autonomous driving with adaptive reasoning and reinforcement fine-tuning, 2025. [13] Chonghao Sima, Katrin Renz, Kashyap Chitta, et al. DriveLM: Driving with graph visual question answering. In Computer Vision – ECCV 2024 , volume 15110 of Lecture Notes in Computer Science , pages 256–274. Springer Nature Switzerland, 2024. doi: 10.1007/978-3-031-72943-0_15. [14] Ming Nie, Renyuan Peng, Chunwei Wang, et al. Reason2Drive: Towards interpretable and chain-based reasoning for autonomous driving. In Computer Vision – ECCV 2024 , volume 15084 of Lecture Notes in Computer Science , pages 292–308. Springer Nature Switzerland, 2025. doi: 10.1007/978-3-031-73347-5_17. [15] Bo Jiang, Shaoyu Chen, Qian Zhang, et al. AlphaDrive: Unleashing the power of vlms in autonomous driving via reinforcement learning and reasoning, 2025. [16] Yaniv Leviathan, Matan Kalman, Yossi Matias. Fast inference from transformers via speculative decoding. In Proceedings of the 40th International Conference on Machine Learning , volume 202 of Proceedings of Machine Learning Research , pages 19274–19286. PMLR, 2023. [17] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, et al. Flow matching for generative modeling. In 
+
+International Conference on Learning Representations , 2023. [18] Zhenhua Xu, Yujia Zhang, Enze Xie, et al. DriveGPT4: Interpretable end-to-end autonomous driving via large language model, 2023. [19] Shihao Wang, Zhiding Yu, Xiaohui Jiang, et al. OmniDrive: A holistic vision-language dataset for autonomous driving with counterfactual reasoning, 2024. [20] Ana-Maria Marcu, Long Chen, Jan Hünermann, et al. LingoQA: Visual question answering for autonomous driving. In Computer Vision – ECCV 2024 , volume 15135 of Lecture Notes in Computer Science , pages 252–269. Springer Nature Switzerland, 2024. doi: 10.1007/978-3-031-72980-5_15. [21] Richard S. Sutton, Doina Precup, Satinder Singh. Between MDPs and semi-MDPs: A framework for temporal abstraction in reinforcement learning. Artificial Intelligence , 112(1–2):181–211, 1999. doi: 10.1016/S0004-3702(99)00052-1. [22] Tiancheng Zhao, Kaige Xie, Maxine Eskenazi. Rethinking action spaces for reinforcement learning in end-to-end dialog agents with latent variable models. In Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies ,pages 1208–1218. Association for Computational Linguistics, 2019. doi: 10.18653/v1/N19-1123. [23] Wenxuan Zhou, Sujay Bajracharya, David Held. PLAS: Latent action space for offline reinforcement learning. In Proceedings of the 2020 Conference on Robot Learning , volume 155 of Proceedings of Machine Learning Research , pages 1719–1735. PMLR, 2021. [24] Chengxing Jia, Ziniu Li, Pengyuan Wang, et al. Controlling large language model with latent action. In 
+
+Proceedings of the 42nd International Conference on Machine Learning , volume 267 of Proceedings of Machine Learning Research , pages 27331–27372. PMLR, 2025. URL 
+
+https://proceedings.mlr.press/v267/jia25e.html .[25] Seonghyeon Ye, Joel Jang, Byeongguk Jeon, et al. Latent action pretraining from videos. In International Conference on Learning Representations , 2025. URL https://arxiv.org/abs/2410.11758 .[26] Zhihong Shao, Peiyi Wang, Qihao Zhu, et al. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models, 2024. [27] DeepSeek-AI. DeepSeek-R1: Incentivizing reasoning capability in llms via reinforcement learning, 2025. [28] Leslie Pack Kaelbling, Michael L. Littman, Anthony R. Cassandra. Planning and acting in partially observable stochastic domains. Artificial Intelligence , 101(1–2):99–134, 1998. doi: 10.1016/S0004-3702(98)00023-X. 
+
+14 FOUNDATION MODEL TEAM XCoT-VLA TECHNICAL REPORT 
+
+[29] Constantin Hubmann, Marvin Becker, Daniel Althoff, et al. Decision making for autonomous driving considering interaction and uncertain prediction of surrounding vehicles. In 2017 IEEE Intelligent Vehicles Symposium , pages 1671–1678, 2017. doi: 10.1109/IVS.2017.7995949. [30] Alexander Tong, Kilian Fatras, Nikolay Malkin, et al. Improving and generalizing flow-based generative models with minibatch optimal transport. Transactions on Machine Learning Research , 2024. 
+
+15
