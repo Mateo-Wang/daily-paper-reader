@@ -1,0 +1,1267 @@
+Title: Adaptation of Generalist Robot Policies with Minimal Data
+
+URL Source: https://arxiv.org/pdf/2608.11363v1
+
+Published Time: Thu, 13 Aug 2026 00:13:12 GMT
+
+Number of Pages: 39
+
+Markdown Content:
+# Adaptation of Generalist Robot Policies with Minimal Data 
+
+Shreyas Kowshik *, Sreyas Venkataraman *, Leo Wang, Niharika Pant, Max Simchowitz † and Aviral Kumar †  
+
+> Carnegie Mellon University, *Equal contribution, †Equal advising
+
+Abstract. A central goal in robot learning is to move beyond task-specific human data collection toward robots that improve through autonomous interaction. Yet fully autonomous learning remains difficult with current policies: sparse rewards and weak zero-shot exploration make it unlikely that a robot will discover successful behavior from scratch. We study minimal-data adaptation , a regime in which a pre-trained robot policy must learn a new task from as little as one demonstration followed by autonomous online interaction. This setting serves as the closest tractable proxy for fully autonomous improvement, allowing us to study whether minimal human guidance can bootstrap autonomous learning and what algorithmic ingredients make it feasible. We build MiDAS , a simple offline-to-online RL recipe that first anchors a pre-trained VLA to the target task with behavior cloning on single/few demonstrations, then improves it through value-based online RL on a residual policy parameterization. Across LIBERO and RoboCasa, MiDAS recovers strong task performance from as little as one demonstration, substantially outperforming baselines and generalizing beyond demonstrated conditions. We further evaluate MiDAS on a bimanual YAM platform. Starting from a fragile low-success policy obtained from a single demonstration, MiDAS improves its robustness and learns new successful behaviors over 6 hours of online interaction. To the best of our knowledge, this is the first demonstration of reliable robot policy adaptation from a single task demonstration. 
+
+## 1. Introduction 
+
+A long-standing goal in robotics is to develop robots that improve through their own experience: a robot enters a new environment, attempts a task, and autonomously refines its behavior until it can perform the task reliably. Achieving this goal poses challenges ranging from physical considerations, such as providing resets and managing hardware instrumentation, to algorithmic questions about how learning should be initialized and carried out. In this work, we focus on a central algorithmic challenge: enabling rapid adaptation to a new task, with minimal task-specific supervision or design. Prior work on autonomous robot adaptation has largely relied on specialist, single-task policies [17, 26, 38], often coupled with substantial task-specific engineering. The recent emergence of generalist robot policies pre-trained on broad and diverse datasets [4–6, 20, 21, 37, 41] provides an opportunity to revisit this problem: can the broad prior encoded by a pre-trained generalist policy enable efficient online adaptation with only minimal task-specific supervision? To answer this question, we first note that autonomous adaptation depends on three ingredients. The policy must represent high-dimensional observations in a form useful for policy and critic learning, produce behavior that reaches reward-bearing regions during deployment, and use this experience to improve efficiently. Given the strong downstream transfer enabled by large-scale pretraining in language, vision, and representation learning [7, 10, 33], one would expect recent generalist robot policies [4– 6, 20, 21, 37] to make progress on the first two ingredients: task-relevant representations for control and behavioral (action) priors acquired from diverse manipulation data. However, these policies are still not reliable zero-shot learners in new environments. They may fail to follow the task instruction, miss sparse reward entirely, or visit only a narrow set of useful states, leaving online learning with too little signal to bootstrap improvement.  
+
+> Corresponding author(s): sreyasv@andrew.cmu.edu, skowshik@andrew.cmu.edu, Additional real-world videos and rollouts are available on the website: minimal-data-adaptation.github.io. arXiv:2608.11363v1 [cs.RO] 11 Aug 2026 Adaptation of Generalist Robot Policies with Minimal Data
+> Figure 1: Overview of minimal-data adaptation. A single demonstration is sparse and underdetermined on its own, but pre-trained VLA representations turn it into a useful anchor for adaptation. Few-demo behavior cloning narrows the search space to a task-relevant region around the demonstration, and online residual RL then expands local success by learning value-guided corrections on top of the warm-started base policy.
+
+We study this gap by proposing the minimal-data adaptation (MDA) setting, in which a pre-trained policy must learn to improve autonomously from only minimal task-specific supervision, such as a single successful demonstration. Prior work has developed effective methods for autonomous policy improvement, but these methods generally operate in more favorable regimes. They typically assume either that the initial policy already has substantial task competence [19, 32, 34, 39] or that tens to hundreds of demonstrations are available [3, 19, 23, 28]. While MDA resembles prior autonomous adaptation settings, minimal task-specific supervision makes stable online learning substantially harder: under sparse rewards, a weak initial policy collects mostly failures, often leading to policy collapse. As a result, methods designed for stronger initial policies or larger demonstration sets do not transfer cleanly to this regime. At the same time, few-shot imitation learning methods suggest that learning from one or two demonstrations is possible in some settings [12, 13, 30], but most available VLA policies do not naturally exhibit consistent few-shot improvement. MDA targets the narrow regime between zero-shot deployment and standard task-specific finetuning: the pre-trained policy is not reliable enough to deploy directly, but may be close enough that one demonstration can make online learning tractable. Our main finding is that minimal-data adaptation is tractable for today’s generalist robot policies. Even just a single successful demonstration can make autonomous adaptation possible, not because one demonstration provides enough coverage for learning to solve the task, but because adaptation succeeds through the interplay of pretraining, the demonstration, and online interaction. Pretraining provides reusable features and broad action priors, but these priors are not calibrated for reliable performance on the target task. The demonstration anchors the policy to the task and makes task-relevant behavior reachable, but does not provide reliable control. Autonomous interaction supplies the remaining corrections by learning from the robot’s successes and failures. We instantiate this principle in MiDAS : an offline-to-online recipe that first fine-tunes a pre-trained VLA by imitation on 𝐾 demonstrations to obtain a task-anchored policy and then freezes the VLA but trains a lightweight residual actor online on top of its representations using value-based RL [27] on data collected via autonomous interaction. 
+
+> 2Adaptation of Generalist Robot Policies with Minimal Data
+
+We make three contributions in this paper. First, we introduce minimal-data adaptation , a regime where a pre-trained robot policy is not reliable zero-shot, but may be close enough that one or a few demonstrations make online learning tractable. Second, we present MiDAS, a value-based deep RL method that combines few-demo behavior cloning with frozen-backbone residual RL and stabilizing choices for sparse-reward adaptation. Across LIBERO-Long and RoboCasa, MiDAS recovers strong performance from as little as one demonstration, outperforms baselines, generalizes beyond demonstrated conditions, and transfers to a real bimanual YAM platform with roughly 6 hours of autonomous interaction. Third, we empirically validate the principles that enable successful adaptation with MiDAS: behavior cloning recovers task-level behavior but not reliable control, pre-trained VLA representations enable sample-efficient value learning, and online residual RL supplies corrective actions beyond the few-demo policy’s effective support. Together, these results show that modern pre-trained robot policies can use a single demonstration to scaffold autonomous adaptation, while understanding how pretraining, demonstrations, and online experience enable adaptation. 
+
+## 2. Problem Setting: Minimal Data Adaptation 
+
+We now define the minimal-data adaptation (MDA) setting and motivate why it is a useful regime to study. Given a pre-trained vision-language-action policy 𝜋 base , 𝐾 successful demonstrations 𝒟 𝐾  
+
+> demo
+
+collected in a target environment (denoted by ℳtarget ), and access to autonomous interaction with ℳtarget ,minimal-data adaptation asks whether we can learn an adapted policy 𝜋 𝐾 𝜃 that achieves high return in 
+
+ℳtarget using only this limited supervision. The goal is not to solve the task from demonstrations alone. Instead, the demonstrations serve as a minimal scaffold that makes subsequent autonomous learning tractable. The case 𝐾 =1 is the sharpest version of this setting: learning on a single demonstration is often insufficient to learn previously unseen tasks, but may still expose enough task-relevant behavior for interaction-driven improvement to begin. MDA targets the regime where autonomous learning first becomes tractable. With no task-specific data, current pre-trained policies often fail to reach task-relevant behavior often enough for sparse-reward interaction to improve them. A small number of demonstrations can make the problem just structured enough: they expose the intended behavior and bring the policy into the vicinity of success, while still leaving robustness and distribution coverage to be learned through autonomous interaction. This setting therefore tests whether pre-trained robot policies have reached a regime where a few demonstrations can specify the task while online interaction supplies the missing robustness. It also separates the roles of the available sources of supervision: the structure inherited from pretraining, the task information provided by demonstrations, and the corrections learned through autonomous interaction. Our approach MiDAS uses residual RL based on value learning to perform this online refinement; we briefly review these primitives before describing the full adaptation recipe. 
+
+## 3. Preliminaries 
+
+As defined in Section 2, the MDA regime seeks to learn a policy through autonomous interaction with a target environment ℳtarget . The objective of this autonomous learning is to solve the target task consistently, and in as few environment interactions as possible. We formalize this objective in the standard reinforcement learning (RL) setting. Concretely, the goal is to learn a policy 𝜋 : 𝒮 → Δ( 𝒜 ) that maximizes the discounted return 𝐽 (𝜋 ; ℳ) = Eℳ,𝜋 [∑︀ ∞ 
+
+> 𝑡 =0
+
+𝛾 𝑡 𝑟 (𝑠 𝑡 , 𝑎 𝑡 )] , where 𝑠 0 ∼ 𝜌 , 𝑎 𝑡 ∼ 𝜋 (· | 𝑠 𝑡 ), and 
+
+𝑠 𝑡 +1 ∼ 𝑃 (· | 𝑠 𝑡 , 𝑎 𝑡 ). We focus on sparse binary rewards, where 𝑟 𝑡 = 0 if the task is completed within the time limit and −1 otherwise. Because the policy incurs a penalty of −1 at every step until the task is solved, maximizing this cumulative return implicitly optimizes for solving the task consistently and in the 
+
+> 3Adaptation of Generalist Robot Policies with Minimal Data
+
+fewest environment interactions, thereby recovering our original formulation of autonomous learning. A central object utilized by our approach is the action-value function 𝑄 𝜋 (s, a), which estimates the expected discounted return from taking action a in state s and following 𝜋 thereafter. In our robotic setting, states include high-dimensional visual and proprioceptive observations, and actions are chunks [42]: a𝑡 denotes a sequence of low-level controls executed open-loop. Details are in Appendix A. 
+
+Value-Based RL. Value-based methods estimate 𝑄 𝜋 from experience: they maintain a replay buffer ℬ
+
+of previously collected transitions and train a critic using temporal-difference (TD) learning. Given a transition (s𝑡 , a𝑡 , 𝑟 𝑡 , s𝑡 +1 ) ∼ ℬ , the TD target and loss are 
+
+𝑦 𝑡 = 𝑟 𝑡 + 𝛾𝑄 ¯𝜓 (s𝑡 +1 , a′),
+
+ℒTD (𝜓 ) = Eℬ[︁ (𝑄 𝜓 (s𝑡 , a𝑡 ) − 𝑦 𝑡 )2]︁ , (3.1) where 𝑄 ¯𝜓 is a target critic and a′ is the next action. The policy 𝜋 𝜃 is then updated toward actions that receive high value under the critic [15, 16]. 
+
+Residual RL. Residual RL adapts a frozen base policy by learning a lightweight module that modifies the base policy’s proposed action [1, 2, 11, 36, 40]. Given a policy 𝜋 𝜃 , the residual policy 𝜋 res  
+
+> 𝜃
+
+conditions on both the state and an action proposed by the base policy, and outputs the action executed in the envi-ronment, i.e. aexec ∼ 𝜋 res  
+
+> 𝜃
+
+(· | s, abase ) with abase ∼ 𝜋 𝜃 (· | s). This residual update can be parameterized in several ways, such as predicting an additive offset in action space or directly predicting the modified action. In this work, we adopt the latter parameterization as discussed in Section 4. 
+
+Policy-Agnostic RL. Policy-agnostic RL (PA-RL) [27] is an online improvement method that applies across policy classes. It first improves sampled actions against the learned Q-function, then distills the optimized actions back into the parametric policy using the appropriate supervised objective, such as flow matching for flow policies or likelihood for discrete-action policies. We use PA-RL for this policy-agnostic structure, extending it to action-chunked residual policies in Appendix D.1. For each replay state s𝑡 , we sample candidate action chunks from the residual policy and refine them by taking gradient steps against 𝑄 𝜓 ,
+
+a𝑡 ∼ 𝜋 res  
+
+> 𝜃
+
+(· | s𝑡 ),
+
+a⋆𝑡 ← a𝑡 + 𝜂 ∇a𝑄 𝜓 (s𝑡 , a𝑡 ), (3.2) where 𝜂 is the step size, and then distill the optimized chunk a⋆𝑡 back into the residual policy. 
+
+Generalist Robot Policy. We take the base policy 𝜋 base to be a generalist robot policy, such as a pre-trained vision-language-action model like 𝜋 0.5 [20]. Concretely, 𝜋 base consists of a pre-trained vision-language-model (VLM) backbone and a flow head that parameterizes a flow policy conditioned on the output of the VLM backbone. 
+
+## 4. MiDAS: A Simple Recipe for Minimal Data Adaptation 
+
+In this section, we introduce Mi nimal-Data Adaptation Strategy (MiDAS), a two-stage recipe for adapting a pre-trained policy to a new task from only a handful of demonstrations. What can such minimal supervision realistically provide? As we will show in Section 5, finetuning a pre-trained policy with 𝐾 
+
+initial demonstrations seed coarse task-following behavior, but it does not ensure reliable completion. Since most task-specific behavior is already recovered, the remaining gap consists primarily of fine-grained task-specific corrections. One could continue adapting the entire pretrained policy with RL. Instead, we         
+
+> 4Adaptation of Generalist Robot Policies with Minimal Data
+> Figure 2: Few-demo BC recovers task-level behavior, but not fine-grained control. Rollouts of 𝜋 𝐾
+> base at 𝐾 =1 on Both Moka Pots →Stove . The policy reaches the right objects but fails to grasp the second pot under orientation changes of the environment’s reset distribution.
+
+ask whether these corrections can be learned by training only a lightweight residual policy, substantially reducing the trainable parameter count, memory footprint, and compute required for online adaptation while keeping the pretrained policy frozen. This leads to a simple two-stage recipe. Stage I fine-tunes 
+
+𝜋 base on the 𝐾 demonstrations with behavior cloning, producing a policy 𝜋 𝐾  
+
+> base
+
+that can attempt the correct task but remains unreliable. Stage II freezes 𝜋 𝐾  
+
+> base
+
+and trains a lightweight residual actor-critic on top of its representations using sparse-reward online RL. The resulting adapted policy is denoted by 
+
+𝜋 𝐾 
+
+> RL
+
+. The full algorithm is given in Algorithm 1. 
+
+Stage I: Behavior cloning on minimal demonstrations. Stage I adapts the pre-trained policy 𝜋 base to the downstream task using the 𝐾 demonstrations in 𝒟 𝐾 
+
+> demo
+
+. Although generalist robot policies provide broad behavioral priors, they often fail to solve a new downstream task zero-shot. We therefore first fine-tune the policy on the available demonstrations to obtain a task-directed initialization for subsequent online RL. We adapt the VLM backbone using a low-rank adapter (LoRA [18]) and fine-tune the complete action head using the standard flow matching objective. Implementation details are deferred to Appendix D.2. As described in Section 5, the resulting 𝜋 𝐾  
+
+> base
+
+coarsely attempts the task, but does not complete it reliably. 
+
+Stage II: Online improvement via value-based residual RL. Stage II improves 𝜋 𝐾  
+
+> base
+
+through autonomous interaction using value-based RL. Because Stage I produces a policy that can roughly complete the tasks, Stage II needs to provide only small corrections to overcome control failures. Rather than fully fine-tuning the pretrained policy, we keep 𝜋 𝐾  
+
+> base
+
+frozen and instead learn these corrections through a lightweight adaptation module. This substantially reduces the trainable parameter count, memory footprint, and compute required for online adaptation. We instantiate this adaptation module as a residual policy conditioned on the action proposed by 𝜋 𝐾 
+
+> base
+
+, following prior work [1, 2, 11, 36, 40]. At each state s𝑡 ,the base policy proposes an action chunk abase  
+
+> 𝑡
+
+, and the residual policy 𝜋 res  
+
+> 𝜃
+
+proposes an edit conditioned on the state and the chunk itself. We parameterize the residual policy as follows 1
+
+𝜋 res  
+
+> 𝜃
+
+(· | s𝑡 , abase ) = tanh (︁ 𝒩 (︁ 𝜇 𝜃 (s𝑡 , abase ), 𝜎 2 
+
+> 𝜃
+
+(s𝑡 , abase ))︁)︁ . (4.1) Conditioning the actor on abase  
+
+> 𝑡
+
+exposes it directly to the action mode selected by 𝜋 𝐾 
+
+> base
+
+, so online RL refines a task-relevant VLA proposal rather than learning to represent a complex, multimodal action distribution from scratch. At the same time, predicting aexec  
+
+> 𝑡
+
+directly allows the policy to shift this proposal toward higher-value regions instead of being restricted to small fixed residual corrections around abase 
+
+> 𝑡
+
+that further limit the policy. Concretely, an additive parameterization would predict a bounded, additive correction aexec  
+
+> 𝑡
+
+= abase  
+
+> 𝑡
+
++ Δ 𝜃 (s𝑡 , abase  
+
+> 𝑡
+
+), constraining the executed action to a fixed neighborhood of the base proposal. Because minimal demonstrations do not guarantee that near-optimal actions lie       
+
+> 1Unlike typical residual formulations, (4.1) directly predicts the edited action aexec
+> 𝑡 ∼𝜋 res
+> 𝜃 (·| s𝑡 ,abase
+> 𝑡 ).
+> 5Adaptation of Generalist Robot Policies with Minimal Data
+
+Algorithm 1 MiDAS: Minimal-Data Adaptation Strategy 
+
+Require: pre-trained policy 𝜋 base , demonstrations 𝒟 𝐾 
+
+> demo
+
+, warmup steps 𝑊 , success ratio 𝜌 succ 
+
+Ensure: Adapted policy 𝜋 𝐾 
+
+> RL
+
+Stage I: Behavior cloning on 𝐾 demonstrations 
+
+1 Fine-tune 𝜋 base on 𝒟 𝐾  
+
+> demo
+
+with flow matching (LoRA backbone, full action head) → 𝜋 𝐾 
+
+> base
+
+Stage II: Residual reinforcement learning 
+
+2 Initialize residual actor 𝜋 res  
+
+> 𝜃
+
+and critic ensemble {𝑄 𝜓 𝑗 }𝐽 𝑗 =1 
+
+3 Roll out 𝜋 𝐾  
+
+> base
+
+for a few episodes; ℬwarm ← 𝒟 𝐾  
+
+> demo
+
+∪ { rollouts }
+
+4 Initialize ℬ ← ℬ warm and ℬsucc ← successful( ℬwarm )
+
+5 for warmup step = 1 , . . . , 𝑊 do ◁ offline warmup 6 Sample s ∼ ℬ warm and query abase ∼ 𝜋 𝐾 
+
+> base
+
+(· | s)
+
+7 Draw ℬcritic ∼ (1 −𝜌 succ )ℬwarm + 𝜌 succ ℬsucc 
+
+8 Update actor via ℒwarm (Eq. (4.2)); update critics via TD using ℬcritic (Eq. (3.1)) 
+
+9 end for 
+
+10 for episode = 1 , 2, . . . do ◁ online improvement 11 for environment step 𝑡 do 
+
+12 Sample abase  
+
+> 𝑡
+
+∼ 𝜋 𝐾 
+
+> base
+
+(· | s𝑡 ); execute aexec  
+
+> 𝑡
+
+∼ 𝜋 res  
+
+> 𝜃
+
+(· | s𝑡 , abase  
+
+> 𝑡
+
+)
+
+13 end for 
+
+14 Add transitions to ℬ; if the episode succeeded, also add them to ℬsucc 
+
+15 for each gradient step do 
+
+16 Draw ℬcritic ∼ (1 −𝜌 succ )ℬ + 𝜌 succ ℬsucc ◁ success balancing 17 Update critics via TD using ℬcritic (Eq. (3.1)) 
+
+18 Draw ℬactor ∼ (1 −𝜌 succ )ℬ + 𝜌 succ ℬsucc ◁ success balancing 19 abase ∼ 𝜋 𝐾 
+
+> base
+
+(· | s); sample 𝑁 candidates a(𝑖 ) ∼ 𝜋 res  
+
+> 𝜃
+
+(· | s, abase )
+
+20 Keep top-𝑀 elites by critic value; refine via gradient ascent on 𝑄 𝜓 → a*
+
+21 end for 
+
+22 Update actor toward a* with the PA-RL distillation loss 
+
+23 end for 
+
+24 end for 
+
+25 return 𝜋 𝐾 
+
+> RL
+
+close to abase  
+
+> 𝑡
+
+(Section 5), such a bounded residual can prevent the policy from reaching higher-value actions. Predicting aexec  
+
+> 𝑡
+
+directly instead lets the base proposal anchor exploration while leaving the policy free to move beyond its immediate neighborhood. Crucially, the amount of movement around the proposed action can now be heterogeneous across states, whereas the additive approach would bound the movement by a fixed constant at all states. We then evaluate this action by a critic ensemble 
+
+{𝑄 𝜓 𝑗 (s𝑡 , aexec  
+
+> 𝑡
+
+)}𝑁 𝑗 =1 trained with temporal difference learning in Eq. (3.1). We discuss implementation details for this residual parameterization in Appendix B. 
+
+Overcoming the challenges introduced by minimal demonstrations. Given minimal demonstrations, few expert trajectories exist for initializing the learned critic and residual-actor. Moreover, autonomous rollouts from 𝜋 𝐾  
+
+> base
+
+may succeed only rarely, for example 2-5% of the time. Lastly, minimal demonstrations need not ensure that 𝜋 𝐾  
+
+> base
+
+contains optimal action in its support (Section 5). We now introduce key design choices to overcome these respective challenges.                                                                                         
+
+> 6Adaptation of Generalist Robot Policies with Minimal Data
+> LIBERO-Long 1 Demo
+> Task Zero-Shot BC DSRL Filt. BC DiceRL MiDAS
+> Alph. Soup + Cr. Cheese →Basket 0.0 12.7 ±1.212.0 ±2.014.0 ±2.098.0 ±2.099.3 ±1.2
+> Alph. Soup + Tom. Sauce →Basket 0.0 4.0 ±3.53.3 ±2.32.0 ±0.092.0 ±4.082.7 ±13 .3
+> Black Bowl →Bottom Drawer 0.0 22.7 ±6.428.7 ±4.228.7 ±10 .390.7 ±3.198.7 ±1.2
+> Book →Caddy 0.0 37.3 ±7.042.7 ±6.128.0 ±2.098.0 ±3.598.7 ±2.3
+> Both Moka Pots →Stove 0.0 13.3 ±3.114.7 ±4.619.3 ±7.074.7 ±9.576.0 ±14 .0
+> Cr. Cheese + Butter →Basket 0.0 34.0 ±9.228.0 ±2.068.0 ±2.088.7 ±2.396.0 ±0.0
+> Moka Pot →Stove 0.0 84.0 ±0.092.0 ±0.085.3 ±8.398.7 ±1.295.3 ±3.1
+> White Mug + Choc. Pudding 0.0 33.3 ±11 .745.3 ±6.442.0 ±4.097.3 ±4.696.7 ±5.8
+> White Mug + Plates 0.0 30.0 ±2.017.3 ±1.234.7 ±6.461.3 ±11 .679.3 ±11 .0
+> Yellow-White Mug →Microwave 0.0 64.0 ±2.050.7 ±4.668.0 ±7.293.3 ±3.189.3 ±8.1
+> Average 0.0 33.5 ±1.833.5 ±0.839.0 ±5.989.3 ±1.891.2 ±4.2
+
+RoboCasa 1 Demo 
+
+Task Zero-Shot BC DSRL Filt. BC MiDAS 
+
+Banana: Fridge Drawer → Shelf 0.0 13.3 ±3.1 12.7 ±2.3 19.3 ±3.1 93.3 ±7.0
+
+Hot Dog: Counter → Cabinet 0.0 29.3 ±1.2 20.0 ±10 .4 36.0 ±24 .0 100.0 ±0.0
+
+Mug → Coffee Machine + Start 0.0 24.0 ±8.7 24.7 ±4.2 46.7 ±6.2 74.7 ±20 .0
+
+Cup + Bowl → Dishwasher + Close † 0.0 0.0 ±0.0 0.0 ±0.0 0.0 ±0.0 0.0 ±0.0
+
+Average 0.0 22.2 ±3.4 19.1 ±3.2 34.0 ±10 .6 89.3 ±8.7
+
+Table 1: One demonstration adaptation results measured over 3 seeds. Success rates (%) are mean ± std. The zero-shot success rate of the pre-trained policy is 0% on every task. DiceRL is evaluated on LIBERO-Long only. 
+
+> †
+
+Excluded from the RoboCasa average. 
+
+1) Offline warmup: residual actor initialization and critic calibration from few demonstrations. 
+
+A randomly initialized residual actor would produce actions unrelated to the base policy, making early exploration unstable. We therefore construct a “warmup” buffer ℬwarm from the 𝐾 demonstrations in 
+
+𝒟 𝐾  
+
+> demo
+
+together with a small number of autonomous rollouts from 𝜋 𝐾  
+
+> base
+
+that may or may not be successful. For each state in this buffer, we query the frozen base policy to obtain abase ∼ 𝜋 𝐾 
+
+> base
+
+(· | s), and train the residual actor to reproduce this base proposal: 
+
+ℒwarm (𝜃 ) = E(s,abase )∼ℬ warm [︁⃦⃦ tanh( 𝜇 𝜃 (s, abase )) − abase ⃦⃦ 22]︁ . (4.2) 
+
+This initialization makes the residual actor approximately preserve the behavior of 𝜋 𝐾 
+
+> base
+
+: Online RL also requires a critic that can guide improvement from the start. While prior work can pretrain such critics from offline data [22, 23, 28, 44], our setting has no additional offline data beyond the few demonstrations and autonomous rollouts from 𝜋 𝐾 
+
+> base
+
+. We therefore draw inspiration from Zhou et al. [44] and train the critic on the warmup buffer ℬwarm using TD learning (Eq. (3.1)). Importantly, this critic is trained on the state-action distribution induced by 𝜋 𝐾 
+
+> base
+
+, making it calibrated to the regions where online improvement begins and limiting forgetting. 
+
+2) Success Balancing: overcoming limited initial policy performance. Since the base policy may only succeed 2-5% in some cases after Stage I, we employ success balancing to amplify the sparse reward signal during both the warmup and online improvement phases. To do so, we maintain a replay buffer 
+
+ℬ containing all collected trajectories and a success buffer ℬsucc containing only successful trajectories, 
+
+> 7Adaptation of Generalist Robot Policies with Minimal Data
+
+both initialized with the given 𝐾 demonstrations. Critic minibatches are sampled from a mixture of these buffers, oversampling ℬsucc to prevent the value function from being dominated by failed rollouts and to guide policy improvement toward reward-bearing regions. Details are in Appendix D.3. 
+
+3) Residual policy training with PA-RL [27]. Lastly, Section 5 reveals the need for actions that go beyond the support of the base policy. While many value-based RL algorithms can provide this, we opt for “policy-agnostic” PA-RL approach, which we apply to the residual actor. Having a policy-agnostic parameterization allows us to easily extend our method to more sophisticated residual policies like a minimal-iterative-policy [31], while also being competitive with other common policy extraction approaches [15, 16]. We implement this by sampling a single proposal action abase  
+
+> 𝑡
+
+from the base policy, and then applying PA-RL style Best-of-N distillation objective with an action gradient to a batch of 𝑁 actions a(𝑖 ) 
+
+> 𝑡
+
+∼ 𝜋 res  
+
+> 𝜃
+
+(· | s𝑡 , abase  
+
+> 𝑡
+
+)
+
+sampled from the residual (See Appendix D.1 for more details). Importantly, sampling requires only asingle expensive forward pass through 𝜋 𝐾  
+
+> base
+
+while sampling the remaining actions from the lightweight residual policy for diversity. 
+
+Experimental setup. We use 𝜋 0.5 [20] as the pre-trained base policy 𝜋 base and run MiDAS with 𝐾 =1 
+
+demonstration only on two simulation benchmarks: a) LIBERO-Long [24], which studies long-horizon language-conditioned manipulation, and b) RoboCasa-365 [29], which studies long-horizon household manipulation in diverse kitchen scenes (Details in Appendix C). By ablating different components of our approach, we aim to identify the core mechanisms that make MiDAS work well. 
+
+Experimental Results. Table 1 shows the performance of MiDAS against two representative alternatives: 
+
+Filtered BC , which fine-tunes 𝜋 𝐾  
+
+> base
+
+on successful online rollouts and sharpens modes the policy already reaches; and Diffusion-Steering RL (DSRL) [39], which steers within the action distribution of 𝜋 𝐾  
+
+> base
+
+by modifying its initial noise. On LIBERO, we additionally compare against DICE-RL [36], a closely related residual RL method that, like MiDAS, learns value-guided corrections on top of a frozen base policy, but uses a TD3+BC-style policy objective [14] that regularizes the residual toward the base action, rather than the PA-RL policy extraction [27] used by MiDAS. We see that MiDAS is able to recover strong policies from the one-demonstration warm-start across all tasks. Filtered BC and DSRL are less consistent, especially when warm-start success is extremely low ( < 20% ), while DICE-RL also enables successful autonomous improvement and is competitive with MiDAS on LIBERO. For additional discussion and details refer to Appendix C 
+
+Stage I is necessary for bootstrapping sparse-reward online learning. We ablate Stage I by running the full MiDAS online learning procedure directly from the zero-shot base policy. This variant fails to learn, achieving 0% success throughout training. Stage I is therefore critical for moving the policy into a task-relevant region of behavior from which sparse-reward online learning can bootstrap. MiDAS: Key Design Decisions • Two-stage recipe: LoRA BC, then residual RL. Stage I performs LoRA behavior cloning on the 𝐾 
+
+demonstrations 𝒟 𝐾  
+
+> demo
+
+to obtain a coarse prior 𝜋 𝐾 
+
+> base
+
+; Stage II freezes 𝜋 𝐾  
+
+> base
+
+and runs sparse-reward online RL on a lightweight residual actor-critic on top of it. • Three ingredients make Stage II work. (1) an offline warmup for calibrating the residual actor and critic; (2) success balancing the batch for critic updates; and (3) PA-RL residual updates that push beyond the base policy’s support. 
+
+## 5. What Enables MiDAS to Learn Effectively? 
+
+Previously, we motivated MiDAS with the premise that limited demonstrations can seed behavior close enough to success to seed online improvement. In this section, we present detailed empirical evidence    
+
+> 8Adaptation of Generalist Robot Policies with Minimal Data
+> Figure 3: Performance of different representations in online adaptation. We see that (a) No pre-training, in the form of a Resnet backbone fine-tuned from scratch, collapses; (b) Generic visual pre-training, in the form of frozen DINO features helps, but takes longer to converge; (c) Pre-trained VLA representations of 𝜋 0.5 are highly sample efficient, consistent with the hypothesis that action-aligned pre-training can substantially improve the sample efficiency of downstream online adaptation.
+
+identifying what sources of supervision from the demonstration data enable MiDAS to learn successful policies: First, the few-demonstration BC finetuning of the pre-trained VLA provides actions which follow task instructions coarsely, reducing the burden of exploration. Second, the pre-trained VLA provides visual representations, enabling efficient learning without direct state access. Finally, online reinforcement fills in the gaps in precise-control, which necessarily requires value-guided online updates to finetuning actions beyond what 𝜋 𝐾  
+
+> base
+
+can reliably produce on its own. Additional ablation experiments for MiDAS are deferred to Appendix E and experiments to Appendix H. 
+
+1) Pretraining and demonstrations enable learning of coarse task-specific behaviors: Before online adaptation, we ask whether 𝐾 =1 can recover task-anchored behavior. Figure 4 compares 𝜋 1base to three approaches: a) a flow-matching policy trained on pre-trained ResNet features, which tests whether generic visual pretraining is sufficient; b) a flow-matching policy trained on privileged state inputs, which tests whether near-optimal state information alone enables recovery of task-anchored behavior; and 
+
+c) the zero-shot pre-trained policy 𝜋 base , which tests whether pretraining alone identifies the task. All three perform poorly: the ResNet flow-policy achieves non-zero success on only 3/10 LIBERO-Long tasks, while the privileged-state policy and 𝜋 base obtain 0% success. Together, these failures suggest that MDA requires both task grounding from the demonstration and behavior-aware representations from pretraining; privileged state inputs alone do not recover this behavior, suggesting that the benefit of pretraining goes beyond improved state representation. 
+
+Figure 4: Performance of different task representations for behavior cloning 
+
+Qualitative rollouts in Fig. 2 show what 𝜋 1base recovers despite its low success. The policy often approaches the correct object, attempts the correct subtask sequence, and follows a trajectory resembling the demonstration. Its failures are primarily in reliable execution: contact, alignment, grasping, and recovery remain brittle. Thus, pretraining and one demonstration learn coarse task behavior, but online adaptation is needed for reliable control. 
+
+2) Pre-trained representations simplify online adaptation and substantially improve sample effi-ciency: The preceding results show that large-scale pre–training, together with minimal demonstrations, anchors the search for task-relevant behavior. We now find that the representations provided to the residual policy also determine how efficiently online RL can exploit this initialization. Figure 3 isolates this 
+
+> 9Adaptation of Generalist Robot Policies with Minimal Data
+
+effect by varying the representation used by the residual learner. We compare (i) a ResNet trained from scratch during online RL, representing no visual pretraining; (ii) frozen DINO features [8], representing generic large-scale self-supervised visual pretraining; and (iii) representations from the pretrained VLA backbone. Within the VLA representations, we further compare 𝜋 base , 𝜋 1base , and 𝜋 50 base to assess the effect of increasing amounts of task-specific data. Without visual pretraining, MiDAS fails to converge at 𝐾 = 1 , indicating that sparse interaction is insufficient to simultaneously learn task-relevant visual features and residual action corrections. Generic visual pretraining with frozen DINO substantially improves learning, but still requires considerably more interaction than VLA features, suggesting that generic visual invariances alone are insufficient for sample-efficient adaptation. In contrast, representations from the pretrained 𝜋 0.5 backbone enable rapid improvement throughout training. The similar performance of 𝜋 base , 𝜋 1base and 𝜋 50 base on two of the three tasks indicates that task-specific fine-tuning provides little additional improvement to the representations used for online adaptation. Although we study a single VLA, these results suggest that representations learned through action-aligned pre-training can substantially improve the sample efficiency of downstream online adaptation.         
+
+> (a) Trajectory critical state (b) UMAP of actions
+> Figure 5: MiDAS reaches actions outside the effective sup-port of 𝜋 𝐾
+> base .Filtered BC and DSRL remain near samples from
+> 𝜋 𝐾
+> base and fail; MiDAS selects an action in a disjoint region with higher 𝑄 *and succeeds.
+
+3) Value-based RL learns fine-grained control actions beyond the base policy’s prior: The pre-vious analysis showed that 𝜋 𝐾  
+
+> base
+
+often produces task-relevant behavior, but solves the task incon-sistently. We ask: do the right actions already lie within its support but are not reliably selected, or do they fall outside its effective support? We test this by comparing MiDAS to the baselines introduced in Section 4. We examine a critical state in a LIBERO-Long rollout in Fig. 5 to make the distinction between MiDAS and the baselines. At this critical state, actions from Filtered BC and DSRL remain con-centrated near samples from 𝜋 1base and fail, while MiDAS selects an action in a disjoint region of the action space and succeeds. Given the demerits of UMAP based visualization, we also compute the distance between various action samples in the robot’s chunked action space in Table 2.           
+
+> Method #Samples Min. Dist. to Base Cloud
+> Base 33 0.0142 (within cloud) FBC 33 0.1122 DSRL 33 0.0244 MiDAS 33 4.5371
+
+Table 2: Minimum Distance of action clouds of various methods from the base action cloud. 
+
+We see that the distance of MiDAS is substantially larger compared to DSRL and Filtered-BC, validating that the UMAP visualization in Fig. 5 remains faithful even in the high-dimensional action space. The fine-grained control missing from 𝜋 1base in this case does not lie within the base policy’s action support; sharp-ening or steering within this support cannot reach it. Breaking out of this support, therefore, requires on-line adaptation that can expand the action distribution beyond the effective support of 𝜋 1base and MiDAS is able to do so by learning value guided corrections. 
+
+4) MiDAS transfers to the real world. We finally evaluate whether minimal-data adaptation is tractable in the real world using a bimanual YAM platform. We consider two pick-and-place tasks: (T1) placing a 
+
+> 10 Adaptation of Generalist Robot Policies with Minimal Data
+
+Table 3: One demonstration real-world adaptation results. Success rates (%) are shown for BC and MiDAS computed over 15 rollouts varying the position and orientation of the target objects in a mix of ID/OOD settings.         
+
+> 1 Demo
+> Task BC MiDAS
+> Real World
+> Placing a green block in the right container and a blue block in the left container 40.0 67.0
+> Placing a knife and a donut on a plate 27.0 80.0 Average 33.5 73.5
+
+green block in the right container and a blue block in the left container, and (T2) placing a knife and a donut on a plate (Figure 6). In both tasks, we use 𝜋 0.5 [20] as 𝜋 base and apply the same MiDAS protocol with a single demonstration ( 𝐾 =1 ); implementation details are deferred to Appendix I. On T1 , the one demonstration policy 𝜋 1base already reaches 40% success, which we hypothesize reflects overlap with the pretraining distribution of 𝜋 0.5. Online RL further improves success to 67% and produces qualitatively new corrective behaviors not observed in base-policy rollouts (Appendix I). On the harder T2 task, where the warm-start policy is substantially weaker, online adaptation improves success from 27% to 80% after 
+
+5-6 hours of autonomous interaction. These results show that MiDAS can be effective on real hardware, even when the one demonstration warm-started policy is not very reliable.  
+
+> Figure 6: Representative real-world rollouts. Rollouts illustrating task progress on the knife-and-donut task (top) and the block placement task (bottom).
+
+Key Findings • Expert demonstrations induce coarse task-solving behavior. Behavior cloning on minimal demon-strations instills rough task solving behavior into the pre-trained policy. • Pre-trained representations give strong priors for adaptation. The VLM-head’s features, used as the state abstraction for control and value learning, enable rapid online adaptation. • Value-based RL expands the base policy’s action support. PA-RL extraction from an online-learned value function adds fine-grained corrections beyond the base policy’s action support. 
+
+## 6. Evaluating the Generalization and Robustness of MiDAS 
+
+Above, we exposed how the pre-trained policy, demonstrations, and online-improvement enable MiDAS to improve performance from the few initial conditions shown in the demonstrations. Here, we ask: can MiDAS generalize beyond the narrow support of initial states, and if so, how? To test generalization, we consider two categories of shifts: (a) observation shifts , which change task-   
+
+> 11 Adaptation of Generalist Robot Policies with Minimal Data
+> Figure 7: Performance of BC and online RL under observation and state shifts. Observation Shifts (Visual/Language) :Pre-trained representations preserve performance under visual and language changes. State Shifts (Swap/Shape/Object) :Online RL improves robustness to moderate shifts but performance degrades under larger shifts.
+
+irrelevant inputs such as object appearance (color, texture) or language phrasing (instruction paraphrases), and (b) state shifts , which change dynamically relevant quantities such as starting positions, object shapes, or object instances. We ask: how does MiDAS generalize (1) to observation shifts in vision and language? (2) to shifts in state like position, shape, and object identity? and (3) : can autonomous learning alone improve generalization to larger state shifts? As in Section 5, we evaluate on the 10 long-horizon tasks in LIBERO-Long. For visual, shape, and object-instance shifts, we use the perturbation definitions from LIBERO-PRO [43]. For position shifts, we perturb target objects at three levels: low (5 cm / 0.1 rad), medium (10 cm / 0.15 rad), and high (20 cm / 0.25 rad). (Further details in Appendix C.2) 
+
+(Q1) Observation-level robustness is inherited from the frozen vision-language-model (VLM) backbone. We first test whether minimal-data adaptation preserves robustness to semantic input changes, rather than merely fitting the visual and language conditions seen in the demonstrations. Under visual shifts such as color and texture changes (Fig. 7), 𝜋 𝐾  
+
+> base
+
+(𝐾 =1 ) retains most of its in-distribution performance, and the adapted policy 𝜋 1RL shows a similar retention pattern despite using only a lightweight residual actor. The same holds under language paraphrases (Fig. 7). Since both policies share the same frozen VLM backbone, and the RL module adds little perceptual or linguistic capacity, this robustness is best explained by invariances already present in the pre-trained representation. Thus, online RL improves control without sacrificing observation-level generalization. 
+
+(Q2) Generalization to state shifts depends on whether new behavior is required. We next evaluate shifts that require the policy to change its actions. Figure 7, shows that 𝜋 1RL improves over 𝜋 1base under some state shifts, especially shape changes where the required grasp is similar. This result can simply be explained by the fact that the policy just needs to execute the same behavior in a different part of the state space. However, performance under both drops sharply under object swaps and object changes: changes in object affordance or placement can require distinct manipulation strategies, which are difficult to infer from one demonstration and online interaction around it. Table 4 summarizes the results for target object swap and shape change perturbations.(Further details about the implementation can be found in Appendix C.3). 
+
+> 12
+
+Adaptation of Generalist Robot Policies with Minimal Data 
+
+𝜋 1base 𝜋 1RL 
+
+Task ID OOD ID OOD Both Moka Pots → Stove 13.3 ±3.1 0.0 ±0.0 76.0 ±14.0 0.0 ±0.0 
+
+Cr. Cheese + Butter → Basket 34.0 ±9.2 0.0 ±0.0 96.0 ±0.0 0.0 ±0.0 
+
+Moka Pot → Stove 84.0 ±0.0 0.0 ±0.0 95.3 ±3.1 0.0 ±0.0 
+
+White Mug + Choc. Pudding 33.3 ±11.7 0.0 ±0.0 96.7 ±5.8 0.0 ±0.0 
+
+White Mug + Plates 30.0 ±2.0 0.0 ±0.0 79.3 ±11.0 0.0 ±0.0 
+
+Average 38.9 ±3.6 0.0 ±0.0 88.7 ±5.9 0.0 ±0.0 
+
+(a) Object swap.                                  
+
+> 𝜋 1base 𝜋 1RL
+> Task ID OOD ID OOD Black Bowl →Bottom Drawer 22.7 ±6.4 20.7 ±6.4 98.7 ±1.2 90.7 ±8.1
+> Yellow-White Mug →Microwave 64.0 ±2.0 4.7 ±3.1 89.3 ±8.1 20.7 ±13.3
+> Alph. Soup + Cr. Cheese →Basket 12.7 ±1.2 0.0 ±0.0 99.3 ±1.2 2.7 ±4.6
+> Alph. Soup + Tom. Sauce →Basket 4.0 ±3.5 0.0 ±0.0 82.7 ±13.3 2.0 ±3.5
+> Average 25.8 ±0.8 6.3 ±1.0 92.5 ±5.4 29.0 ±5.8
+
+(b) Shape change.            
+
+> 𝜋 1base 𝜋 1RL
+> Task ID OOD ID OOD Book →Caddy 37.3 ±7.0 0.0 ±0.0 98.7 ±2.3 2.0 ±2.0
+
+(c) Object change. 
+
+Table 4: Per-task success rate (%) under state-shift perturbations. (a) Object swap: exchanging the initial positions of two scene objects drops both 𝜋 1base and 𝜋 1RL to 0% despite strong ID performance. (b) Shape change: replacing the target with a geometrically different variant of the same category preserves performance when grasp affordances transfer, but degrades sharply when the required contact geometry changes. (c) Object change: replacing the target with a categorically different object defeats both policies, as the new affordances require manipulation strategies outside the adapted policy’s behavioral support. 
+
+Figure 8: Curriculum closes the gap. Progressively widening the reset distribution during online RL re-covers most of the position-generalization gap with 
+
+𝜋 50 base without additional demos. 
+
+(Q3) Broader coverage, either from demonstrations or curriculum, expands the generalization boundary. 
+
+Lastly, we ask: can autonomous adaptation ensure robust-ness to large perturbation shifts that are outside the sup-port of the reset distribution, provided that they do not re-quire fundamentally new behavior (in view of Q2)? In Ap-pendix G, we show that naively increasing the breadth of demonstration can improve robustness. In Appendix F, we describe a curriculum that gradually increases the width of the distribution, and achieves similar robustness to a policy trained on 50 demonstrations. Fig. 8 summarizes our results and shows that by gradually widening the re-set distribution with 𝜋 1
+
+RL-Curriculum , we are able to recover most of the performance of 𝜋 50 
+
+base under large perturbation shifts. Generalization of MiDAS • MiDAS generalizes to observation shifts via the frozen VLM backbone and to state shifts requiring no new behavior via online RL. • Shifts demanding new grasps or strategies remain out of reach, but a reset-distribution curriculum 
+
+extends coverage to larger position and orientation shifts. 
+
+## 7. Related Work 
+
+Generalist robot policies and VLAs. Large-scale robot pretraining has enabled generalist policies that can condition on language and visual observations to perform diverse manipulation tasks. Prior work has introduced transformer-based robot policies and vision-language-action models trained on broad robot and web-scale data, including RT-1 [6], RT-2 [5], Octo [37], 𝜋 0 [4], 𝜋 0.5 [20], world-action models [41], and efficient VLA fine-tuning methods [21]. These models provide reusable perceptual 
+
+13 Adaptation of Generalist Robot Policies with Minimal Data 
+
+representations and broad action priors, making them natural candidates for fast downstream adaptation. However, despite this progress, current generalist policies are still not reliable zero-shot learners in new environments: they may fail to reach sparse rewards or visit too narrow a set of task-relevant states for autonomous learning to bootstrap. In contrast, we study whether such pre-trained policies can be made adaptable from minimal task-specific supervision. 
+
+Few-shot robot imitation and adaptation. A complementary line of work studies learning from very small numbers of demonstrations. One-shot and few-shot imitation learning methods [12, 13] show that robots can infer new tasks from one or a few examples, often through meta-learning or in-context task conditioning [30]. Other approaches study rapid adaptation from short demonstrations [17] or in-context imitation policies [38]. While appealing in theory, few shot and in-context imitations suffer from two structural limitations. First, context-conditioned policies are known to suffer form causal confusion or are prone to shortcut features [9], and evidence from large-language-model literature shows that task-specific fine-tuning often outperforms in-context learning [25]. Second, and more fundamentally, these methods do not have any mechanism for autonomously improving from their own experience. Motivated by these two observations, we study the MDA regime. With very few demonstrations for specifying the task, the MDA regime uses them as a scaffold to make autonomous interaction tractable and analyzes the components enabling this tractability. 
+
+Online and residual RL for robot policy adaptation. Online reinforcement learning and offline-to-online methods provide tools for improving robot policies after deployment. Prior work has studied offline RL pretraining [23], calibrated offline-to-online fine-tuning [28], efficient online RL with offline data [3], imitation-bootstrapped RL [19], and policy-agnostic RL for fine-tuning diverse policy classes [27]. More closely related, recent methods use RL to improve expressive policies or pre-trained robot policies, including diffusion-policy steering [39], diffusion policy optimization [34], RL-token adaptation [40], distribution-contractive fine-tuning [36], and residual RL for refining imitation policies [1, 2, 11]. These methods show that value-guided online improvement can refine pre-trained or imitation-learned policies, given access to 10-100 expert demonstrations. MiDAS builds on this direction, but focuses on the minimal-data setting where only one or a few demonstrations are available. Rather than assuming broad offline data or a strong initial policy, MiDAS first uses few-demonstration behavior cloning to make task-relevant behavior reachable, then freezes the pre-trained backbone and trains a lightweight residual actor with value-based RL to learn corrective actions beyond the effective support of the few-demonstration policy. 
+
+## 8. Future Work 
+
+Future work should study how to make exploration more effective. Our results show that a single demonstration can anchor exploration around a narrow tube of task-relevant behavior, within which autonomous RL can improve reliably. However, learning qualitatively new behaviors or reaching distinct behavioral modes remains substantially harder. Expanding the reset distribution provides one mechanism for broadening exploration, but our curriculum results also show that performance degrades as this distribution widens, and that reset expansion cannot recover behaviors that lie outside the support of the initial policy. This suggests that autonomous improvement will require multiple forms of supervision to work together, including demonstrations, reset curricula, language-based steering, and reward signals. Future work can characterize how these sources can be combined to discover new behavior while balancing human effort, computational cost, interaction efficiency, and final-policy robustness. Second, MDA provides a setting for understanding what demonstrations are actually needed for. Given one demonstrated behavior, online RL can robustify and extend that behavior over a surrounding region 
+
+> 14 Adaptation of Generalist Robot Policies with Minimal Data
+
+of the task distribution, but there is an upper bound to what can be recovered from this initialization alone. This raises the question of when additional demonstrations become necessary: whether one demonstration is required for each distinct behavioral mode, what constitutes a mode in robot control, and which variations RL can generalize across without further task-specific supervision. The answer may also depend on how the demonstration is incorporated. We use behavior cloning followed by a memory-efficient residual policy, which may not extract all of the behavior that one trajectory makes available. More expressive adaptation, including larger task-specific modules or full-policy fine-tuning, may make better use of the same demonstration, but introduces different tradeoffs in compute, memory, stability, and sample efficiency. Third, it remains important to determine how broadly the MDA regime extends beyond the behaviors studied here. Our experiments primarily consider pick-and-place tasks that are plausibly well represented in the pretraining distribution of 𝜋 0.5 (and other generalist policies of today). It is therefore unclear whether the same interaction between pretraining, minimal demonstrations, and autonomous RL will hold when adaptation requires greater policy capacity or more substantial behavioral change. Future work should test this regime across new embodiments and grippers, dexterous and precision-critical manipulation, assembly, tool use, and longer-horizon tasks. These settings can reveal whether the present findings reflect a general property of pretrained robot policies or a regime that is currently limited to behaviors already well supported by pretraining. Finally, MDA exposes a distinction between memorizing task-specific behavior and generalizing across deployment variation. Our results suggest that different components of the pipeline support different forms of robustness: pretrained visual representations provide invariance to some observation-level changes, while demonstrations and online interaction determine which task-relevant states and behaviors the policy can reliably handle. Autonomous interaction therefore does not imply broader generalization by itself; the resulting robustness depends on the distribution of states encountered and the behaviors already available to the policy. Future work should characterize which forms of generalization arise from pretraining, which must be induced through task-specific demonstrations or online interaction, and how these components should be balanced to obtain policies that both adapt efficiently and generalize beyond the conditions encountered during adaptation. 
+
+## Acknowledgements 
+
+We would like to thank Shashwat Saxena, Zheyuan Hu, Max Sobol Mark and Sarvesh Patil for informative discussions. We thank the members of the CMU Maxlab and CMU AIRe lab for feedback and support. AK acknowledges funding from Office of Naval Research under grant number N00014-24-1-2206 and support from Toyota Research Institute U3.0 for purchasing hardware. We thank the Babel cluster at CMU and TPU resources from Google Cloud for computing support. 
+
+> 15 Adaptation of Generalist Robot Policies with Minimal Data
+
+## References 
+
+[1] Lars Ankile, Anthony Simeonov, Idan Shenfeld, Marcel Torne, and Pulkit Agrawal. From imitation to refinement – residual rl for precise assembly, 2024. URL https://arxiv.org/abs/2407.16677 .[2] Lars Ankile, Zhenyu Jiang, Rocky Duan, Guanya Shi, Pieter Abbeel, and Anusha Nagabandi. Residual off-policy rl for finetuning behavior cloning policies, 2025. URL https://arxiv.org/abs/2509. 19301 .[3] Philip J. Ball, Laura Smith, Ilya Kostrikov, and Sergey Levine. Efficient online reinforcement learning with offline data, 2023. URL https://arxiv.org/abs/2302.02948 .[4] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. 𝜋 0: A vision-language-action flow model for general robot control, 2026. URL https://arxiv.org/abs/2410.24164 .[5] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Xi Chen, Krzysztof Choromanski, Tianli Ding, Danny Driess, Avinava Dubey, Chelsea Finn, Pete Florence, Chuyuan Fu, Montse Gon-zalez Arenas, Keerthana Gopalakrishnan, Kehang Han, Karol Hausman, Alexander Herzog, Jasmine Hsu, Brian Ichter, Alex Irpan, Nikhil Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Lisa Lee, Tsang-Wei Edward Lee, Sergey Levine, Yao Lu, Henryk Michalewski, Igor Mordatch, Karl Pertsch, Kanishka Rao, Krista Reymann, Michael Ryoo, Grecia Salazar, Pannag Sanketi, Pierre Sermanet, Jaspiar Singh, Anikait Singh, Radu Soricut, Huong Tran, Vincent Vanhoucke, Quan Vuong, Ayzaan Wahid, Stefan Welker, Paul Wohlhart, Jialin Wu, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe Yu, and Brianna Zitkovich. Rt-2: Vision-language-action models transfer web knowledge to robotic control, 2023. URL https://arxiv.org/abs/2307.15818 .[6] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana Gopalakrishnan, Karol Hausman, Alex Herzog, Jasmine Hsu, Julian Ibarz, Brian Ichter, Alex Irpan, Tomas Jackson, Sally Jesmonth, Nikhil J Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Kuang-Huei Lee, Sergey Levine, Yao Lu, Utsav Malla, Deeksha Manjunath, Igor Mordatch, Ofir Nachum, Carolina Parada, Jodilyn Peralta, Emily Perez, Karl Pertsch, Jornell Quiambao, Kanishka Rao, Michael Ryoo, Grecia Salazar, Pannag Sanketi, Kevin Sayed, Jaspiar Singh, Sumedh Sontakke, Austin Stone, Clayton Tan, Huong Tran, Vincent Vanhoucke, Steve Vega, Quan Vuong, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe Yu, and Brianna Zitkovich. Rt-1: Robotics transformer for real-world control at scale, 2023. URL https://arxiv.org/abs/2212.06817 .[7] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh, Daniel Ziegler, Jeffrey Wu, Clemens Winter, Chris Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya Sutskever, and Dario Amodei. Language models are few-shot learners. In H. Larochelle, M. Ranzato, R. Hadsell, M.F. Balcan, and H. Lin, editors, Advances in Neural Information Processing Systems , volume 33, pages 1877–1901. Curran Associates, Inc., 2020. URL https://proceedings.neurips.cc/paper_ files/paper/2020/file/1457c0d6bfcb4967418bfb8ac142f64a-Paper.pdf .
+
+> 16 Adaptation of Generalist Robot Policies with Minimal Data
+
+[8] Mathilde Caron, Hugo Touvron, Ishan Misra, Hervé Jégou, Julien Mairal, Piotr Bojanowski, and Armand Joulin. Emerging properties in self-supervised vision transformers, 2021. URL https: //arxiv.org/abs/2104.14294 .[9] Pim De Haan, Dinesh Jayaraman, and Sergey Levine. Causal confusion in imitation learning. 
+
+Advances in Neural Information Processing Systems , 32, 2019. [10] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. BERT: Pre-training of deep bidirectional transformers for language understanding. In Jill Burstein, Christy Doran, and Thamar Solorio, editors, Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers) ,pages 4171–4186, Minneapolis, Minnesota, June 2019. Association for Computational Linguistics. doi: 10.18653/v1/N19-1423. URL https://aclanthology.org/N19-1423/ .[11] Perry Dong, Qiyang Li, Dorsa Sadigh, and Chelsea Finn. Expo: Stable reinforcement learning with expressive policies, 2026. URL https://arxiv.org/abs/2507.07986 .[12] Yan Duan, Marcin Andrychowicz, Bradly C. Stadie, Jonathan Ho, Jonas Schneider, Ilya Sutskever, Pieter Abbeel, and Wojciech Zaremba. One-shot imitation learning, 2017. URL https://arxiv. org/abs/1703.07326 .[13] Chelsea Finn, Tianhe Yu, Tianhao Zhang, Pieter Abbeel, and Sergey Levine. One-shot visual imitation learning via meta-learning, 2017. URL https://arxiv.org/abs/1709.04905 .[14] Scott Fujimoto and Shixiang Shane Gu. A minimalist approach to offline reinforcement learning, 2021. URL https://arxiv.org/abs/2106.06860 .[15] Scott Fujimoto, Herke van Hoof, and David Meger. Addressing function approximation error in actor-critic methods, 2018. URL https://arxiv.org/abs/1802.09477 .[16] Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine. Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor, 2018. URL https:// arxiv.org/abs/1801.01290 .[17] Siddhant Haldar, Jyothish Pari, Anant Rai, and Lerrel Pinto. Teach a robot to fish: Versatile imitation from one minute of demonstrations, 2023. URL https://arxiv.org/abs/2303.01497 .[18] Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. Lora: Low-rank adaptation of large language models, 2021. URL https: //arxiv.org/abs/2106.09685 .[19] Hengyuan Hu, Suvir Mirchandani, and Dorsa Sadigh. Imitation bootstrapped reinforcement learning, 2024. URL https://arxiv.org/abs/2311.02198 .[20] Physical Intelligence, Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury 
+
+> 17 Adaptation of Generalist Robot Policies with Minimal Data
+
+Zhilinsky. 𝜋 0.5: a vision-language-action model with open-world generalization, 2025. URL 
+
+https://arxiv.org/abs/2504.16054 .[21] Moo Jin Kim, Chelsea Finn, and Percy Liang. Fine-tuning vision-language-action models: Optimizing speed and success, 2025. URL https://arxiv.org/abs/2502.19645 .[22] Ilya Kostrikov, Ashvin Nair, and Sergey Levine. Offline reinforcement learning with implicit q-learning, 2021. URL https://arxiv.org/abs/2110.06169 .[23] Aviral Kumar, Anikait Singh, Frederik Ebert, Mitsuhiko Nakamoto, Yanlai Yang, Chelsea Finn, and Sergey Levine. Pre-training for robots: Offline rl enables learning new tasks from a handful of trials, 2023. URL https://arxiv.org/abs/2210.05178 .[24] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning, 2023. URL https://arxiv.org/ abs/2306.03310 .[25] Haokun Liu, Derek Tam, Mohammed Muqeeth, Jay Mohta, Tenghao Huang, Mohit Bansal, and Colin Raffel. Few-shot parameter-efficient fine-tuning is better and cheaper than in-context learning, 2022. URL https://arxiv.org/abs/2205.05638 .[26] Jianlan Luo, Zheyuan Hu, Charles Xu, You Liang Tan, Jacob Berg, Archit Sharma, Stefan Schaal, Chelsea Finn, Abhishek Gupta, and Sergey Levine. Serl: A software suite for sample-efficient robotic reinforcement learning, 2025. URL https://arxiv.org/abs/2401.16013 .[27] Max Sobol Mark, Tian Gao, Georgia Gabriela Sampaio, Mohan Kumar Srirama, Archit Sharma, Chelsea Finn, and Aviral Kumar. Policy agnostic rl: Offline rl and online rl fine-tuning of any class and backbone, 2024. URL https://arxiv.org/abs/2412.06685 .[28] Mitsuhiko Nakamoto, Yuexiang Zhai, Anikait Singh, Max Sobol Mark, Yi Ma, Chelsea Finn, Aviral Kumar, and Sergey Levine. Cal-ql: Calibrated offline rl pre-training for efficient online fine-tuning, 2024. URL https://arxiv.org/abs/2303.05479 .[29] Soroush Nasiriany, Sepehr Nasiriany, Abhiram Maddukuri, and Yuke Zhu. Robocasa365: A large-scale simulation framework for training and benchmarking generalist robots, 2026. URL https: //arxiv.org/abs/2603.04356 .[30] Norman Di Palo and Edward Johns. Keypoint action tokens enable in-context imitation learning in robotics, 2024. URL https://arxiv.org/abs/2403.19578 .[31] Chaoyi Pan, Giri Anantharaman, Nai-Chieh Huang, Claire Jin, Daniel Pfrommer, Chenyang Yuan, Frank Permenter, Guannan Qu, Nicholas Boffi, Guanya Shi, and Max Simchowitz. Much ado about noising: Dispelling the myths of generative robotic control, 2026. URL https://arxiv.org/ abs/2512.01809 .[32] Sarvesh Patil, Mitsuhiko Nakamoto, Manan Agarwal, Shashwat Saxena, Jesse Zhang, Giri Anantharaman, Cleah Winston, Chaoyi Pan, Douglas Chen, Nai-Chieh Huang, Zeynep Temel, Oliver Kroemer, Sergey Levine, Abhishek Gupta, Hongkai Dai, Paarth Shah, and Max Sim-chowitz. Ogpo: Sample efficient full-finetuning of generative control policies, 2026. URL 
+
+https://arxiv.org/abs/2605.03065 .
+
+> 18 Adaptation of Generalist Robot Policies with Minimal Data
+
+[33] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, Gretchen Krueger, and Ilya Sutskever. Learning transferable visual models from natural language supervision, 2021. URL https://arxiv.org/ abs/2103.00020 .[34] Allen Z. Ren, Justin Lidard, Lars L. Ankile, Anthony Simeonov, Pulkit Agrawal, Anirudha Majumdar, Benjamin Burchfiel, Hongkai Dai, and Max Simchowitz. Diffusion policy policy optimization, 2024. URL https://arxiv.org/abs/2409.00588 .[35] Zhanyi Sun and Shuran Song. From prior to pro: Efficient skill mastery via distribution contractive rl finetuning. arXiv preprint arXiv:2603.10263 , 2026. [36] Zhanyi Sun and Shuran Song. From prior to pro: Efficient skill mastery via distribution contractive rl finetuning, 2026. URL https://arxiv.org/abs/2603.10263 .[37] Octo Model Team, Dibya Ghosh, Homer Walke, Karl Pertsch, Kevin Black, Oier Mees, Sudeep Dasari, Joey Hejna, Tobias Kreiman, Charles Xu, Jianlan Luo, You Liang Tan, Lawrence Yunliang Chen, Pannag Sanketi, Quan Vuong, Ted Xiao, Dorsa Sadigh, Chelsea Finn, and Sergey Levine. Octo: An open-source generalist robot policy, 2024. URL https://arxiv.org/abs/2405.12213 .[38] Vitalis Vosylius and Edward Johns. Instant policy: In-context imitation learning via graph diffusion, 2025. URL https://arxiv.org/abs/2411.12633 .[39] Andrew Wagenmaker, Mitsuhiko Nakamoto, Yunchu Zhang, Seohong Park, Waleed Yagoub, Anusha Nagabandi, Abhishek Gupta, and Sergey Levine. Steering your diffusion policy with latent space reinforcement learning, 2025. URL https://arxiv.org/abs/2506.15799 .[40] Charles Xu, Jost Tobias Springenberg, Michael Equi, Ali Amin, Adnan Esmail, Sergey Levine, and Liyiming Ke. Rl token: Bootstrapping online rl with vision-language-action models, 2026. URL 
+
+https://arxiv.org/abs/2604.23073 .[41] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, Ayaan Malik, Kyungmin Lee, William Liang, Nadun Ranawaka, Jiasheng Gu, Yinzhen Xu, Guanzhi Wang, Fengyuan Hu, Avnish Narayan, Johan Bjorck, Jing Wang, Gwanghyun Kim, Dantong Niu, Ruijie Zheng, Yuqi Xie, Jimmy Wu, Qi Wang, Ryan Julian, Danfei Xu, Yilun Du, Yevgen Chebotar, Scott Reed, Jan Kautz, Yuke Zhu, Linxi "Jim" Fan, and Joel Jang. World action models are zero-shot policies, 2026. URL https: //arxiv.org/abs/2602.15922 .[42] Tony Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn. Learning fine-grained bimanual manipulation with low-cost hardware, 2023. URL https://arxiv.org/abs/2304.13705 .[43] Xueyang Zhou, Yangming Xu, Guiyao Tie, Yongchao Chen, Guowen Zhang, Duanfeng Chu, Pan Zhou, and Lichao Sun. Libero-pro: Towards robust and fair evaluation of vision-language-action models beyond memorization, 2026. URL https://arxiv.org/abs/2510.03827 .[44] Zhiyuan Zhou, Andy Peng, Qiyang Li, Sergey Levine, and Aviral Kumar. Efficient online reinforce-ment learning fine-tuning need not retain offline data, 2025. URL https://arxiv.org/abs/ 2412.07762 .
+
+> 19 Adaptation of Generalist Robot Policies with Minimal Data
+
+# Appendices 
+
+## A. Action chunking 
+
+We apply action chunking [42], where sequences of actions 𝑢 𝑡 :𝑡 +𝐶 −1 are predicted and executed in open-loop. Let 𝑢 𝑡 ∈ R𝑑 denote a primitive robot action and let 𝐶 denote the chunk horizon. We define the action space used by the policy as 𝒜 ⊆ R𝐶 ×𝑑 , so that each action 𝑎 𝑡 ∈ 𝒜 corresponds to an entire action chunk, 𝑎 𝑡 = ( 𝑢 𝑡 , . . . , 𝑢 𝑡 +𝐶 −1). After sampling 𝑎 𝑡 ∼ 𝜋 (· | 𝑠 𝑡 ), the robot executes the chunk open-loop for 
+
+𝐶 environment steps before replanning from the resulting state 𝑠 𝑡 +𝐶 . For notational simplicity, we treat each chunk as a single action in the MDP, preserving the standard MDP notation above. When using chunked actions, the reward associated with a transition is the discounted reward accumulated over the executed chunk, and bootstrapping occurs from 𝑠 𝑡 +𝐶 with discount 𝛾 𝐶 . Thus, unless stated otherwise, 𝑎 𝑡 denotes an action chunk and 𝑟 𝑡 denotes the reward accumulated over the executed chunk, with bootstrapping discount 𝛾 𝐶 .
+
+## B. Residual Policy Parameterization 
+
+For the state representation 𝑠 𝑡 , we use the output of the VLM head by taking a mean across all token positions. The residual actor is parameterized as a 3-layer MLP with a hidden dimension of 512 and ReLU activation. 
+
+## C. Simulation Experiment Details 
+
+We use the Libero and RoboCasa Benchmarks for our simulation experiments 
+
+C.1. Libero and RoboCasa Task Details 
+
+We evaluate on two simulation benchmarks: LIBERO-Long [24] and RoboCasa-365 [29]. Below we describe each benchmark and the specific tasks used. 
+
+LIBERO-Long. LIBERO-Long consists of 10 long-horizon, language-conditioned manipulation tasks performed by a fixed-base Franka Panda arm. Each task requires completing multiple subtasks in sequence (e.g., picking two objects and placing them in a container). The 10 tasks are: 1. Put both the alphabet soup and the tomato sauce in the basket 2. Put both the cream cheese box and the butter in the basket 3. Turn on the stove and put the moka pot on it 4. Put the black bowl in the bottom drawer of the cabinet and close it 5. Put the white mug on the left plate and put the yellow and white mug on the right plate 6. Pick up the book and place it in the back compartment of the caddy 7. Put the white mug on the plate and put the chocolate pudding to the right of the plate 8. Put both the alphabet soup and the cream cheese box in the basket 9. Put both moka pots on the stove 10. Put the yellow and white mug in the microwave and close it Each task has 50 human-teleoperated demonstrations available in the benchmark; we use only 𝐾 = 1 
+
+for adaptation in our main experiments. The environment provides two camera views: an agentview 
+
+third-person camera and a robot0_eye_in_hand wrist camera, both rendered at 224 × 224 pixels. The 
+
+> 20 Adaptation of Generalist Robot Policies with Minimal Data
+
+Table 5: One demonstration adaptation results measured over 3 seeds. Success rates (%) are mean ± std. Note that the zero-shot performance of the pre-trained policy is 0%. 
+
+1 Demo 
+
+Task Zero-Shot BC DSRL Filt. BC DiceRL MiDAS 
+
+LIBERO-Long 
+
+Alph. Soup + Cr. Cheese → Basket 0.0 12.7 ±1.2 12.0 ±2.0 14.0 ±2.0 98.0 ±2.0 99.3 ±1.2 
+
+Alph. Soup + Tom. Sauce → Basket 0.0 4.0 ±3.5 3.3 ±2.3 2.0 ±0.0 92.0 ±4.0 82.7 ±13.3 
+
+Black Bowl → Bottom Drawer 0.0 22.7 ±6.4 28.7 ±4.2 28.7 ±10.3 90.7 ±3.1 98.7 ±1.2 
+
+Book → Caddy 0.0 37.3 ±7.0 42.7 ±6.1 28.0 ±2.0 98.0 ±3.5 98.7 ±2.3 
+
+Both Moka Pots → Stove 0.0 13.3 ±3.1 14.7 ±4.6 19.3 ±7.0 74.7 ±9.5 76.0 ±14.0 
+
+Cr. Cheese + Butter → Basket 0.0 34.0 ±9.2 28.0 ±2.0 68.0 ±2.0 88.7 ±2.3 96.0 ±0.0 
+
+Moka Pot → Stove 0.0 84.0 ±0.0 92.0 ±0.0 85.3 ±8.3 98.7 ±1.2 95.3 ±3.1 
+
+White Mug + Choc. Pudding 0.0 33.3 ±11.7 45.3 ±6.4 42.0 ±4.0 97.3 ±4.6 96.7 ±5.8 
+
+White Mug + Plates 0.0 30.0 ±2.0 17.3 ±1.2 34.7 ±6.4 61.3 ±11.6 79.3 ±11.0 
+
+Yellow-White Mug → Microwave 0.0 64.0 ±2.0 50.7 ±4.6 68.0 ±7.2 93.3 ±3.1 89.3 ±8.1 
+
+Average 0.0 33.5 ±1.8 33.5 ±0.8 39.0 ±5.9 89.3 ±1.8 91.2 ±4.2 
+
+action space is 7-dimensional: 3D end-effector position, 3D end-effector rotation (axis-angle), and 1D gripper open/close. The episode horizon is 500 timesteps. The learning curves for all the tasks can be visualized in Fig. 9. 
+
+Libero-Long Results Discussion: We observe that MiDAS as well as Dice-RL [35] enable successful autonomous improvement over the one demonstration warm start. Dice-RL has better sample-efficiency over MiDAS on 5/10 tasks while under-performing in 1 and equivalent on the remaining 4. 
+
+DICE-RL. We implement DICE-RL [36] following the full set of design choices proposed in the original method, using the frozen VLM embedding as the state representation. DICE-RL is a particularly relevant comparison to MiDAS as it independently incorporates many of the ingredients we find important for stable minimal-data adaptation: a lightweight residual actor over a frozen base policy, demonstration data retained during online learning through offline data mixing, and value-based policy improvement. Beyond these shared ingredients, we retain DICE-RL’s multi-sample expectation training over 𝐾 policy samples for both the critic bootstrap and actor objective, and filtered TD3+BC regularization [14] that selectively allows value-improving deviations from the base policy. This provides a strong residual-RL baseline that differs from MiDAS primarily in how value estimates are used for policy improvement. 
+
+RoboCasa-365. RoboCasa-365 [29] provides long-horizon household manipulation tasks in diverse procedurally generated kitchen scenes. Unlike LIBERO, the robot is a mobile manipulator and tasks involve navigation, object retrieval, and multi-step interaction with kitchen appliances. We evaluate on four tasks: 1. Banana: Fridge Drawer → Shelf (PickPlaceFridgeDrawerToShelf ): Pick a banana from a fridge drawer and place it on a shelf. 2. Hot Dog: Counter → Cabinet (PickPlaceCounterToCabinet ): Pick a hot dog from the counter and place it in a cabinet. 3. Mug → Coffee Machine + Start (PrepareCoffee ): Place a mug under the coffee machine and press the start button. 4. Cup + Bowl → Dishwasher + Close (LoadDishwasher ): Load a cup and bowl into the dishwasher and close it.   
+
+> 21 Adaptation of Generalist Robot Policies with Minimal Data
+> Figure 9: Libero-Long Learning Curves for MiDAS with baseline comparison. Solid line shows mean across 3 seeds and shaded region denotes standard deviation.
+> Figure 10: RoboCasa-365 Learning Curves for MiDAS with baseline comparison. Solid line shows mean across 3 seeds and shaded region denotes standard deviation.
+
+Each task is instantiated in a specific kitchen layout and style that is fixed across training and evaluation. The environment provides two camera views: robot0_agentview_left and robot0_eye_in_hand ,rendered at 256 × 256 pixels. The action space is 7-dimensional for the first three tasks (3D end-effector position, 3D rotation, 1D gripper), with episode horizons varying between 500 and 800 timesteps depending on task complexity (except for LoadDishwashwer ). The learning curves for all the tasks can be visualized in Fig. 10. 
+
+Long Horizon Manipulation: Note that the LoadDishwasher task spans a horizon of 1100 timesteps and has an overall success rate of 0% across all baselines and MiDAS. This task shows the limitation of our proposed approach and provides motivation for future work to extend MiDAS to long-horizon, sparse-reward settings. 
+
+Shared observation and action details. In both benchmarks, the base policy ( 𝜋 0.5) receives 224 × 224 
+
+images after resizing with padding. Actions are temporally chunked: the policy outputs a chunk of 
+
+𝐶 = 10 primitive actions that are executed open-loop before replanning (see Appendix A). The residual learner receives images resized to 100 × 100 for computational efficiency, along with the base policy’s proposed action chunk. Evaluation uses 50 rollouts per task from the canonical initial state distribution. 
+
+> 22 Adaptation of Generalist Robot Policies with Minimal Data
+
+Details on environments. For all LIBERO tasks, we use a horizon of 500 environment steps. The policy acts in a chunk-level MDP: each decision emits an action chunk of length 10, so an episode contains at most 50 transitions. After collecting each trajectory, we perform 𝑁 × 𝑘 gradient steps sampled from the replay buffer, where 𝑁 is the number of transitions in the trajectory and 𝑘 is the update-to-data ratio ( 𝑘 = 30 for the critic and 𝑘 = 10 for the actor in our experiments). All training runs autonomously: episodes terminate on task success or a fixed timeout, and the simulator resets automatically, requiring no human intervention. Rewards use the simulator’s binary success check as a sparse reward, assigning −1
+
+to every chunk-level transition and 0 at success, with no dense shaping. Beyond the initial demonstrations, the only human input is the task specification itself. Each step in the training plots above indicate one gradient step for an online RL update. 
+
+C.2. Libero Pro Perturbation Details 
+
+We use the perturbation protocol from LIBERO-PRO to evaluate generalization under controlled distribu-tion shifts. LIBERO-PRO defines five perturbation axes, of which we use four (excluding task perturbation, which changes the goal itself). We also introduce position perturbations at three magnitudes to test spatial generalization. Not all perturbation types apply to all 10 tasks; LIBERO-PRO defines perturbations only for tasks where a given shift is meaningful. Below we describe each perturbation type along with the specific tasks used. 
+
+Observation-level perturbations. These change task-irrelevant aspects of the observation while pre-serving the underlying state and goal. • Visual (object appearance) (Fig. 7): Object colors, textures, and sizes are modified in the scene definition (e.g., an akita_black_bowl is replaced with a red or larger variant), while the task instruction and goal conditions remain unchanged. We evaluate on 5 tasks where LIBERO-PRO defines color or texture swaps that do not alter the object’s shape or grasp affordance: Both Moka Pots → Stove , Cr. Cheese + Butter → Basket , Moka Pot → Stove , White Mug + Choc. Pudding , White Mug + Plates .• Language (Fig. 7): The task instruction is replaced with a paraphrase that describes the same goal using different phrasing (e.g., “put both moka pots on the stove” → “place both moka pots on stove”). Object references and goal logic are preserved. We evaluate on all 10 LIBERO-Long tasks, as language paraphrases are defined for every task. 
+
+State-level perturbations. These change dynamically relevant quantities that may require different actions. LIBERO-PRO applies a single object-replacement perturbation per task, but the nature of the replacement varies: for some tasks the replacement changes only the object’s shape while preserving its category, for others it substitutes a different object category entirely, and for others the two scene objects swap positions. We group results by the type of change each replacement induces. • Object swap (Fig. 7): The initial positions of two objects are exchanged by swapping their spawn-region assignments in the scene definition. The policy must execute the task with objects in different spatial locations. We evaluate on the same 5 tasks as the visual perturbation: Both Moka Pots →
+
+Stove , Cr. Cheese + Butter → Basket , Moka Pot → Stove , White Mug + Choc. Pudding , White Mug + Plates .• Shape change (Fig. 7): Target object meshes are replaced with geometrically different variants of the same category (e.g., a taller mug or wider bowl). If the new shape preserves similar grasp 
+
+> 23 Adaptation of Generalist Robot Policies with Minimal Data
+
+affordances, the required manipulation strategy remains the same; otherwise the policy must adapt its contact behavior. We evaluate on 4 tasks where the LIBERO-PRO replacement alters the object geometry: Black Bowl → Bottom Drawer , Yellow-White Mug → Microwave , Alph. Soup + Cr. Cheese 
+
+→ Basket , Alph. Soup + Tom. Sauce → Basket .• Object change (Fig. 7): The target object is replaced with a different object category entirely, changing both visual appearance and manipulation affordances. We evaluate on 1 task where the replacement introduces a categorically different object: Book → Caddy .
+
+Position perturbation. We evaluate position generalization by displacing target objects from their canonical initial positions at three levels: • Low: 5 cm XY displacement, 0.1 radians yaw perturbation • Medium: 10 cm XY displacement, 0.15 radians yaw perturbation • High: 20 cm XY displacement, 0.25 radians yaw perturbation XY offsets are sampled uniformly within a disk of the specified radius. After applying perturbations, objects are settled under physics simulation and validated: the perturbed object must remain visible in the camera frame, stay within 2 cm of its settled z-height (no falling off surfaces), not collide with other scene objects, and maintain an upright orientation (local up-axis within 18 ∘ of the world vertical). Invalid samples are re-drawn for up to 50 attempts per episode. We evaluate position perturbation on 3 tasks: Alph. Soup + Tom. Sauce → Basket , Black Bowl → Bottom Drawer , Both Moka Pots → Stove . Perturbations are applied to the task-relevant target objects in each case (e.g., both moka pots, or the black bowl). 
+
+Evaluation protocol. All perturbation evaluations use 50 rollouts per task. For LIBERO-PRO perturba-tions (visual, language, swap, shape, object change), we evaluate from the perturbed initial configurations using the standard episode horizon. For position perturbations, we evaluate at each magnitude separately. Results are averaged across 3 seeds. Per-task breakdowns are provided in the tables below. 
+
+Visual perturbation results. Table 6 reports per-task success rates under visual (object appearance) perturbation. 
+
+𝜋 1base 𝜋 1RL 
+
+Task ID OOD ID OOD Both Moka Pots → Stove 13.3 ±3.1 6.0 ±2.0 76.0 ±14.0 58.7 ±33.5 
+
+Cr. Cheese + Butter → Basket 34.0 ±9.2 38.0 ±9.2 96.0 ±0.0 98.7 ±2.3 
+
+Moka Pot → Stove 84.0 ±0.0 58.7 ±5.0 95.3 ±3.1 93.3 ±4.2 
+
+White Mug + Choc. Pudding 33.3 ±11.7 30.0 ±10.4 96.7 ±5.8 80.0 ±11.1 
+
+White Mug + Plates 30.0 ±2.0 24.0 ±2.0 79.3 ±11.0 79.3 ±13.6 
+
+Average 38.9 ±3.6 31.3 ±4.4 88.7 ±5.9 82.0 ±8.0 
+
+Table 6: Per-task success rate (%) under visual (object appearance) perturbation. OOD replaces object colors, textures, or sizes while preserving shape and task goal. 
+
+Language perturbation results. Table 7 reports per-task success rates under language perturbation. 
+
+> 24 Adaptation of Generalist Robot Policies with Minimal Data
+
+𝜋 1base 𝜋 1RL 
+
+Task ID OOD ID OOD Alph. Soup + Cr. Cheese → Basket 12.7 ±1.2 14.0 ±2.0 99.3 ±1.2 98.0 ±2.0 
+
+Alph. Soup + Tom. Sauce → Basket 4.0 ±3.5 4.7 ±3.1 82.7 ±13.3 78.7 ±11.0 
+
+Black Bowl → Bottom Drawer 22.7 ±6.4 23.3 ±9.2 98.7 ±1.2 96.7 ±5.8 
+
+Book → Caddy 37.3 ±7.0 33.3 ±8.3 98.7 ±2.3 96.7 ±4.2 
+
+Both Moka Pots → Stove 13.3 ±3.1 15.3 ±2.3 76.0 ±14.0 79.3 ±13.0 
+
+Cr. Cheese + Butter → Basket 34.0 ±9.2 40.0 ±14.0 96.0 ±0.0 96.0 ±2.0 
+
+Moka Pot → Stove 84.0 ±0.0 88.7 ±5.8 95.3 ±3.1 97.3 ±2.3 
+
+White Mug + Choc. Pudding 33.3 ±11.7 38.7 ±13.3 96.7 ±5.8 91.3 ±8.1 
+
+White Mug + Plates 30.0 ±2.0 33.3 ±5.8 79.3 ±11.0 78.0 ±2.0 
+
+Yellow-White Mug → Microwave 64.0 ±2.0 56.0 ±6.9 89.3 ±8.1 90.0 ±7.2 
+
+Average 33.5 ±1.8 34.7 ±4.8 91.2 ±4.2 90.2 ±3.3 
+
+Table 7: Per-task success rate (%) under language perturbation. OOD replaces the task instruction with a paraphrase. 
+
+C.3. Libero Pro State Shift Perturbation Experiments 
+
+Here we provide further analysis of the state-shift generalization results from Section 5. 
+
+Object swap. When two objects exchange positions, the policy must approach the target from a different direction or reorder its subtask sequence. On the 5 evaluated tasks ( Both Moka Pots → Stove , Cr. Cheese + Butter → Basket , Moka Pot → Stove , White Mug + Choc. Pudding , White Mug + Plates ), swapping object positions changes the optimal grasp order and approach trajectory. Both 𝜋 1base and 𝜋 1RL achieve 0% success across all 5 tasks under swap perturbation (Table 8), despite strong ID performance. This indicates that swapping object positions produces configurations far enough from the training distribution that neither the BC warm start nor residual RL corrections can recover. 
+
+𝜋 1base 𝜋 1RL 
+
+Task ID OOD ID OOD Both Moka Pots → Stove 13.3 ±3.1 0.0 ±0.0 76.0 ±14.0 0.0 ±0.0 
+
+Cr. Cheese + Butter → Basket 34.0 ±9.2 0.0 ±0.0 96.0 ±0.0 0.0 ±0.0 
+
+Moka Pot → Stove 84.0 ±0.0 0.0 ±0.0 95.3 ±3.1 0.0 ±0.0 
+
+White Mug + Choc. Pudding 33.3 ±11.7 0.0 ±0.0 96.7 ±5.8 0.0 ±0.0 
+
+White Mug + Plates 30.0 ±2.0 0.0 ±0.0 79.3 ±11.0 0.0 ±0.0 
+
+Average 38.9 ±3.6 0.0 ±0.0 88.7 ±5.9 0.0 ±0.0 
+
+Table 8: Per-task success rate (%) under object swap perturbation. OOD exchanges the initial positions of two scene objects. 
+
+Shape change. Shape perturbations test whether learned grasps transfer across object geometries. On the 4 evaluated tasks ( Black Bowl → Bottom Drawer , Yellow-White Mug → Microwave , Alph. Soup + Cr. Cheese → Basket , Alph. Soup + Tom. Sauce → Basket ), the replacement preserves the object category but 
+
+> 25 Adaptation of Generalist Robot Policies with Minimal Data
+
+alters its geometry. Table 9 shows that 𝜋 1RL retains strong performance on tasks where the new shape preserves similar grasp affordances (e.g., Black Bowl at 90.7%), but drops sharply when the shape change alters the required contact geometry (e.g., Alph. Soup tasks at <3%). 
+
+𝜋 1base 𝜋 1RL 
+
+Task ID OOD ID OOD Black Bowl → Bottom Drawer 22.7 ±6.4 20.7 ±6.4 98.7 ±1.2 90.7 ±8.1 
+
+Yellow-White Mug → Microwave 64.0 ±2.0 4.7 ±3.1 89.3 ±8.1 20.7 ±13.3 
+
+Alph. Soup + Cr. Cheese → Basket 12.7 ±1.2 0.0 ±0.0 99.3 ±1.2 2.7 ±4.6 
+
+Alph. Soup + Tom. Sauce → Basket 4.0 ±3.5 0.0 ±0.0 82.7 ±13.3 2.0 ±3.5 
+
+Average 25.8 ±0.8 6.3 ±1.0 92.5 ±5.4 29.0 ±5.8 
+
+Table 9: Per-task success rate (%) under shape change perturbation. OOD replaces the target object with a geometrically different variant of the same category. 
+
+Object change. Replacing the target with a different object category represents the most severe state shift. We evaluate this on Book → Caddy , where the book is replaced with a categorically different object. Table 10 shows that both 𝜋 1base and 𝜋 1RL drop to near 0% under this shift despite strong ID performance. The new object differs in size, shape, weight, and affordance, requiring manipulation strategies outside the behavioral support of 𝜋 1RL . This category of shift cannot be addressed by online RL alone and requires additional demonstrations or interaction with the new object. 
+
+𝜋 1base 𝜋 1RL 
+
+Task ID OOD ID OOD Book → Caddy 37.3 ±7.0 0.0 ±0.0 98.7 ±2.3 2.0 ±2.0 
+
+Table 10: Per-task success rate (%) under object change perturbation. OOD replaces the target with a categorically different object. 
+
+Position perturbation. Tables 11,12,13 reports per-task success rates under position perturbation at three displacement levels. We compare 𝜋 1base , 𝜋 1RL , and 𝜋 50 base (behavior-cloned on all 50 demonstrations). 
+
+𝜋 1RL improves over 𝜋 1base at all levels but falls short of 𝜋 50 base , especially at larger displacements where the gap in state coverage becomes the binding constraint. 
+
+Task 𝜋 1base 𝜋 1RL 𝜋 50 base 
+
+Alph. Soup + Tom. Sauce 4.0 ±2.0 52.7 ±5.8 94.7 ±5.8 
+
+Black Bowl → Drawer 24.0 ±7.2 88.7 ±5.0 59.3 ±10.1 
+
+Both Moka Pots → Stove 3.3 ±3.1 49.3 ±20.1 84.0 ±7.2 
+
+Average 10.4 ±2.5 63.6 ±7.3 79.3 ±6.4 
+
+Table 11: Per-task success rate (%) under low position perturbation of 5 cm. 
+
+> 26 Adaptation of Generalist Robot Policies with Minimal Data
+
+Task 𝜋 1base 𝜋 1RL 𝜋 50 base 
+
+Alph. Soup + Tom. Sauce 1.3 ±2.3 14.0 ±2.0 68.7 ±3.1 
+
+Black Bowl → Drawer 16.7 ±6.4 70.0 ±3.5 45.3 ±2.3 
+
+Both Moka Pots → Stove 1.3 ±1.2 22.7 ±8.3 76.0 ±7.2 
+
+Average 6.4 ±3.1 35.6 ±1.5 63.3 ±1.2 
+
+Table 12: Per-task success rate (%) under medium position perturbation of 10 cm. Task 𝜋 1base 𝜋 1RL 𝜋 50 base 
+
+Alph. Soup + Tom. Sauce 0.0 ±0.0 2.7 ±3.1 25.3 ±4.2 
+
+Black Bowl → Drawer 6.7 ±2.3 37.3 ±2.3 23.3 ±8.1 
+
+Both Moka Pots → Stove 0.0 ±0.0 2.7 ±3.1 25.3 ±9.5 
+
+Average 2.2 ±0.8 14.2 ±0.4 24.7 ±4.4 
+
+Table 13: Per-task success rate (%) under high position perturbation of 20 cm. 
+
+## D. Implementation Details 
+
+D.1. MiDaS State representation. The state input to both the residual actor and critic is derived from the frozen VLA backbone of 𝜋 𝐾 
+
+> base
+
+. At each timestep, we extract the VLM token embeddings and mean-pool across all token positions to produce a 2048-dimensional feature vector. This vector is then projected through a bottleneck layer (linear projection, layer normalization, and tanh activation) to yield a 200-dimensional latent state s𝑡 .
+
+Actor inputs and architecture. The residual actor receives the bottlenecked VLM embedding concate-nated with the flattened base action chunk abase  
+
+> 𝑡
+
+∈ R𝐶 ·𝑑 𝑎 proposed by 𝜋 𝐾 
+
+> base
+
+, where 𝐶 =10 is the chunk length and 𝑑 𝑎 =7 is the per-step action dimension. As described in Section 4, the actor directly outputs the full executed action chunk aexec  
+
+> 𝑡
+
+rather than an additive residual correction. The actor is parameterized as a 3-layer MLP with 512 hidden units per layer and ReLU activations. The output distribution is a tanh-squashed diagonal Gaussian with learned mean and log-standard-deviation heads. 
+
+Critic inputs and architecture. The critic receives only the bottlenecked VLM embedding as its state input; the base action chunk is excluded. Given a candidate executed action aexec  
+
+> 𝑡
+
+, each Q-network in the ensemble evaluates 𝑄 𝜓 𝑗 (s𝑡 , aexec  
+
+> 𝑡
+
+). We use an ensemble of 10 Q-networks, each parameterized as a 3-layer MLP with 512 hidden units and ReLU activations. The ensemble aggregates predictions via mean reduction during target computation. 
+
+Warmup Details. We run the base policy to collect a total of 10 , 000 chunked environment interaction steps and update the actor and critic with a utd ratio of 8 each. 
+
+Policy update. At each actor update, a single base action abase  
+
+> 𝑡
+
+is sampled from the frozen 𝜋 𝐾 
+
+> base
+
+. The residual actor then proposes 𝑁 =16 candidate actions conditioned on s𝑡 and abase  
+
+> 𝑡
+
+. The top 𝑀 =8 actions ranked by the critic ensemble are selected as elites. These elite actions undergo 30 steps of gradient ascent on the Q-ensemble with step size 10 −3. The actor is then updated via a distillation loss that regresses toward the refined elite actions. 
+
+> 27 Adaptation of Generalist Robot Policies with Minimal Data
+
+Optimization. Both actor and critic use the Adam optimizer with global gradient norm clipping at 1.0. The actor learning rate is 10 −4 and the critic learning rate is 3 × 10 −4. At each environment step, we perform 30 critic updates and 10 actor updates. Training begins with a BC warmup phase of 10,000 steps during which the residual actor is trained to reproduce the base policy proposals and the critic is calibrated on the warmup buffer, each with 8 updates per step. 
+
+Key hyperparameters. Table 14 summarizes the hyperparameters used for all PARL training runs. 
+
+Table 14: PARL hyperparameters used for all training runs. 
+
+Hyperparameter Value 
+
+Batch size 64 Discount factor ( 𝛾 ) 0.999 Target network update rate ( 𝜏 ) 0.05 Actor learning rate 10 −4
+
+Critic learning rate 3 × 10 −4
+
+Hidden dimensions (512 , 512 , 512) 
+
+VLM embedding bottleneck dim 200 Number of Q-networks 10 Critic ensemble reduction mean PA-RL candidate samples ( 𝑁 ) 16 PA-RL elite samples ( 𝑀 ) 8PA-RL gradient steps 30 PA-RL step size 10 −3
+
+Critic updates per env step 30 Actor updates per env step 10 BC warmup steps 10,000 BC warmup critic/actor updates 8Success buffer ratio ( 𝜌 succ ) 0.20 Success buffer minimum size 20 Gradient norm clip 1.0 Optimizer Adam Action chunk length ( 𝐶 ) 10 
+
+D.2. BC Implementation 
+
+For behavior cloning, we use a single demonstration out of the available 50 for LIBERO-Long and one demonstration for the particular scene and layout configuration for each RoboCasa task. We then fine-tune 
+
+𝜋 0.5 using the official OpenPI codebase on this demonstration for 16,000 gradient steps. Table 16 shows the performance on of behavior cloning on varying the number of demos 𝐾 = {1, 3, 5}.
+
+Trainable parameters. We apply LoRA adapters to the PaliGemma 2B vision-language-model (VLM) backbone, inserting low-rank updates into both the attention and feed-forward layers with rank 32 and scaling factor 𝛼 =32 . The 300M-parameter action head (Gemma 300M) and the SigLIP vision encoder are fully fine-tuned. All other backbone weights remain frozen. This selective finetuning keeps the majority of the VLM fixed while allowing the action head and vision encoder to specialize to the target task. 
+
+Loss and optimization. The model is trained with the flow-matching objective native to the 𝜋 0.5
+
+architecture, predicting action chunks of horizon 𝐶 =10 . We use AdamW with 𝛽 1=0 .9, 𝛽 2=0 .95 , and negligible weight decay ( 10 −10 ), with global gradient norm clipping at 1.0. The learning rate follows 
+
+> 28 Adaptation of Generalist Robot Policies with Minimal Data
+
+a cosine decay schedule: peak learning rate 2.5 × 10 −5, 50 warmup steps, decaying to 2.5 × 10 −6 over 100,000 steps. Training is stopped at 16,000 steps. The batch size is 32. 
+
+Key hyperparameters. Table 15 lists the hyperparameters used for all Stage I behavior cloning runs. 
+
+Table 15: Stage I behavior cloning hyperparameters. 
+
+Hyperparameter Value 
+
+Number of demonstrations ( 𝐾 ) 1Training steps 16,000 Batch size 32 Optimizer AdamW Peak learning rate 2.5 × 10 −5
+
+LR schedule Cosine decay LR warmup steps 50 Minimum learning rate 2.5 × 10 −6
+
+𝛽 1, 𝛽 2 0.9, 0.95 Gradient norm clip 1.0 LoRA rank 32 LoRA 𝛼 32 LoRA targets Attention + FFN Action expert Fully fine-tuned Vision encoder (SigLIP) Fully fine-tuned Action horizon ( 𝐶 ) 10 Loss Flow matching 
+
+D.3. Success Buffer 
+
+The success buffer ℬsucc is a separate replay buffer that stores only transitions from successful episodes. Its purpose is to prevent actor updates from being dominated by failed rollouts when the policy’s success rate is low (2–5% early in training). 
+
+Initialization. Both the main replay buffer ℬ and the success buffer ℬsucc are initialized with all transitions from the 𝐾 demonstrations, since demonstration trajectories are successful by construction. The success buffer capacity is set to max(10 ,000 , 0.5 × |ℬ| max ).
+
+Population during training. After each collected trajectory, all transitions are inserted into ℬ. If the episode was successful (sparse reward received), the same transitions are additionally inserted into ℬsucc .
+
+Sampling. Actor and critic update minibatches are sampled from a mixture of the two buffers: 
+
+ℬactor /critic ∼ (1 − 𝜌 succ ) · ℬ + 𝜌 succ · ℬ succ , (D.1) where 𝜌 succ = 0 .2 is the success buffer ratio. Concretely, each actor batch of size 64 contains 51 transitions sampled uniformly from ℬ and 13 transitions sampled uniformly from ℬsucc . This oversampling biases the actor toward states where successful behavior has been observed, steering the PA-RL elite selection and gradient ascent toward reward-bearing regions. 
+
+## E. Ablations 
+
+Design-decision ablations. Fig. 11 ablates three implementation choices in MIDAS on the Both Moka Pots -> Stove task. Each row changes a single knob while keeping the same PA-RL objective, VLM 
+
+> 29 Adaptation of Generalist Robot Policies with Minimal Data
+
+BC Success Rate (%) 
+
+Task 𝐾 =1 𝐾 =3 𝐾 =5 
+
+LIBERO-Long 
+
+Alphabet Soup + Cream Cheese → Basket 12.7 39.3 82.7 
+
+Alphabet Soup + Tomato Sauce → Basket 4.0 32.7 74.7 
+
+Black Bowl → Bottom Drawer 22.7 90.0 94.0 
+
+Book → Caddy 37.3 26.7 89.3 
+
+Both Moka Pots → Stove 13.3 51.3 35.3 Cream Cheese + Butter → Basket 34.0 90.7 84.7 Moka Pot → Stove 84.0 86.0 94.7 
+
+White Mug + Chocolate Pudding 33.3 26.7 66.0 
+
+White Mug + Plates 30.0 48.7 74.0 
+
+Yellow-White Mug → Microwave 64.0 70.7 86.0 Average 33.5 56.3 78.1      
+
+> Table 16: Per-task BC success on LIBERO-Long. Bold denotes the best result per task across 𝐾 ∈ { 1,3,5}
+> demonstrations.
+
+state representation, 10k-step BC warmup, and one demonstration initialization. First, removing the base-policy action from the residual actor nearly matches the default recipe. This suggests that the action head is most important for producing task-relevant warmup experience; once this experience is available, online value learning from pre-trained VLA features can recover much of the final performance without using the base action as an explicit actor input. Second, disabling the success buffer tests whether sparse successful transitions must be oversampled during actor updates, rather than being learned from uniformly mixed online replay. Third, adding a persistent success-only BC penalty tests whether the residual should remain behaviorally anchored after warmup, or whether continued RL updates should be allowed to move away from the demonstrated action distribution. 
+
+## F. Curriculum Enables Stronger Position Generalization 
+
+Table 11, Table 12, Table 13 and Fig. 12b show that 𝜋 1RL generalizes well to small position perturbations: at 5 cm displacement, average success reaches 63.6%, compared to 10.4% for 𝜋 1base . Performance drops sharply at larger displacements, falling to 35.6% at 10 cm and 14.2% at 20 cm. By contrast, 𝜋 50 base 
+
+maintains 79.3%, 63.3%, and 24.7% at the same levels, indicating that broader training coverage sustains robustness where 𝜋 1RL does not. A key observation is that larger position perturbations in our setting can be decomposed incrementally: a 10 cm displacement is reachable through a sequence of smaller shifts from the nominal configuration. If the policy can reliably solve the task under 5 cm perturbation, it should be able to extend to 10 cm once it has practiced under the smaller shift. This motivates a curriculum over the reset distribution: rather than training under the full perturbation range from the outset, we progressively widen the displacement radius as the policy masters each level. 
+
+Curriculum procedure. Starting from the trained 𝜋 1RL checkpoint (after Stage II of MiDAS), we continue online RL under position-perturbed resets. The curriculum proceeds through three stages with increasing perturbation radii: 5 cm, 10 cm, and 20 cm. At each stage, the target objects are displaced uniformly at 
+
+> 30 Adaptation of Generalist Robot Policies with Minimal Data
+
+Figure 11: MiDAS ablations on both-mokapots task 
+
+random within the specified radius from their default positions. The policy advances to the next stage once its evaluation success rate on the current perturbation level exceeds a threshold of 0.6. On the final stage, training continues until the step budget is exhausted. All other hyperparameters (critic/actor updates, learning rates, success buffer) remain identical to the standard MiDAS Stage II configuration (Table 14). No additional demonstrations are provided; the curriculum relies entirely on autonomous interaction. 
+
+Task selection. We run the curriculum on the three tasks used for position perturbation evaluation: 
+
+Alphabet Soup + Tomato Sauce → Basket , Both Moka Pots → Stove , and Black Bowl → Bottom Drawer .For Black Bowl , 𝜋 1RL already achieves 88.7% at 5 cm and 70.0% at 10 cm without curriculum (Table 11, Table 12), both exceeding the 0.6 advancement threshold. We therefore exclude it from the curriculum experiment, as it already demonstrates strong position generalization under the standard MiDAS recipe. 
+
+Results. Table 17 reports per-task success rates after curriculum training, compared against the non-curriculum 𝜋 1RL and 𝜋 50 base baselines from Table 11,Table 12,Table 13. On Both Moka Pots , curriculum raises 5 cm success from 49.3% to 70.0% and 10 cm success from 22.7% to 75.3%, nearly matching 𝜋 50 base 
+
+(76.0%) at the medium perturbation level. On Alphabet Soup + Tomato Sauce , 5 cm success improves from 52.7% to 68.7% and 10 cm success from 14.0% to 28.7%. The gains are consistent across seeds, with the largest improvements at the 10 cm level where the non-curriculum policy struggles most. 
+
+𝜋 1RL 𝜋 1RL + Curriculum 𝜋 50 base 
+
+Task 5 cm 10 cm 5 cm 10 cm 5 cm 10 cm Alph. Soup + Tom. Sauce 52.7 ±5.8 14.0 ±2.0 68.7 ±5.0 28.7 ±8.1 94.7 ±5.8 68.7 ±3.1 
+
+Both Moka Pots → Stove 49.3 ±20.1 22.7 ±8.3 70.0 ±7.2 75.3 ±3.1 84.0 ±7.2 76.0 ±7.2 
+
+Average 51.0 ±12.8 18.3 ±4.0 69.3 ±1.2 52.0 ±5.3 89.3 ±6.0 72.3 ±2.5 
+
+Table 17: Position perturbation success rate (%) before and after curriculum training. Curriculum closes much of the gap with 𝜋 50 base without additional demonstrations. Bold marks improvement over non-curriculum 𝜋 1RL .
+
+These results confirm that progressively expanding the reset distribution during online RL can close much            
+
+> 31 Adaptation of Generalist Robot Policies with Minimal Data
+> (a) State-space coverage. (b) Position generalization.
+> Figure 12: (a) 𝜋 1
+> 𝑟𝑙 covers a narrow region of state space around its warm-start demo; 𝜋 50 base visits a much broader distribution.
+> (b) Success degrades with displacement magnitude; distilling 𝜋 1
+> 𝑟𝑙 rollouts into the base policy does not close the gap with 𝜋 50 base .
+
+of the position-generalization gap without collecting additional demonstrations. Each curriculum stage builds on the behavioral repertoire acquired at the previous level, allowing the policy to incrementally ex-tend its reach to larger displacements. In Appendix G, we analyze what drives the position-generalization gap between 𝜋 1RL and 𝜋 50 base and why the curriculum is effective. 
+
+## G. Position Generalization Analysis 
+
+Position perturbations expose a gap between ID success and state-shift robustness. We isolate this effect using position perturbations at different magnitudes. We compare 𝜋 1RL to 𝜋 1base and to 𝜋 50 base ,a behavior-cloned policy trained on all 50 human-teleoperated demonstrations for the task. Although 
+
+𝜋 1RL and 𝜋 50 base achieve similar in-distribution success, Fig. 12b shows that 𝜋 50 base generalizes much better as perturbations grow. The gap is not explained by the residual parameterization alone. One possibility is that 𝜋 1RL generalizes poorly because the residual actor is less expressive than the pre-trained policy architecture. To test this, we distill 50 successful rollouts from 𝜋 1RL back into the base policy, yielding 
+
+𝜋 50 RL −MIDAS . This still does not recover the robustness of 𝜋 50 base ; in fact, 𝜋 50 RL −MIDAS performs worse than 
+
+𝜋 1RL under position perturbations. This suggests that the gap is driven not by policy parameterization, but by differences in state coverage and motion priors between human expert demonstrations and autonomous data. We visualize this coverage in Fig. 12a, where the 50 human demonstrations span a broader region of state space than successful autonomous trajectories, further supporting this explanation. 
+
+## H. Baselines 
+
+H.1. Flow matching policy BC baseline 
+
+We include two flow-matching behavior-cloning baselines on LIBERO to separate the effect of the pre-trained VLA from the effect of using an expressive action decoder. Both baselines use the same flow-matching action generator and differ only in how observations are represented: one policy conditions on image observations and robot proprioception, while the other conditions on a privileged augmented state vector. 
+
+Flow-matching action generator. The action generator is a Multi-Modal Diffusion Transformer (MMDiT), following the joint-attention design used in Stable Diffusion 3-style generative models and adapted here  
+
+> 32 Adaptation of Generalist Robot Policies with Minimal Data
+> Table 18: Success rate (%) of flow-matching BC baselines on LIBERO-Long. Policies are evaluated at the final checkpoint on 50 canonical initial states.
+
+Task Image State 
+
+LIBERO-Long 
+
+Alph. Soup + Cr. Cheese → Basket 0.0 0.0 Alph. Soup + Tom. Sauce → Basket 0.0 0.0 Black Bowl → Bottom Drawer 14.0 0.0 Book → Caddy 0.0 0.0 Both Moka Pots → Stove 0.0 0.0 Cr. Cheese + Butter → Basket 0.0 0.0 Moka Pot → Stove 8.0 0.0 White Mug + Choc. Pudding 0.0 0.0 White Mug + Plates 0.0 0.0 Yellow-White Mug → Microwave 30.0 0.0 
+
+Average 5.2 0.0 
+
+from image generation to action-chunk prediction. We use this architecture as a design template: the flow policy itself is trained on LIBERO demonstrations, while the image-conditioned variant uses ImageNet-pre-trained ResNet encoders for visual observations. The policy predicts a chunk of 𝐻 = 16 future actions, where each action is a 7-dimensional end-effector command consisting of Δposition, Δorientation, and gripper control. We train the policy with rectified-flow matching. Given an expert action chunk 𝑎 and Gaussian noise 
+
+𝑧 ∼ 𝒩 (0 , 𝐼 ), we sample a flow time 𝑡 ∼ 𝒰 [0 , 1] and construct the linear interpolation 
+
+𝑥 𝑡 = 𝑡𝑧 + (1 − 𝑡 )𝑎. 
+
+The network is trained to regress the conditional velocity field along this path using an action-padding-masked MSE loss. At inference time, actions are sampled by integrating the learned velocity field from Gaussian noise using 10 Euler steps, and we use EMA weights for evaluation. Observation tokens and noised action tokens are linearly embedded to a width of 768 and augmented with frozen 1D sinusoidal positional embeddings. The MMDiT backbone then applies joint attention over observation and action tokens, with the action tokens allowed to attend to all observation tokens. The backbone has 12 transformer blocks, 12 attention heads, head dimension 64, and an FFN expansion factor of 4. Each block uses timestep-conditioned adaLN-Zero modulation, joint multi-head self-attention with RMS-normalized queries and keys, and a feed-forward layer. A final modulated projection maps the action tokens back to R7.
+
+Image-conditioned flow baseline. The image-conditioned baseline uses two camera streams: a third-person agentview camera and a wrist-mounted eye-in-hand camera. Each camera is processed by an independent ImageNet-pre-trained ResNet-18 encoder. We replace BatchNorm layers with GroupNorm and truncate the ResNet at layer4 , producing a 512 × 3 × 3 feature map per frame. Input images are resized to 100 × 100 , ImageNet-normalized, and cropped to 84 × 84 , using random crops during training and center crops during evaluation.                     
+
+> 33 Adaptation of Generalist Robot Policies with Minimal Data
+> Table 19: Shared hyperparameters for the flow-matching BC baselines.
+> Hyperparameter Value Backbone MMDiT Transformer depth 12 Hidden size 768 Attention heads 12 Head dim. 64 FFN expansion 4Obs. history 2Action horizon 16 Action dim. 7Flow path rectified flow Flow-time sampling 𝒰 [0 ,1]
+> Inference steps 10 Euler Optimizer AdamW Learning rate 10 −4
+> Weight decay 0.01
+> EMA decay 0.9999
+> Normalization z-score
+
+Each camera feature map is converted into a single observation token using a learned spatial-embedding head, followed by a linear bottleneck to the MMDiT width of 768. The policy also receives robot proprioception, consisting of end-effector position, end-effector axis-angle orientation, and gripper joint positions. This 8-dimensional proprioceptive vector is linearly embedded as one additional observation token. Thus, for each observation timestep the image policy receives three tokens: one token for each camera and one proprioceptive token. With a two-step observation history, the policy receives six observation tokens total. 
+
+State-conditioned flow baseline. The state-conditioned baseline only conditions on a privileged augmented state vector. This vector is used identically when reconstructing observations from dataset MuJoCo states and during online evaluation. The state vector is constructed from four blocks: robot proprioception, object/fixture/site poses, BDDL goal-predicate indicators, and goal-target geometry. The proprioceptive block contains end-effector position, end-effector axis-angle orientation, and gripper joint positions, giving 8 dimensions. The entity-pose block contains the position and quaternion of every object, fixture, and site, sorted by name. The goal-predicate block contains one binary indicator per BDDL goal sub-predicate. The goal-target geometry block contains the world position of each goal sub-predicate’s target entity. For a task with 𝑁 ent entities and 𝑁 goal goal sub-predicates, the resulting state dimension is 
+
+𝐷 = 8 + 7 𝑁 ent + 4 𝑁 goal .
+
+The state-conditioned policy receives a two-step history of this full augmented state vector and embeds it into observation tokens for the same MMDiT action generator used by the image baseline. 
+
+H.2. Diffusion-Steering RL (DSRL) 
+
+DSRL [39] trains a SAC agent that operates in the noise space of the frozen 𝜋 0.5 flow-matching policy. At each timestep, the SAC actor receives VLM features extracted by the frozen 𝜋 0.5 backbone and outputs a perturbation to the initial noise vector; the frozen denoising head then converts the perturbed noise into an executed action chunk. Because the base policy weights remain fixed, all task-relevant adaptation occurs through the learned noise perturbation. We use the official codebase of Wagenmaker et al. [39]                                   
+
+> 34 Adaptation of Generalist Robot Policies with Minimal Data
+> Table 20: Privileged-state dimensions for the LIBERO flow baseline.
+> Task 𝑁 ent 𝑁 goal 𝐷
+> 017 2135 117 2135 27265 313 2107 410 286 511 189 610 286 711 293 87369 99279
+
+for this baseline. The SAC actor and critic are three-layer MLPs with hidden dimension 128. Actions are predicted as chunks of length 𝐶 = 10 , and online updates begin after 500 initial environment steps. All other training infrastructure (evaluation protocol, reward definition, environment wrappers) matches the MiDAS Stage II setup (Appendix D). 
+
+Table 21: DSRL hyperparameters. 
+
+Hyperparameter Value 
+
+Batch size 64 Discount factor ( 𝛾 ) 0.999 Actor learning rate 10 −4
+
+Critic learning rate 3 × 10 −4
+
+Temperature learning rate 3 × 10 −4
+
+Hidden dimensions (128 , 128 , 128) 
+
+Update-to-data ratio 20 Action chunk length ( 𝐶 ) 10 Action noise magnitude 1.0 Online update start 500 steps Optimizer Adam 
+
+H.3. Filtered BC 
+
+Filtered BC iteratively collects autonomous rollouts from 𝜋 𝐾 
+
+> base
+
+, retains only successful trajectories, and retrains the base policy on this filtered data. The model architecture and trainable parameters are identical to Stage I behavior cloning (Appendix D.2). 
+
+Procedure. Training proceeds in rounds. Each round consists of three phases: (1) collect 𝑁 rollouts using the current policy, (2) filter for trajectories that reached the task goal, and (3) retrain the policy on the filtered set for 𝑀 gradient steps. The updated checkpoint from each round initializes the next. We use cumulative filtering, where successful trajectories accumulate across rounds so the training set grows monotonically. The 𝐾 expert demonstrations are included alongside the self-collected successes in every round. We run 20 rounds with 20 rollouts per round and 500 gradient steps per round, for a total of 400 collection rollouts and 10,000 gradient steps. 
+
+Trainable parameters. The same parameter groups are updated as in Stage I: LoRA adapters (rank 32, 
+
+> 35 Adaptation of Generalist Robot Policies with Minimal Data
+
+𝛼 = 32 ) on the PaliGemma 2B vision-language-model (VLM) backbone, full fine-tuning of the Gemma 300M action head, and full fine-tuning of the SigLIP vision encoder. All other backbone weights remain frozen. 
+
+Optimization. Each round trains with the flow-matching loss using the optimizer and learning-rate schedule from the 𝜋 0.5 training config (AdamW, 𝛽 1 = 0 .9, 𝛽 2 = 0 .95 , peak learning rate 2.5 × 10 −5, cosine decay to 2.5 × 10 −6). The batch size is 16. 
+
+Table 22: Filtered BC hyperparameters. 
+
+Hyperparameter Value 
+
+Number of rounds 20 Rollouts per round 20 Training steps per round 500 Total training steps 10,000 Batch size 16 Cumulative data Yes Include expert demos Yes Optimizer AdamW Peak learning rate 2.5 × 10 −5
+
+LR schedule Cosine decay Minimum learning rate 2.5 × 10 −6
+
+LoRA rank 32 LoRA 𝛼 32 LoRA targets Attention + FFN Action expert Fully fine-tuned Vision encoder (SigLIP) Fully fine-tuned Action horizon ( 𝐶 ) 10 Loss Flow matching 
+
+H.4. DICE-RL 
+
+DICE-RL [35] trains a residual actor using a TD3+BC-style objective on top of the frozen 𝜋 0.5 base policy. The residual actor is parameterized as a tanh-Gaussian over flattened action chunks, and its output 𝛿 is added to the base action to form the executed action 
+
+𝑎 exec = clip (︁ abase + 𝛼 𝛿, −1, 1)︁ ,
+
+where 𝛼 is a fixed residual scale. The base policy weights remain frozen; only the residual actor and a Q-critic are trained. All training infrastructure (reward definition, environment wrappers, evaluation protocol) matches the MiDAS Stage II setup (Appendix D), and the policy conditions on the frozen 𝜋 0.5
+
+VLM embedding rather than raw pixels. 
+
+Networks. The residual actor is an MLP tanh-Gaussian policy over the 𝐶 ×7 action chunk ( 𝐶 = 10 ), and the critic is an ensemble of 10 state–action Q-heads. Both use hidden width 512 and condition on the VLM embedding together with the base action. The critic is reduced by its ensemble mean, and a soft target critic is maintained by Polyak averaging ( 𝜏 = 0 .05 ). 
+
+Critic update. The critic regresses an entropy-free, 𝐾 -sample bootstrap target. At each next state, 
+
+𝐾 = 16 residuals are sampled from the actor, composed into executed actions, scored by the target critic, 
+
+> 36 Adaptation of Generalist Robot Policies with Minimal Data
+
+and averaged before the ensemble reduction, giving the target 𝑟 + 𝛾 E𝐾 [𝑄 ′] with a sparse reward and an MSE loss. No entropy term is added to the backup. 
+
+Actor update. The actor maximizes the mean of the critic over 𝐾 = 16 action samples (a deterministic-policy-gradient-style objective with no entropy bonus), regularized by a filtered zero-residual penalty 
+
+𝜆 𝛼 2‖𝛿 ‖2. This anchor pulls the residual toward zero (i.e. toward the base action) except on transitions where the current action already improves on the base ( 𝑄 (𝑠, 𝑎 cur ) ≥ 𝑄 (𝑠, abase )) and is sufficiently advantaged relative to its Monte-Carlo return ( 𝑄 (𝑠, 𝑎 cur ) − MC ≤ 𝜖 ), on which the penalty is disabled. 
+
+Data and warmup. We run in demo-buffer mode: the success buffer is seeded from the single expert demonstration and frozen as an offline buffer, while the main buffer becomes online-only after a demo BC warmup phase (UTD 10 ). Each minibatch mixes offline and online data, with the offline fraction decayed linearly from 0.5 to 0.1 over the first 500 gradient steps. Online updates begin after 500 environment steps, and each gradient step applies 20 critic updates and 10 actor updates. 
+
+Table 23: DICE-RL hyperparameters. 
+
+Hyperparameter Value 
+
+Batch size 64 Discount factor ( 𝛾 ) 0.999 Actor learning rate 10 −4
+
+Critic learning rate 3 × 10 −4
+
+Hidden dimensions 512 Critic ensemble size 10 Critic reduction mean Target update rate ( 𝜏 ) 0.05 Optimizer Adam Max grad norm 1.0 Action chunk length ( 𝐶 ) 10 Residual scale ( 𝛼 ) 0.5 Gradient steps per env step (UTD) 1Critic updates per step 20 Actor updates per step 10 
+
+𝐾 action samples 16 Zero-residual penalty coeff. ( 𝜆 ) 1.0 Filter threshold ( 𝜖 ) 0.5
+
+Online update start 500 steps Offline buffer ratio (start → end) 0.5 → 0.1
+
+Ratio decay horizon 500 steps Success buffer min. size 100 Demo BC warmup UTD 10 Number of demos 1Conditioning 𝜋 0.5 VLM embedding 
+
+## I. Real World Implementation Details 
+
+For our real world experiments, we use a bimanual YAM platform and evaluate MiDAS on two tasks: 
+
+(T1) placing a green block in the right container and a blue block in the left container, and (T2) placing a knife and a donut on a plate. We fine-tune the 𝜋 0.5 base model for 20,000 gradient steps using LoRA 
+
+> 37 Adaptation of Generalist Robot Policies with Minimal Data
+
+adapters for both the vision-language-model (VLM) backbone and the action head. The key differences from the simulation setup (Appendix D.2) are described below. 
+
+Observation space. The robot receives RGB images from three cameras: a top-down view and two wrist-mounted cameras (left and right). The state observation consists of the joint positions and gripper states of both arms. 
+
+Action space. Actions are predicted as chunks of horizon 𝐶 =60 , longer than the simulation horizon of 10 to accommodate the lower control frequency and extended task durations on hardware. Joint position targets use delta actions while gripper commands are absolute, matching the bimanual action space structure (6 joints + 1 gripper per arm). 
+
+Trainable parameters. Unlike the simulation configuration where the Gemma 300M action head is fully fine-tuned (Appendix D.2), the real-world setup applies LoRA adapters to both the PaliGemma 2B vision-language-model (VLM) backbone and the Gemma 300M action head. This reduces the number of trainable parameters and limits overfitting to the single available demonstration per task. 
+
+Optimization. The learning rate follows a cosine decay schedule with 1,000 warmup steps, a peak learning rate of 2.5 × 10 −5, and a minimum learning rate of 2.5 × 10 −6 reached after 10,000 decay steps. EMA averaging is disabled. Table 24 lists all hyperparameters. 
+
+Training time and rollouts collected. We train our models with MiDAS for 5-6 hours, during the course of which we collect 350 trajectories for each task.                     
+
+> Table 24: Real-world behavior cloning hyperparameters for Stage I finetuning on the YAM platform.
+> Hyperparameter Value
+> Number of demonstrations ( 𝐾 )1Training steps 20,000 Peak learning rate 2.5×10 −5
+> LR schedule Cosine decay LR warmup steps 1,000 Minimum learning rate 2.5×10 −6
+> LR decay steps 10,000 EMA decay None PaliGemma 2B backbone LoRA Action expert (Gemma 300M) LoRA Action horizon ( 𝐶 )60 Action type Delta (joints), absolute (grippers) Cameras Top, left wrist, right wrist Checkpoint save interval 5,000
+
+Stage II: Online residual RL. For Stage II, the residual actor-critic is trained on top of the frozen BC-fine-tuned policy using PARL (Appendix D.1). The architecture follows the simulation setup with adjustments for the bimanual action space ( 𝑑 𝑎 =14 , comprising 6 joints and 1 gripper per arm) and the longer action horizon. The actor and critic are 4-layer MLPs with 1024 hidden units per layer, wider than the 3-layer 512-unit networks used in simulation. The residual policy is queried every 30 steps within each 60-step base action chunk after which is new chunk is sampled. Several PARL hyperparameters are scaled relative to the simulation configuration (Table 14). The PA-RL 
+
+> 38 Adaptation of Generalist Robot Policies with Minimal Data
+
+procedure samples 32 candidates and retains 10 elites, and the critic and actor receive 40 and 20 updates per gradient step, respectively. A per-joint trust-region constraint of 0.2 rad limits the distance between refined actions and the base policy proposal for non-gripper dimensions; grippers are uncapped. Table 25 lists all Stage II hyperparameters. 
+
+Table 25: Real-world PARL hyperparameters for Stage II online RL on the YAM platform. Entries that differ from the simulation defaults (Table 14) are marked with †.
+
+Hyperparameter Value 
+
+Batch size † 128 Discount factor ( 𝛾 )† 0.9999 Target network update rate ( 𝜏 ) 0.05 Actor learning rate 10 −4
+
+Critic learning rate 3 × 10 −4
+
+Hidden dimensions † (1024 , 1024 , 1024 , 1024) 
+
+VLM embedding bottleneck dim 200 Number of Q-networks 10 Critic ensemble reduction mean PA-RL candidate samples ( 𝑁 )† 32 PA-RL elite samples ( 𝑀 )† 10 PA-RL gradient steps 30 PA-RL step size 10 −3
+
+PA-RL trust-region radius † 0.2 rad (joints), uncapped (grippers) Critic updates per grad step † 40 Actor updates per grad step † 20 BC warmup steps 10,000 BC warmup critic/actor updates 8Success buffer ratio ( 𝜌 succ )† 0.20 Success buffer minimum size † 100 Gradient norm clip 1.0 Optimizer Adam Action chunk length ( 𝐶 ) 60 Residual query frequency 30 Action dimension ( 𝑑 𝑎 )† 14 
+
+Details on evaluation and resets. : For both online RL training and evaluations, the target objects are reset around the demonstration’s target locations. We do two classes of evaluations: in-distribution, where the target objects are perturbed very mildly from their demonstration positions/orientations; out-of-distribution with larger perturbations. Videos of rollouts and training is available here: minimal-data-adaptation.github.io.
