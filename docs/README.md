@@ -18,7 +18,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-13</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-14</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -28,7 +28,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-13 21:25:56 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-14 21:29:24 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读19篇论文，聚焦具身智能、安全驾驶与机器人学习方向。</p>
-<p>最值得关注的是世界模型驱动的自动驾驶智能体，以及语言结构Q学习用于安全关键控制（均9.0分）。</p>
-<p>下一步建议优先阅读速读中的RecoverFly与能量结构化潜在世界模型，探索多模态模型在导航与动作规划中的落地。</p>
+<p>今日聚焦19篇世界模型与自动驾驶论文，精读7篇、速读12篇，重点围绕“未见未来”与“语义属性预测”展开。最值得关注的是《Foresight Without Seeing》与《VOLA》双双获9.0高分，前者探索潜空间未来预测、后者用视觉语言模型提升开放世界驾驶感知。建议普通读者优先浏览这两篇精读论文及其速读中的执行反思与反事实预测，快速把握世界模型前沿趋势。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -53,9 +51,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Toward the Cognitive--Physical Limits of Embodied Intelligence through a World-Model-Centric Autonomous Racing Agent">Toward the Cognitive--Physical Limits of Embodied Intelligence through a World-Model-Centric Autonomous Racing Agent</span></li><li><span class="dpr-home-dashboard-paper-title" title="Language-Structured Relational Q-Learning for Threat-Aware Control in Safety-Critical Driving">Language-Structured Relational Q-Learning for Threat-Aware Control in Safety-Critical Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="StellaVLA: In-Context Structured Demonstration for Generalizable Vision-Language-Action Models">StellaVLA: In-Context Structured Demonstration for Generalizable Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Foresight Without Seeing: Latent Futures for World Action Models">Foresight Without Seeing: Latent Futures for World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="VOLA: Improving Open-World Driving by VLM-Based Semantic Attribute Prediction">VOLA: Improving Open-World Driving by VLM-Based Semantic Attribute Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning-Based Behavior Planning for Automated Driving: Real-World Integration and Deployment">Learning-Based Behavior Planning for Automated Driving: Real-World Integration and Deployment</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -66,9 +64,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RecoverFly: A Failure-Aware Reinforcement Learning Post-Training Framework for Aerial Vision-Language Navigation">RecoverFly: A Failure-Aware Reinforcement Learning Post-Training Framework for Aerial Vision-Language Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Energy-Structured Latent World Models with Neural Time Fields for Physically Constistent Open-World Motion Planning">Energy-Structured Latent World Models with Neural Time Fields for Physically Constistent Open-World Motion Planning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Lost in Reconstruction: Aligning Action Representations with Language in Vision-Language-Action Models">Lost in Reconstruction: Aligning Action Representations with Language in Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Rethink Before You Execute: Adaptive Execution for World Action Models">Rethink Before You Execute: Adaptive Execution for World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="How Can Driving World Models Do Counterfactual Prediction?">How Can Driving World Models Do Counterfactual Prediction?</span></li><li><span class="dpr-home-dashboard-paper-title" title="Do Not Forget the Obvious - RISC: A Risk-Informed Slice-Coverage Protocol for Safe Autonomous Driving">Do Not Forget the Obvious - RISC: A Risk-Informed Slice-Coverage Protocol for Safe Autonomous Driving</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 </div>
 
