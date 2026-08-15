@@ -1,0 +1,775 @@
+S2-HWM: Sparse Event-Structured Hierarchical World Model for Long-Horizon
+Surgical Robot Manipulation
+Shuzhe Zhang1, Xin Zhu1, Yinling Qian1,2∗, Qiong Wang1
+1Shenzhen Institutes of Advanced Technology, Chinese Academy of Sciences
+2University of Chinese Academy of Sciences
+Abstract
+Long-horizon surgical robot manipulation is challenging be-
+cause task rewards are sparse, while meaningful interaction
+changes occur at irregular intervals. Existing world-model
+agents typically imagine at primitive-step resolution, leav-
+ing variable-duration task progress implicit. Manually speci-
+fied stages can provide intermediate structure, but their task-
+specific boundaries are difficult to align with state-dependent
+interaction transitions.
+We propose S2-HWM,a SparseEvent-StructuredHierarchical
+World Model that learns sparse event evidence from primi-
+tive latent trajectories to coordinate an event-level manager
+and a primitive-step worker. The event evidence schedules
+manager goal updates, and each selected latent goal condi-
+tions the worker’s primitive actions until the next update. The
+learned event evidence also forms variable-duration segments
+for an Event Transition Model (ETM), which predicts the next-
+boundary stochastic state, segment duration, and accumulated
+segment reward. Chaining these event-level predictions pro-
+vides a variable-duration continuation beyond the primitive
+imagination horizon for manager learning, while the worker
+retains primitive-step actor–critic learning.
+On a SurRoL-based PegTransfer task, S2-HWM achieves a
+success rate of 98.7 ± 2.3%, outperforming the flat GAS-
+DreamerV3 baseline by 22.7 percentage points.
+Introduction
+Learning-based autonomous surgical manipulation seeks to
+improve the precision and efficiency of robotic task execu-
+tion. Surgical manipulation often involves long-horizon tasks
+that require a sequence of coordinated actions and interac-
+tions over an extended period. Even a basic transfer proce-
+dure may require the robot to approach an object, establish
+a stable grasp, transport it under geometric constraints, and
+release it at a target. The timing of task transitions depends
+on the state of the evolving interaction. However, intermedi-
+ate progress boundaries are difficult to specify. Without clear
+boundaries, rewards that reflect partial task progress are dif-
+ficult to assign, so learning signals are often available only
+at task completion. This sparse and delayed feedback makes
+reliable policy learning a central challenge in surgical robot
+learning.
+∗Corresponding author.
+Existing systems often alleviate this credit-assignment
+problem by introducing explicit intermediate task structure.
+This structure is often encoded through stage-dependent re-
+wards, and provides useful intermediate signals for learning
+and decision making (Riedmiller et al. 2018; Huang et al.
+2023b). However, their temporal organization is fixed before
+execution and tailored to particular tasks. Coarse stages and
+unclear stage boundaries can easily lead to wrong interac-
+tion state assignments to the same phase. Meanwhile, finer
+contact-dependent boundaries vary with execution and are
+difficult to define reliably in advance.
+These boundaries should instead be inferred from the in-
+teraction dynamics experienced by the agent. World mod-
+els provide a natural basis for this purpose. They encode
+interaction histories in latent states and predict how those
+states evolve under actions. Existing world-model agents use
+these learned dynamics to train policies through imagination
+(Hafner et al. 2019, 2020, 2021, 2023). However, their tran-
+sitions and imagined rollouts remain organized at primitive-
+step resolution. At this resolution, a variable-duration inter-
+action is represented only as a sequence of fixed-step transi-
+tions, leaving its temporal boundaries implicit. Consequently,
+they capture local evolution but do not explicitly represent
+when a meaningful event ends, how long it lasts, or how re-
+ward accumulates within it. As a result, the learned dynamics
+cannot directly organize high-level decisions or long-horizon
+credit assignment around variable-duration events.
+This paper proposes S2-HWM, a Sparse Event-Structured
+Hierarchical World Model that learns event evidence from
+primitive latent trajectories to organize prediction and control
+at two temporal scales. The learned evidence supports event-
+aligned goal updates: the manager selects a latent goal at each
+accepted update point, and the worker executes primitive
+actions conditioned on this goal until the next update. The
+event evidence is also used to construct variable-duration
+training segments for an Event Transition Model (ETM),
+which predicts the next-boundary stochastic state, segment
+duration, and accumulated segment reward. Chaining these
+event-level predictions extends the manager’s value bootstrap
+beyond the primitive imagination horizon, while the worker
+retains primitive-step actor–critic learning.
+In summary, our main contributions are:
+• Sparse event evidence for hierarchical control. S2-
+HWM learns sparse event evidence from primitive latent
+arXiv:2608.13103v1  [cs.RO]  13 Aug 2026
+
+
+trajectories without semantic stage supervision. This ev-
+idence supports event-aligned manager goal updates and
+the construction of variable-duration event segments.
+• Event-level prediction for manager learning. We intro-
+duce an ETM that predicts the next-boundary stochastic
+state, segment duration, and accumulated segment re-
+ward directly across variable-duration events. Chaining
+these predictions extends the manager’s value bootstrap
+beyond the primitive imagination horizon without recur-
+sively predicting every intermediate primitive state.
+• Experimental evaluation. We evaluate S2-HWM on the
+SurRoL-based PegTransfer task against model-free and
+world-model baselines, and validate its key design choices
+through component ablations and event-level analyses.
+Related Work
+Surgical Robot Learning
+Surgical robot learning requires autonomous agents to per-
+form long-horizon manipulation under contact-rich dynam-
+ics, visual ambiguity, and staged task progression. SurRoL
+offers a standardized dVRK-compatible simulation platform
+for surgical robot learning (Xu et al. 2021), and subse-
+quent work has expanded the embodied simulation and task-
+autonomy ecosystem for laparoscopic robot-assisted surgery
+(Long et al. 2023; Yang et al. 2024; Long et al. 2025).
+Within this domain, existing policy-learning methods ex-
+pose or model temporal structure in different ways. DEX uses
+demonstration-guided exploration for surgical robot task au-
+tomation (Huang et al. 2023a). ViSkill uses explicit subtask
+decomposition and scripted subtask demonstrations to learn
+value-informed skill chaining for long-horizon surgical tasks
+(Huang et al. 2023b). Goal-conditioned decision-transformer
+methods model surgical task execution as sequence predic-
+tion conditioned on goals and temporal indicators (Fu et al.
+2024). Grasp Anything for Surgery (GAS) is the most closely
+related work to our visual-control setting, as it introduces a
+task-oriented visual abstraction and employs Dreamer-style
+world models to learn surgical grasping policies (Lin et al.
+2024). Its evaluation focuses on GraspAny, where control is
+organized around a comparatively short grasping sequence.
+S2-HWM extends the GAS-style visual abstraction and dis-
+crete action interface to PegTransfer, where grasping must be
+followed by transport, alignment, and stable release, creating
+longer temporal dependencies for policy learning. Despite
+providing strong baselines and effective task abstractions,
+these approaches either rely on externally defined task struc-
+tures, primarily focus on sequence modeling, or adopt flat
+world-model architectures for control, limiting their ability
+to capture hierarchical decision-making and long-horizon
+planning. S2-HWM learns sparse event evidence and event-
+level consequences to support hierarchical credit assignment
+over these dependencies.
+World Models for Control
+World models learn predictive latent representations for plan-
+ning, policy learning, or both. PlaNet and Dreamer-style
+agents learn recurrent latent dynamics from observations
+and train policies through latent imagination (Hafner et al.
+2019, 2020, 2021, 2023). TD-MPC2 represents a comple-
+mentary control-centric direction, learning scalable implicit
+world models for continuous control and performing trajec-
+tory optimization in latent space (Hansen, Su, and Wang
+2024). These methods demonstrate the strength of learned
+world models for control, but their imagined trajectories are
+typically organized over fixed primitive steps or fixed plan-
+ning horizons. Several studies have incorporated hierarchical
+reasoning or temporal abstraction into world models. Direc-
+tor learns latent high-level goals through imagined rollouts
+and optimizes a manager–worker policy based on world-
+model predictions (Hafner et al. 2022). THICK introduces
+ContextRSSM, which uses sparse gated context updates to
+expose adaptive temporal boundaries, together with a high-
+level model that predicts event-end latent states, durations,
+and accumulated rewards across these boundaries (Gumbsch
+et al. 2024). S2-HWM couples event-structured prediction
+with hierarchical manager–worker control by using the same
+event evidence to schedule manager goal updates and con-
+struct ETM transitions. The ETM continuation extends the
+manager’s terminal bootstrap beyond primitive imagination,
+while the worker continues to learn at primitive-step resolu-
+tion.
+Hierarchical Reinforcement Learning
+Hierarchical reinforcement learning decomposes long-
+horizon control into high-level objectives and the primitive
+actions used to realize them. This hierarchy requires spec-
+ifying both what intermediate objective should guide the
+low-level policy and when that objective should be updated.
+Existing methods represent high-level objectives as subgoals,
+intentions, or skills (Kulkarni et al. 2016; Vezhnevets et al.
+2017; Riedmiller et al. 2018). Their temporal execution is
+commonly modeled using semi-Markov or option-based for-
+mulations, in which a selected objective remains active for
+a variable number of primitive steps (Sutton, Precup, and
+Singh 1999). The option-critic architecture further removes
+manually defined switching rules by learning both option
+policies and their termination conditions end-to-end (Bacon,
+Harb, and Precup 2017). In robotic manipulation, however,
+high-level updates are still often governed by fixed inter-
+vals or manually specified subtask boundaries. Such exter-
+nally prescribed schedules may not track interaction changes
+that emerge during execution. S2-HWM instead learns sparse
+event evidence from latent trajectories and uses it to schedule
+event-aligned manager goal updates.
+Method
+This paper proposes S2-HWM, a Sparse Event-Structured
+Hierarchical World Model that organizes primitive-step la-
+tent dynamics through event evidence learned directly from
+latent trajectories. The learned evidence identifies changes in
+interaction context and supports event-aligned manager goal
+updates. At each accepted manager update point, the man-
+ager selects a latent goal from the current latent feature, and
+this goal conditions the worker’s primitive actions until the
+next update, forming the hierarchical execution process illus-
+trated in Figure 1. For event-level learning, a separate accep-
+tance rule is applied to the same event evidence to construct
+
+
+Figure 1: Event-aligned hierarchical execution in S2-HWM. Primitive latent features ft support primitive-step worker actions,
+while A(gt) denotes the manager-side acceptance rule that maps sparse event evidence gt to accepted manager update points τi.
+At each accepted manager update point, the manager samples a discrete code ci from Fi = fτi, and its embedding ηi conditions
+the worker until the next manager update. Dashed ETM paths denote the event-level continuation used in the manager bootstrap;
+its construction is detailed in Figure 2.
+variable-duration training segments, over which the Event
+Transition Model (ETM) predicts the next-boundary stochas-
+tic state, segment duration, and accumulated segment reward.
+The learned event evidence therefore provides a shared sig-
+nal for manager scheduling and ETM training, while chained
+ETM predictions extend the manager’s value bootstrap be-
+yond the primitive imagination horizon.
+Event-Aligned Hierarchical Policy Learning
+Figure 1 illustrates the hierarchical policy operating at two
+temporal scales. At every primitive step, the worker samples
+an action conditioned on the current latent feature ft and the
+active manager goal ηi. At an accepted manager update point
+τi, the manager observes the boundary feature Fi = fτi,
+samples a discrete code ci, and maps it to a new latent goal
+through the learned codebook E. This goal remains active
+until the next update and conditions all worker actions within
+the corresponding variable-duration segment:
+ci ∼πM(· | Fi),
+ηi = E(ci),
+at ∼πW (· | ft, ηi),
+t ∈[τi, τi+1).
+(1)
+The policy in Eq. (1) requires a latent representation that
+is updated at every primitive step, summarizes interaction
+history under partial observability, and supports imagined
+control. We therefore instantiate the primitive world model as
+a DreamerV3 recurrent state-space model (RSSM) (Hafner
+et al. 2023). Given the observation–action history, the RSSM
+updates the deterministic state ht as recurrent memory and
+infers the stochastic state zt to represent the current latent in-
+teraction state. Together with the persistent interaction con-
+text mt, these states form
+¯ft = [zt, ht],
+ft = [ ¯ft, mt] = [zt, ht, mt].
+(2)
+The evolving feature ft provides the history-dependent state
+required for primitive worker control, while its boundary
+snapshot Fi = fτi provides the manager with the represen-
+tation used for latent-goal selection. The selected action at is
+supplied to the next RSSM transition, closing the primitive-
+step control loop.
+The event-aligned update points required by the manager
+are derived from the sparse context dynamics described next.
+Sparse Context Dynamics and Event Boundaries
+The manager update schedule must reflect interaction
+changes that depend on the preceding observation–action
+history rather than a single observation. S2-HWM formu-
+lates surgical manipulation as a partially observable Markov
+decision process (POMDP), for which the RSSM infers a
+history-dependent latent state. Although this state supports
+primitive worker control, it evolves at every step, so its local
+variations do not reliably indicate when the manager should
+refresh its goal. We therefore augment it with a persistent
+interaction context mt, whose sparse revisions provide evi-
+dence of event-level changes.
+Given the previous stochastic state, action, and context,
+the context model predicts a candidate update ˜mt and a soft
+gate ρt:
+( ˜mt, ρt) = Φctx(zt−1, at−1, mt−1),
+ρt ∈[0, 1]d,
+mt = ρt ⊙˜mt + (1 −ρt) ⊙mt−1,
+gt = ST(ρt).
+(3)
+The candidate ˜mt proposes new context information,
+while ρt controls how much of it is incorporated into
+mt. Straight-through binarization produces the sparse
+dimension-wise activation gt, while regularization limits ex-
+cessive updates. The resulting gt serves as event evidence
+
+
+Figure 2: Two-timescale imagination and event-extended
+manager bootstrap. Primitive-step imagination produces the
+short-horizon terminal estimate Bshort. Starting from the
+same endpoint, K ETM transitions predict next-boundary
+stochastic states, segment durations, and accumulated seg-
+ment rewards to form the event-level continuation Bevent.
+Their weighted combination BM extends the manager value
+target while worker learning remains at primitive-step reso-
+lution. Boundary observations are shown only for visualiza-
+tion; the ETM predicts latent states rather than pixels.
+rather than a temporal boundary indicator; accepted bound-
+aries are obtained by aggregating these activations and ap-
+plying the corresponding acceptance rule.
+For notational simplicity, we use {τi} to denote the ac-
+cepted boundary sequence in each context. Manager schedul-
+ing and ETM segment construction apply separate accep-
+tance rules to the same event evidence gt; therefore, their
+accepted boundaries need not coincide exactly. In the ETM
+context, adjacent accepted boundaries define
+ei = [τi, τi+1),
+∆i = τi+1 −τi,
+xe
+i = [zτi, mτi].
+(4)
+The resulting variable-duration segments adapt to the inter-
+action trajectory without semantic stage annotations.
+Event Transition Model
+To extend manager learning beyond the primitive imagi-
+nation horizon, the ETM models transitions between ac-
+cepted boundaries at event resolution. Each transition spans
+a variable-duration segment and predicts the next-boundary
+stochastic state, segment duration, and accumulated segment
+reward without recursively rolling out the intermediate prim-
+itive states. This reduces the number of recursive model tran-
+sitions required to cover the same amount of physical time
+and limits the opportunities for prediction errors to com-
+pound.
+Event Transition Learning.
+We train the ETM on la-
+tent trajectory segments between consecutive accepted ETM
+boundaries. For ei = [τi, τi+1), the ETM takes the event
+state xe
+i at the starting boundary as input and predicts the
+stochastic state ze
+i+1 = zτi+1 at the next boundary, the seg-
+ment duration ∆i = τi+1 −τi, and the accumulated segment
+reward Ri = P∆i−1
+k=0 rτi+k.
+Because the same starting event state may be followed
+by different next-boundary outcomes, we introduce an inter-
+nal categorical transition mode ui to represent the variabil-
+ity among observed transitions. During training, the poste-
+rior qθ(ui | xe
+i, ze
+i+1) infers the transition mode using the
+observed next-boundary stochastic state, whereas the prior
+pθ(ui | xe
+i) predicts it without future information. The tran-
+sition mode ui is internal to the ETM and is distinct from
+the manager code ci. Conditioned on the event state and
+transition mode, the ETM predicts
+(ˆze
+i+1, ˆ∆i, ˆRi) = Me
+θ(xe
+i, ui).
+(5)
+A KL regularizer aligns the posterior with the prior. Dur-
+ing imagination, the most probable mode under the prior
+conditions each ETM transition.
+Event-Extended Manager Bootstrap.
+The ETM predic-
+tions contribute to hierarchical policy learning by extending
+the terminal bootstrap used for the manager target. As il-
+lustrated in Figure 2, this target combines a short-horizon
+estimate from primitive-step imagination with a continua-
+tion over future event transitions.
+In the upper branch, the RSSM and hierarchical policy gen-
+erate a primitive-step imagined trajectory ˜f0:H. The manager
+value at its terminal state defines the short-horizon bootstrap
+Bshort = VM( ˜fH). This rollout preserves the local dynam-
+ics required for worker learning, but its fixed horizon covers
+only a limited portion of future task progress.
+The lower branch continues from ˜fH using K recursive
+ETM transitions. At each transition, the ETM predicts the
+next-boundary stochastic state, segment duration, and ac-
+cumulated segment reward. The predicted stochastic state,
+together with the retained context, initializes the next event
+state. The terminal RSSM recurrent state is also retained
+when constructing the corresponding feature for manager
+value evaluation. These predicted event states provide fu-
+ture latent features for evaluating the manager value function
+and need not coincide with the manager’s accepted goal-
+update points. Accumulating the predicted segment rewards
+with duration-dependent discounting γ ˆ∆j and bootstrapping
+from the final predicted feature produces the event-level con-
+tinuation Bevent.
+The final manager bootstrap combines the primitive esti-
+mate with the event-level continuation:
+BM = (1 −ω)Bshort + ωBevent,
+(6)
+where ω controls the event-level contribution. The resulting
+BM extends the manager target beyond the primitive imag-
+ination horizon, while the worker retains its primitive-step
+actor–critic target.
+Experiments
+Experimental Setup
+To evaluate long-horizon sparse-reward surgical manipula-
+tion, all compared methods are trained and evaluated on a
+randomized SurRoL-based PegTransfer task (Xu et al. 2021).
+Successful execution requires the robot to approach and grasp
+a block, transport it under geometric constraints, align it with
+the target peg, and release it in a stable configuration. An
+episode is counted as successful when the released block is
+stably placed on the target peg. Figure 3 illustrates this pro-
+gression using post-hoc semantic labels that are not provided
+to the agent.
+
+
+Figure 3: Representative PegTransfer progress in SurRoL. Post-hoc semantic phase labels are used only for evaluation and
+visualization.
+Figure 4: PegTransfer training performance and ablations. Panels A and B compare S2-HWM with GASDreamerV3 through
+500k environment steps. Panels C and D compare S2-HWM with w/o Event-Gated Updates (K = 15), w/o ETM, and w/o
+Hierarchical Policy over a common 300k-step window. Lines show means, and shaded bands show sample standard deviations
+across three training seeds. Gray denotes prefill.
+The comparison includes PPO (Schulman et al. 2017),
+DreamerV2 (Hafner et al. 2021), and GASDreamerV3 (Lin
+et al. 2024). For the primary controlled comparison, GAS-
+DreamerV3 is retrained from its original GraspAny setting
+on PegTransfer. Following GAS (Lin et al. 2024), S2-HWM
+and GASDreamerV3 use the same DSA4-depth observation
+frontend, task randomization, action interface, and evalu-
+ation protocol, forming the primary controlled comparison.
+PPO and DreamerV2 do not use DSA and serve as additional
+model-free and earlier world-model references. All methods
+share the SurRoL task interface, initial-state randomization,
+and nine-way discrete action space; environment-step bud-
+gets are matched within each comparison. For S2-HWM and
+GASDreamerV3, the DSA4-depth frontend produces four
+64×64 task-oriented channels. The action space contains six
+Cartesian translations, two yaw rotations, and one gripper-
+toggle action.
+All methods use three training seeds. Deterministic check-
+point evaluation uses 50 episodes per seed, with success rates
+reported as the mean and sample standard deviation across
+seeds.
+The same checkpoints are further evaluated in two
+extended-horizon stress tests. Repeated transfer requires two
+consecutive transfers, while repeated transfer with pertur-
+bation introduces an external drop during the second trans-
+fer. Single-transfer episodes allow 300 primitive steps; both
+stress tests allow up to 800 steps and require both transfers
+to be completed.
+Three matched-budget ablations examine the proposed
+components. w/o Event-Gated Updates retains the sparse
+context dynamics, ETM, and manager–worker hierarchy but
+updates the manager every K = 15 primitive steps. w/o ETM
+retains event-evidence-based manager updates while remov-
+ing ETM prediction and Bevent. w/o Hierarchical Policy re-
+tains the sparse context dynamics but replaces the manager–
+worker policy with a flat actor.
+Task Performance and Ablations
+Figure 4 and Table 1 evaluate S2-HWM through its training
+dynamics, matched-checkpoint performance, and component
+ablations.
+Following the common prefill period, both S2-HWM and
+GASDreamerV3 begin to acquire successful behavior, after
+which their learning curves gradually separate. S2-HWM im-
+proves more rapidly and maintains higher mean success and
+episodic return throughout the later training stage. At the
+matched checkpoint, S2-HWM achieves 98.7 ± 2.3% SR,
+compared with 76.0 ± 12.0% for GASDreamerV3, a differ-
+ence of 22.7 percentage points. PPO and DreamerV2 do not
+solve the task within the same training budget. Because S2-
+HWM and GASDreamerV3 share the DSA frontend, action
+interface, and a DreamerV3-based primitive world-model
+backbone, their comparison evaluates the overall benefit of
+introducing event organization and hierarchical policy learn-
+
+
+Method
+Single transfer
+Repeated transfer
+Repeated transfer with perturbation
+PPO
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+DreamerV2
+0.0 ± 0.0
+0.0 ± 0.0
+0.0 ± 0.0
+GASDreamerV3
+76.0 ± 12.0
+77.3 ± 18.6
+65.3 ± 14.0
+S2-HWM
+98.7 ± 2.3
+91.3 ± 6.1
+88.0 ± 5.3
+w/o Event-Gated Updates
+80.7 ± 28.3
+64.7 ± 56.1
+63.3 ± 55.1
+w/o ETM
+91.3 ± 5.0
+74.7 ± 38.7
+67.3 ± 30.0
+w/o Hierarchical Policy
+68.0 ± 20.3
+52.0 ± 33.4
+46.0 ± 30.0
+Table 1: Deterministic PegTransfer performance across nominal and extended-horizon evaluation settings. All settings use
+matched checkpoints at approximately 300k environment steps. Repeated transfer requires two sequential transfers within one
+episode, while repeated transfer with perturbation externally interrupts the second transfer with an induced drop. All entries
+report SR (%); values are mean ± sample standard deviation across three training seeds, each evaluated over 50 episodes. PPO
+and DreamerV2 obtain zero success in all three settings.
+ing over a flat world-model agent.
+The ablations first show that learning a sparse event repre-
+sentation alone is insufficient for effective control. Replacing
+the manager–worker policy with a flat actor while retain-
+ing the sparse context dynamics reduces single-transfer SR
+to 68.0 ± 20.3%, the largest degradation among the three
+variants. The learned event evidence must therefore be con-
+verted by the manager into persistent latent goals and real-
+ized through the worker’s primitive actions. The hierarchy
+provides this connection between event-level decisions and
+primitive-step control.
+Manager update timing also contributes beyond the hierar-
+chical architecture itself. Retaining the manager–worker pol-
+icy, sparse context dynamics, and ETM but replacing event-
+aligned updates with a fixed K = 15 schedule reduces SR
+to 80.7 ± 28.3% and substantially increases variation across
+seeds. Because this variant changes only the manager update
+rule, the result suggests that event evidence is useful not only
+as a latent representation but also for deciding when the high-
+level goal should be refreshed. A single fixed period cannot
+adapt to the different durations of approach, grasp, transport,
+and placement interactions.
+The ETM provides a smaller but measurable additional
+benefit on the nominal single-transfer task. Removing ETM
+continuation while retaining event-aligned manager updates
+and the hierarchical policy yields 91.3 ± 5.0% SR, 7.4
+percentage points below the complete model. Thus, event-
+aligned hierarchical control already provides substantial task
+structure, while the ETM further improves manager learning
+by extending its bootstrap beyond the primitive imagination
+horizon.
+Without additional training, the same checkpoints are then
+evaluated on both stress tests. On repeated transfer, S2-HWM
+achieves 91.3 ± 6.1% SR versus 77.3 ± 18.6% for GAS-
+DreamerV3. When a drop interrupts the second transfer, S2-
+HWM retains 88.0±5.3% SR versus 65.3±14.0% for GAS-
+DreamerV3 and outperforms every ablation in both settings.
+The extended settings make the ETM contribution more
+pronounced. Removing the ETM causes a 7.4-point reduc-
+tion on single transfer, but the gap increases to 16.6 points
+on repeated transfer and 20.7 points under perturbation. This
+pattern is consistent with the ETM design: when execution
+Figure 5: Normalized multi-event stochastic-state prediction
+error on PegTransfer. ETM and policy-conditioned RSSM
+rollouts start from the same posterior stochastic states at event
+boundaries and are evaluated at matching future boundaries.
+Each curve is normalized by its own one-event MSE; lines
+show means and shaded regions show trajectory-level dis-
+persion. Lower is better.
+spans additional events or must continue after an interrup-
+tion, primitive-step imagination covers a smaller fraction of
+the remaining task, and event-level continuation provides the
+manager with a more distant value estimate. Overall, the hier-
+archy converts event information into control, event-aligned
+updates determine when the high-level goal changes, and the
+ETM extends the future task progress evaluated by the man-
+ager. The following subsection examines the corresponding
+predictive and behavioral structure.
+Event Prediction and Policy Analysis
+Task success does not directly reveal whether the event-level
+mechanisms behave as intended. We therefore analyze ETM
+prediction error across multiple future events and the rela-
+tionship between manager codes and worker behavior.
+For multi-event prediction, ETM and policy-conditioned
+
+
+Post-hoc semantic phase
+x-
+x+
+y-
+y+
+z-
+z+
+yaw-
+yaw+
+grip
+Approach-source
+13%
+18%
+15%
+11%
+25%
+8%
+3%
+2%
+5%
+Approach-grasp
+7%
+0%
+1%
+6%
+30%
+27%
+0%
+0%
+29%
+Grasp-lift
+16%
+10%
+1%
+13%
+13%
+41%
+0%
+0%
+6%
+Place-align
+41%
+2%
+4%
+38%
+8%
+3%
+1%
+0%
+3%
+Release-stable
+27%
+8%
+10%
+13%
+15%
+10%
+3%
+2%
+12%
+Table 2: Worker action occurrence ratios on deterministic PegTransfer evaluation rollouts from a representative S2-HWM seed-0
+policy. Each manager code is assigned post hoc to its dominant semantic phase: Approach-source {07, 10, 18, 23, 28, 56, 58};
+Approach-grasp {00, 31}; Grasp-lift {20, 35, 36}; Place-align {49, 60}; and Release-stable {03, 04, 22, 33, 38, 43, 45, 47, 54}.
+Rows aggregate primitive steps from these code sets, and entries are percentages over the nine primitive actions. Bold entries
+mark the dominant preferences in each row.
+Figure 6: Worker action tendencies for the post-hoc semantic phases in Table 2: (A) Approach-source, (B) Approach-grasp, (C)
+Grasp-lift, (D) Place-align, and (E) Release-stable. Colored afterimages and arrows denote empirical world-frame actions, with
+opacity reflecting their occurrence ratios. They visualize executed actions rather than predicted trajectories.
+RSSM rollouts start from the same posterior stochastic
+states at event boundaries and are evaluated against posterior
+stochastic states at matching future boundaries. Each model’s
+error is normalized by its own one-event MSE, so the metric
+measures relative error growth rather than absolute one-step
+accuracy. Figure 5 shows that ETM error remains close to
+the one-event reference through three event transitions and
+subsequently grows more slowly than RSSM error. Although
+the uncertainty bands overlap at longer horizons, the mean
+trend supports using event-level continuation to extend the
+manager bootstrap beyond primitive imagination.
+For policy analysis, manager codes from deterministic roll-
+outs of the representative seed-0 policy are grouped post hoc
+according to the semantic phase in which they are most fre-
+quently active. Table 2 and Figure 6 show that the resulting
+groups exhibit different primitive-action tendencies. Verti-
+cal adjustment and the gripper action are prominent near
+grasping, upward motion dominates grasp–lift, and lateral
+corrections characterize placement. The labels and group as-
+signments are not used during training; these results therefore
+do not imply that manager codes reproduce semantic phases,
+but show that manager-conditioned intervals are associated
+with structured worker behavior.
+Conclusion
+We presented S2-HWM, a Sparse Event-Structured Hierar-
+chical World Model for long-horizon sparse-reward surgical
+manipulation. Its central idea is to use learned event evi-
+dence as a shared interface between primitive-step control
+and event-level decision making. The event evidence sched-
+ules manager goal updates and constructs variable-duration
+segmentsfortheETM,whichpredictsboundary-to-boundary
+outcomes to extend the manager bootstrap beyond the primi-
+tive imagination horizon. On the SurRoL-based PegTransfer
+task, S2-HWM achieves 98.7±2.3% success, outperforming
+GASDreamerV3 by 22.7 percentage points, and retains its
+advantage in repeated-transfer and perturbation stress tests.
+Matched-budget ablations support the contributions of the hi-
+erarchy, event-aligned updates, and ETM continuation, while
+diagnostic analyses associate the learned organization with
+interaction-dependent transitions and structured worker be-
+havior without semantic stage supervision. These findings
+support learned event evidence as an effective connection
+between world modeling and hierarchical control. The cur-
+rent evaluation is limited to a simulated PegTransfer task
+family; future work will extend the framework to broader
+surgical tasks and physical robotic systems.
+References
+Bacon, P.-L.; Harb, J.; and Precup, D. 2017. The Option-
+Critic Architecture. In Proceedings of the AAAI Conference
+on Artificial Intelligence, volume 31.
+Fu, J.; Long, Y.; Chen, K.; Wei, W.; and Dou, Q. 2024.
+Multi-objective Cross-task Learning via Goal-conditioned
+GPT-based Decision Transformers for Surgical Robot Task
+Automation. In Proceedings of the IEEE International Con-
+ference on Robotics and Automation, 13362–13368.
+Gumbsch, C.; Sajid, N.; Martius, G.; and Butz, M. V. 2024.
+Learning Hierarchical World Models with Adaptive Tempo-
+
+
+ral Abstractions from Discrete Latent Dynamics. In Interna-
+tional Conference on Learning Representations.
+Hafner, D.; Lee, K.-H.; Fischer, I.; and Abbeel, P. 2022. Deep
+Hierarchical Planning from Pixels. In Advances in Neural
+Information Processing Systems, volume 35.
+Hafner, D.; Lillicrap, T.; Ba, J.; and Norouzi, M. 2020. Dream
+to Control: Learning Behaviors by Latent Imagination. In
+International Conference on Learning Representations.
+Hafner, D.; Lillicrap, T.; Fischer, I.; Villegas, R.; Ha, D.;
+Lee, H.; and Davidson, J. 2019. Learning Latent Dynam-
+ics for Planning from Pixels. In Proceedings of the 36th
+International Conference on Machine Learning, volume 97
+of Proceedings of Machine Learning Research, 2555–2565.
+PMLR.
+Hafner, D.; Lillicrap, T.; Norouzi, M.; and Ba, J. 2021. Mas-
+tering Atari with Discrete World Models. In International
+Conference on Learning Representations.
+Hafner, D.; Pasukonis, J.; Ba, J.; and Lillicrap, T. 2023.
+Mastering Diverse Domains through World Models. arXiv
+preprint arXiv:2301.04104.
+Hansen, N.; Su, H.; and Wang, X. 2024. TD-MPC2: Scalable,
+Robust World Models for Continuous Control. In Interna-
+tional Conference on Learning Representations.
+Huang, T.; Chen, K.; Li, B.; Liu, Y.-H.; and Dou, Q. 2023a.
+Demonstration-Guided Reinforcement Learning with Effi-
+cient Exploration for Task Automation of Surgical Robot.
+In Proceedings of the IEEE International Conference on
+Robotics and Automation, 4640–4647.
+Huang, T.; Chen, K.; Wei, W.; Li, J.; Long, Y.; and Dou, Q.
+2023b. Value-Informed Skill Chaining for Policy Learning of
+Long-Horizon Tasks with Surgical Robot. In Proceedings of
+the IEEE/RSJ International Conference on Intelligent Robots
+and Systems, 8495–8501.
+Kulkarni, T. D.; Narasimhan, K.; Saeedi, A.; and Tenenbaum,
+J. B. 2016. Hierarchical Deep Reinforcement Learning: In-
+tegrating Temporal Abstraction and Intrinsic Motivation. In
+Advances in Neural Information Processing Systems, vol-
+ume 29.
+Lin, H.; Li, B.; Wong, C. W.; Rojas, J.; Chu, X.; and Au, K.
+W. S. 2024. World Models for General Surgical Grasping.
+In Proceedings of Robotics: Science and Systems.
+Long, Y.; Lin, A.; Kwok, D. H. C.; Zhang, L.; Yang, Z.; Shi,
+K.; Song, L.; Fu, J.; Lin, H.; Wei, W.; Chen, K.; Chu, X.;
+Hu, Y.; Yip, H. C.; Chiu, P. W. Y.; Kazanzides, P.; Taylor,
+R. H.; Liu, Y.; Chen, Z.; Wang, Z.; Au, S. K. W.; and Dou, Q.
+2025. Surgical Embodied Intelligence for Generalized Task
+Autonomy in Laparoscopic Robot-Assisted Surgery. Science
+Robotics, 10(104): eadt3093.
+Long, Y.; Wei, W.; Huang, T.; Wang, Y.; and Dou, Q. 2023.
+Human-in-the-Loop Embodied Intelligence with Interactive
+Simulation Environment for Surgical Robot Learning. IEEE
+Robotics and Automation Letters, 8(8): 4441–4448.
+Riedmiller, M.; Hafner, R.; Lampe, T.; Neunert, M.; Degrave,
+J.; van de Wiele, T.; Mnih, V.; Heess, N.; and Springenberg,
+J. T. 2018. Learning by Playing: Solving Sparse Reward
+Tasks from Scratch. In Proceedings of the 35th International
+Conference on Machine Learning, volume 80 of Proceedings
+of Machine Learning Research, 4344–4353. PMLR.
+Schulman, J.; Wolski, F.; Dhariwal, P.; Radford, A.; and
+Klimov, O. 2017. Proximal Policy Optimization Algorithms.
+arXiv preprint arXiv:1707.06347.
+Sutton, R. S.; Precup, D.; and Singh, S. P. 1999. Between
+MDPs and Semi-MDPs: A Framework for Temporal Ab-
+straction in Reinforcement Learning. Artificial Intelligence,
+112(1–2): 181–211.
+Vezhnevets, A. S.; Osindero, S.; Schaul, T.; Heess, N.; Jader-
+berg, M.; Silver, D.; and Kavukcuoglu, K. 2017. FeUdal
+Networks for Hierarchical Reinforcement Learning. In Pro-
+ceedings of the 34th International Conference on Machine
+Learning, volume 70 of Proceedings of Machine Learning
+Research, 3540–3549. PMLR.
+Xu, J.; Li, B.; Lu, B.; Liu, Y.-H.; Dou, Q.; and Heng, P.-
+A. 2021. SurRoL: An Open-source Reinforcement Learning
+Centered and dVRK Compatible Platform for Surgical Robot
+Learning.
+In Proceedings of the IEEE/RSJ International
+Conference on Intelligent Robots and Systems, 1821–1828.
+Yang, Z.; Long, Y.; Chen, K.; Wei, W.; and Dou, Q. 2024.
+Efficient Physically-Based Simulation of Soft Bodies in Em-
+bodied Environment for Surgical Robot.
+arXiv preprint
+arXiv:2402.01181.

@@ -1,0 +1,1039 @@
+Efficient Real-World Online Reinforcement Learning for Robot
+Manipulation via Centralized Training and Critic Decomposition
+Changhao Li1,2,*
+, Yifang Zhang1
+, Heng Zhang3
+, Davide Torielli4
+, Damiano Gasperini1
+,
+Arturo Laurenzi1, Luca Muratore1
+, Arash Ajoudani3
+, Nikos Tsagarakis1
+Abstract— Real-world online reinforcement learning (RL)
+provides a promising approach for training robotic manip-
+ulation policies directly in the physical world, avoiding the
+sim-to-real gap and enabling continuous policy refinement
+through human-in-the-loop interaction. Recent methods have
+demonstrated sample-efficient learning through human inter-
+vention but remain limited to small randomization ranges
+and encounter challenges with the non-stationarity induced
+by concurrently training multiple agents. To address these
+limitations, we introduce a unified framework that combines
+centralized training with decentralized execution (CTDE) and
+a Hybrid Reward Architecture (HRA). This enables multiple
+actors to share a centralized multi-head critic. Specifically, we
+decouple continuous Cartesian arm pose control and discrete
+gripper control into two actor policies optimized under a
+centralized critic. The critic is decomposed into task and
+grasp heads, corresponding to the sparse task reward and a
+potential-based grasping reward, respectively. We accordingly
+reformulate the critic and actor objectives to exploit the decom-
+posed Q-values while explicitly accounting for the categorical
+action distribution of the discrete gripper policy. Experimental
+results demonstrate that the proposed framework substantially
+improves both sample efficiency and policy performance. We
+validate our approach on two robotic arms and a simulated
+humanoid robot across tennis ball and banana pick-and-
+place, pot reset, and simulated block relocation tasks under
+dimension-wise domain randomization, approximately 5-25×
+larger than those considered in prior work. Compared with
+a state-of-the-art baseline, our method improves the success
+rate from 60% to 80% on tennis ball pick-and-place, from
+60% to 90% on banana pick-and-place, and from 25% to
+95% on simulated block relocation, while also successfully
+accomplishing a task where the baseline consistently fails.
+Videos and more details are available at our project website:
+https://hil-harc.github.io/.
+I. INTRODUCTION
+Robotic manipulation remains a fundamental challenge,
+particularly for robust and efficient deployment [1]. Rein-
+forcement learning (RL) offers a promising alternative to
+manually designed controllers by learning behaviors through
+trial-and-error [2]. However, policies trained in simulation
+often degrade after transfer because of discrepancies in
+dynamics, contact, actuation, and sensory observations [3],
+[4], [5]. These discrepancies are especially consequential in
+physical interaction tasks, where even minor modeling or
+perception errors can result in task failure. Consequently,
+1 HHCM, Istituto Italiano di Tecnologia, Genoa, Italy.
+2 DIBRIS, University of Genova, Genova, Italy.
+3 Human-Robot Interfaces and Interaction Lab, Istituto Italiano di Tec-
+nologia, Genova, Italy.
+4 Cognitive Robotics, TU Delft, 2628CD Delft, The Netherlands
+∗Corresponding author: changhao.li [at] iit [dot] it
+Fig. 1. Experimental tasks overview. (a) A pick-and-place tennis ball task
+with a custom manipulator; (b) A pick-and-place banana task with a custom
+manipulator and a compliant gripper; (c) A pot reset task with Franka arm;
+(d) A block relocation task with Unitree G1 and robotiq gripper
+sample-efficient real-world online RL with human-in-the-
+loop (HIL) intervention has attracted growing interest, in-
+cluding for embodied-AI fine-tuning [6], [7], world action
+model post-training [8]. Training directly on the robot avoids
+reliance on accurate simulation while allowing policies to
+adapt to real-world dynamics. By combining offline data
+with HIL corrections, recent approaches learn nontrivial
+skills from restricted hardware interactions [9], [10], [11].
+Nevertheless, expert teleoperation remains time-consuming
+and human attention is a scarce resource, making sample
+efficiency and training stability central challenges in real-
+world online RL.
+Despite recent progress, prior methods such as SERL [12],
+HIL-SERL [13], are typically evaluated with limited do-
+main randomization, constrained workspaces, and restricted
+viewpoints. Similar limitations are also present in online RL
+fine-tuning vision-language-action (VLA) models [14] and
+pretrained RL policies [15]. Such bounded exploration and
+scene diversity hinder policy robustness and generalization,
+particularly for long-horizon manipulation in more diverse
+and realistic environments. In this work, we focus on improv-
+ing policy performance under large-scale domain random-
+ization. Our approach builds upon the HIL-SERL pipeline
+while introducing several key architectural enhancements to
+improve robustness across diverse environments, tasks, and
+robotic platforms, as shown in Fig. 1. A second challenge
+arises from the hybrid nature of manipulation actions, which
+arXiv:2608.09762v1  [cs.RO]  10 Aug 2026
+
+
+combine continuous motion with discrete gripper commands.
+Learning such a hybrid action space with a single policy can
+introduce non-differentiable decision boundaries, whereas
+independently optimizing two policies with identical rewards
+causes each policy to perceive non-stationary transition dy-
+namics as the other policy evolves. This coupling complicates
+credit assignment and may result in unstable optimization
+and discontinuous policy updates. Existing discretization or
+separate Q-learning solutions [10], [13] therefore struggle to
+represent and optimize both modalities cleanly. Meanwhile,
+real-world RGB observations are substantially noisier than
+low-dimensional state representations and simulated views.
+Their sensitivity to lighting, distractors, and sensor noise can
+destabilize critic gradients and slow convergence, particularly
+in sparse-reward settings observed during our deployment.
+In this work, we propose a visual manipulation framework
+designed to improve sample efficiency and policy perfor-
+mance under large-scale domain randomization. We integrate
+centralized training with decentralized execution (CTDE)
+for hybrid action learning and a hybrid reward architecture
+(HRA) [16] with a centralized multi-head critic. HRA de-
+composes the original regression target to stabilize learning
+from high-dimensional noisy observations. We evaluate the
+framework on both simulation and real-world manipula-
+tion tasks, better expose algorithmic capability, providing a
+comprehensive assessment of robustness and capability. Our
+contributions are:
+• We introduce a CTDE framework that decouples Carte-
+sian arm pose and gripper control into separate actors
+sharing a centralized critic. By jointly evaluating both
+actors’ actions, the critic captures arm–gripper interactions,
+mitigates the non-stationarity in simultaneous multi-agent
+learning while retaining decentralized execution.
+• We develop an HRA-integrated CTDE formulation with a
+reward-decomposed multi-head critic. Separate task and
+grasp value heads transform the original long-horizon
+value-estimation problem into simpler learning objectives,
+while the critic and actor losses are reformulated using
+the decomposed Q-values and the categorical distribution
+of the discrete gripper policy. This design improves sample
+efficiency and accelerates convergence under noisy RGB
+observations.
+• We implement a complete real-world online RL system,
+including a novel task-adaptive gripper, validated on two
+robotic arms and across multiple tasks and objects, with
+additional simulation validation on humanoid manipula-
+tion. Results demonstrate improved robustness, training
+efficiency, and task performance under large domain ran-
+domization, supporting practical deployment.
+II. RELATED WORK
+A. Real-World Online Reinforcement Learning
+Recent real-world online RL systems such as SERL [12]
+and HIL-SERL [13] leverage the sample-efficient RLPD
+framework [17] for practical on-robot learning under con-
+strained operational settings. RLinf [10] extends RLPD with
+system-level support for training across heterogeneous ma-
+nipulation and computing platforms. Online RL has also been
+used to fine-tune vision-language-action (VLA) models [14]
+and pretrained RL policies [15]. RL-100 [9] combines im-
+itation learning, offline RL, and online RL, demonstrating
+robust real-world deployment with point-cloud observations.
+Despite these advances, most systems remain limited to
+tightly constrained workspaces, often with only a few cen-
+timeters of randomization and narrow camera viewpoints,
+resulting in modest object and scene randomization and
+limited generalization. RLinf performs RLPD training within
+small maneuver ranges and restricted variability. Although
+RL-100 reports comparable trends for RGB and point-cloud
+observations, our experiments suggest that RGB-based poli-
+cies are vulnerable to pixel changes, making stable online
+RL training more challenging. Scaling online RL to larger
+workspaces further increases the exploration burden: real-
+world data collection is slow and cannot exploit massively
+parallel rollouts, while human operator can intervene in only
+one environment at a time. Moreover, sparse task rewards
+become increasingly insufficient as workspace size, initial-
+state diversity, and task horizon increase, further limiting
+sample efficiency.
+Our work scales online RL to wide workspace variations
+and large randomization. Our framework operates across
+broad workspace with diverse object configurations and full-
+range visual views, enabling evaluation under more realistic
+and demanding conditions. Overcoming constrained random-
+ization and limited viewpoints provides a more robust and
+generalizable solution for interactive real-world manipula-
+tion.
+B. Hybrid Action Space with Multi-Agent RL
+Real-world manipulation commonly requires both contin-
+uous end-effector motion with discrete gripper commands.
+Conventional RL policies typically output only one action
+type, whereas tasks such as pick-and-place require both fine-
+grained Cartesian control and binary grasping. Prior work,
+therefore, discretizes parts of the continuous space or relaxes
+discrete actions into continuous ones [18]. Parameterized
+action spaces handle hybrid actions without approxima-
+tion [19], [20], while recent actor–critic methods use multi-
+agent structures with joint critics and separate actors [21],
+[22].
+However, applying hybrid-action RL to real-world ma-
+nipulation remains challenging. Existing methods typically
+either discretize continuous control into a unified action
+space or optimize heterogeneous policies independently. Dis-
+cretization reduces control precision and may destabilize
+optimization near action boundaries, whereas continuous
+relaxation introduces mapping complexity and can reduce
+the reliability of binary behaviors such as grasping. Under
+decentralized training, each agent treats the other agents
+as part of the environment. Simultaneous policy updates,
+therefore, change the transition dynamics perceived by each
+agent, introducing non-stationarity that undermines Marko-
+vian process assumptions. These issues hinder deployment in
+
+
+Trajectories
+Proprio Encoder
+Image Encoder
+Asynchronous Training 
+rollout
+intervention
+episode
+store transition
+training
+update weight
+Weights
+Environment
+Human
+Policy
+Intervention
+Actor
+Arm
+Agent 0
+Gripper
+Agent 1
+Feature Extraction
+Replay Buffer
+Demo Buffer
+Interventions
+Demos
+Policy Buffer
+Interventions
+Transitions
+RLPD Update
+Critic
+Batch
+CTDE
+Multi-Head
+Fig. 2.
+Overview of training framework. Our online RL framework employs a reward-decomposed multi-head critic with multi-agent CTDE training.
+During training, a human expert provides demonstrations and corrective interventions via teleoperation, while intervened transitions replace the original
+policy actions and are stored alongside autonomous experience in a shared replay buffer. Training is asynchronous: a cloud-based learner continuously
+updates the actor–critic, and deployed actors periodically synchronize the latest policy parameters, following the training paradigm of SERL [12] and
+RLinf [10].
+physical environments requiring precise and reliable control.
+Our method adopts CTDE [23], [24], [25], using a joint
+centralized critic with global observations and separate SAC
+actors for continuous motion and discrete grasping. This de-
+sign stabilizes multi-agent RL and mitigates non-stationarity
+while preserving each modality’s strengths. The centralized
+critic also improves training efficiency, which is essential to
+real-world online RL, providing a robust, practical solution
+for coordinated continuous and discrete control.
+III. METHODOLOGY
+The overall framework of our method is illustrated in
+Fig. 2. It consists of three key components: (1) an RLPD-
+based real-world online RL pipeline, (2) a multi-agent
+CTDE training paradigm that mitigates environment non-
+stationarity, and (3) a reward-decomposed multi-head critic
+that simplifies value learning through task decomposition.
+Training follows the RLPD update loop, where the critic,
+encoder, and actor are sequentially optimized using mini-
+batches sampled from two replay buffers. The policy buffer
+stores autonomous interactions and human interventions,
+while the demonstration buffer contains offline teleoperation
+data and additional interventions. The demonstration buffer
+mainly supports initialization and early learning, whereas
+the policy buffer gradually becomes the primary training
+source as the policy improves. The framework supports
+diverse robot platforms, teleoperation devices, cameras, dis-
+tributed actors, and task-specific rewards, enabling flexible
+deployment across hardware configurations. Data collection
+and learning are decoupled: local actors execute policies
+and collect experience, while actor–critic optimization is
+performed asynchronously on a remote high-performance
+workstation with periodic policy synchronization.
+A. Sample-Efficient RL with Prior Data
+Consider the RL training a stochastic dynamic sys-
+tem that follows Markov decision process (MDP) M =
+{S, A, p, r, d, γ}, where S is the state space, A is the action
+space, and γ ∈(0, 1) is the discount factor. The system
+dynamics are governed by the environment, explicitly by a
+transition function p(s′|s, a), the same as the reward function
+r(s, a) and initial state distribution d(s0). The goal of RL is
+then to maximize the expected sum of discounted rewards:
+Eπ[P∞
+t=0 γtr(st, at)] to find an optimal policy π. The policy
+here is modeled by a Gaussian distribution and parameterized
+by a neural network.
+To
+enable
+efficient
+real-world
+training,
+we
+adopt
+RLPD [17], an off-policy model-free RL framework that
+leverages
+prior
+offline
+data.
+Our
+implementation
+uses
+SAC [26] as the underlying learner. Training is performed
+using a replay buffer D that combines autonomous policy
+rollouts, offline expert demonstrations, and human interven-
+tion data. All tasks employ sparse task rewards, obtained ei-
+ther from a pre-trained ResNet-based classifier [27] or human
+feedback. Following RLPD, prior demonstrations and online
+interaction data are sampled from the replay buffer with a
+predefined ratio, set to 50% offline data and 50% online
+data in our experiments. By incorporating human interven-
+tions into the replay buffer, experts can correct undesired
+behaviors during training, accelerating policy improvement
+and enhancing final task performance. The effectiveness of
+human-guided online RL has been demonstrated by HIL-
+SERL [13]. The critic and actor objectives are defined as
+follows:
+LQ(θ) =
+E
+(s,a)∼D[(Qθ(s, a) −(r(s, a) + γ E
+s′∼p[Vθ(s′)]))2]
+(1)
+
+
+Lπ(ϕ) = −E
+s∼D[αH(πϕ(·|s)) +
+E
+a∼πϕ[Qθ(s, a)]]
+(2)
+where Qθ denotes the action-value function, and Vθ(s′) =
+Ea∼πϕ[Qθ(s′, a)−α log πϕ(a|s′)] represents the target state-
+value function. H denotes the policy entropy. To reduce Q-
+value overestimation, the Q-value here is an ensemble of
+multiple Q-functions. In each RLPD update-to-data (UTD)
+cycle with ratio n, the critic is optimized for n gradient
+steps, while the actor is updated only once, enabling more
+effective utilization of sampled replay buffer data D. We
+set the target entropy as ¯H = 1
+2|A| following convention,
+and automatically adjust the entropy coefficient α using a
+temperature network.
+B. Multi-agent RL with Hybrid Action Space and CTDE
+CTDE is a multi-agent RL training paradigm that can be
+broadly categorized into value factorization and centralized
+critic approaches [28]. Since our framework is based on
+the actor–critic algorithm SAC, we adopt the centralized
+critic formulation introduced by MADDPG [21], which also
+motivates recent actor–critic methods such as MAPPO [22].
+Unlike HIL-SERL, which combines a continuous SAC policy
+with a discrete DQN gripper controller, we replace DQN with
+a discrete SAC policy, allowing both actors to share a central-
+ized critic. In the original SAC+DQN design, independently
+optimized policies perceive other agents as changing parts
+of the environment, causing non-stationarity and unstable
+value estimation. The centralized critic addresses this issue
+by jointly evaluating agent actions during training while
+preserving decentralized execution. Moreover, a shared critic
+reduces computational overhead compared with multiple
+independent critics, enabling more frequent learner updates
+and improved replay buffer utilization, which is particularly
+beneficial for real-world online RL. During execution, each
+actor uses only local observations, while the centralized critic
+is used exclusively for training.
+Our method supports heterogeneous observation spaces
+across actors. In implementation, the gripper policy uses
+only wrist-camera images, while the arm policy additionally
+receives a side-view for object localization. This design can
+naturally extend to dual-arm humanoid manipulation, where
+different actors can leverage distinct visual and propriocep-
+tive inputs while sharing a centralized critic. For the single-
+arm setup, we decompose the policy into two actors: a
+continuous SAC policy for Cartesian end-effector control
+and a discrete SAC policy for gripper control. Assuming
+conditional independence between the continuous action
+space Ac and discrete action space Ad, both actions are
+sampled simultaneously at each control step. The policies
+are defined as:
+π(a|s) = πc
+ϕ(ac|s)πd
+ψ(ad|s)
+=
+Y
+ai∈Ac
+πc
+ϕ(ai|s)
+Y
+aj∈Ad
+πd
+ψ(aj|s)
+(3)
+After decoupling, we retain the original objective in Eq.
+(2) to optimize πc
+ϕ(s) and introduce an extra discrete SAC
+objective to update πd
+ψ(s). Unlike the continuous policy, the
+discrete actor does not parameterize a Gaussian distribution.
+Instead, it directly outputs the logits z of a categorical
+distribution, which are converted into action probabilities
+as log πd
+ψ(a|s) = log(softmax(z)). Correspondingly, the
+discrete Q-network outputs Q-values for all possible actions
+simultaneously rather than estimating the value of a sampled
+action, improving computational efficiency during optimiza-
+tion. The discrete SAC policy loss is formulated as [29]:
+Lπ(ψ) =
+E
+st∼D[πψ(st)T [αd log πψ(st) −Qθ(st)]
+(4)
+C. Decomposed Critic via HRA
+HRA is most beneficial when learning is limited by value
+estimation rather than representation learning. The pot reset
+task considered in this work exhibits this characteristic.
+Using the same visual encoder and HIL-SERL pipeline, we
+successfully learn a policy in simulation even with Gaus-
+sian noise injected into both camera images, indicating that
+the representation and training pipeline are sufficient under
+simulated conditions. However, when transferred to the real
+robot, the same framework fails to maintain a stable success
+rate within a limited training budget. Without continuous
+human intervention, performance frequently degrades and
+rapidly collapses without recovery. We attribute this behavior
+to the critic. Compared with simulation, the critic exhibits
+substantially larger gradient norms when trained on real-
+world observations. Noise in raw RGB images and proprio-
+ceptive measurements propagates through the shared encoder
+into the latent representation, forcing a single monolithic Q-
+function to regress the long-horizon return from noisy fea-
+tures. This significantly increases the difficulty of temporal-
+difference regression and destabilizes critic optimization.
+HRA mitigates this through reward decomposition, under the
+condition that each reward component depends on only a
+small, largely disjoint subset of the state variables [16]. We
+separate reward into rtask and rgrasp. rtask is the sparse
+task reward, driven mainly by the front view and the end-
+effector pose, whereas rgrasp is associated with the wrist
+camera and the end-effector grasp state. The decomposed
+critics associated with individual rewards produce simpler
+regression targets while reducing the influence of irrelevant
+noise. HRA therefore improves critic conditioning under
+noisy real-world observations by replacing monolithic value
+estimation with a multi-head critic. Hence, we adopt the
+following HRA reward decomposition:
+r(s, a) =
+n
+X
+k=1
+rk(s, a)
+(5)
+where n is the number of reward components. In our case,
+n = 2 and rk ∈{rtask, rgrasp}. The grasp reward provides a
+dense potential-based reward shaping (PBRS) signal derived
+from the robot’s proprioceptive state. We define a grasp
+potential Φ(s) as a clipped min–max normalized function of
+the grasp torque Γ or gripper width κ, using normalization
+bounds xmin and xmax. The corresponding PBRS reward is:
+Φ(s) = clip
+
+x −xmin
+xmax −xmin
+, 0, 1
+
+,
+x ∈{Γ, κ},
+(6)
+
+
+where the shaping reward is rgrasp(s, a) = γΦ(s′) −Φ(s) +
+P, and P denotes the gripper-switching penalty.
+To exploit the decomposed rewards, we split the central-
+ized critic into one value head for each reward component
+while sharing a common feature extraction trunk. Let θ
+denote the parameters of the complete critic. The original
+action-value function can then be decomposed as:
+Qθ(s, a) =
+n
+X
+k=1
+E
+ ∞
+X
+i=0
+γirk(st+i, at+i)|st = s, at = a
+
+=
+n
+X
+k=1
+Qk
+θ(s, a) := QHRA
+(7)
+Instead of learning a single high-complexity value func-
+tion, each critic head estimates the expected return of one
+reward component. Since each head regresses a simpler
+target defined over a compact subset of the task, the re-
+sulting TD targets exhibit lower variance, leading to more
+stable value estimation and improved optimization under
+high-dimensional real-world visual observations. Each critic
+head corresponds to one reward channel, while both actors
+share the centralized multi-head critic and optimize weighted
+combinations of the two value estimates. The critic loss is
+defined as:
+LQ(θ) =
+E
+(s,a)∈D
+ X
+k
+(yk −Qk
+θ(s, a))2
+
+ytask = rtask + γ (Vtask(s′) −αd log πψ(a′
+d|s′))
+ygrasp = rgrasp + γVgrasp(s′)
+Vk(s′) =
+E
+a′
+d∼πψ
+h
+min Qk
+¯θk(s′, a′)
+i
+(8)
+where Vk(s′) and yk denote the state value and TD target of
+reward head k ∈{task, grasp} with parameters θk and target
+parameters ¯θk, respectively. The critic evaluates the executed
+hybrid action a = (ac, ad). Accordingly, we replace the Q-
+value in Eq. (2) and Eq. (4) with Ea′
+d∼πψ[Qtask + λgQgrasp]
+and Qtask + λgQgrasp, respectively, where λg controls the
+contribution of the grasp value in the discrete gripper objec-
+tive.
+Our method, hybrid actors with a reward-decomposed
+critic (HARC), follows the CTDE paradigm. The continuous
+arm actor πϕ and discrete gripper actor πψ act indepen-
+dently during execution but are trained using a shared joint
+critic that evaluates their combined actions. The critic is
+decomposed into task and grasp heads, each associated with
+its own reward component, TD target, and gradient path.
+The two heads are recombined during actor updates through
+an adjustable weighting factor, providing a dense auxiliary
+learning signal to improve sample efficiency. The critics
+are updated with a high UTD ratio using Polyak-averaged
+target networks. This design is expected to improve sample
+efficiency and overall training performance.
+D. Compliant Gripper Design
+In our experiments, we will deploy the proposed frame-
+work to grasp objects with diverse geometric features. Al-
+Fig. 3.
+Compliant gripper based on the modular 1-DoF revolute joint
+gripper design [30]. The left column shows the complete gripper in different
+configurations, during a fingertip grasp of a small object, and during an
+enveloping grasp of a larger object, from top to bottom. The enlarged finger
+diagrams show the extended configuration, the mechanically constrained
+fingertip-grasp configuration, and the passive adaptation that produces an
+enveloping grasp.
+though the standard Franka parallel gripper is effective for
+objects with simple grasping surfaces, its fixed finger geome-
+try and limited contact area make it difficult to achieve stable
+grasps on heavier objects and objects with more complex
+geometries. To overcome these experimental limitations, we
+developed a compliant two-finger gripper based on the actu-
+ation module of a modular 1-DoF revolute-joint gripper [30].
+As shown in Fig. 3, the left column presents the complete
+gripper in three representative configurations: the closed
+configuration without an object, a fingertip grasp of a small
+object, and an enveloping grasp of a larger object. The
+enlarged views illustrate the corresponding passive finger
+mechanics. Each finger consists of multiple articulated seg-
+ments coupled by fixed-length, high-stiffness tendons and
+elastic return elements, indicated by the colored paths in
+the figure. The tendons coordinate the motion of the finger
+segments, while the elastic elements restore the finger to
+its maximally extended idle configuration after contact is
+removed.
+During a fingertip grasp, contact occurs near the distal
+end of the finger. Mechanical stops limit further relative
+motion between the segments, allowing the finger to behave
+approximately as a rigid finger and securely grasp small
+objects. During an enveloping grasp of a larger object,
+a larger contact area closer to the palm is required to
+achieve a secure grasp, and contact is therefore more likely
+to occur near the finger root. The applied contact forces
+passively rotate the proximal segments, while the tendon
+coupling simultaneously bends the distal segment around the
+object. This adaptation increases the effective contact area
+and improves grasp stability for larger, heavier, and more
+geometrically complex objects.
+The gripper, therefore, supports both fingertip and envelop-
+ing grasps without requiring additional actuators or finger-
+level control. At the policy level, it retains the same binary
+open–close interface used in our RL formulation and does
+not increase the dimensionality of the learned action space.
+IV. EXPERIMENTAL SETUP AND RESULTS
+A. Policy Training Configuration
+For each task, RL training is initialized with 20 demon-
+strations collected via keyboard or joystick. The proposed
+
+
+TABLE I
+HYPERPARAMETERS FOR RLPD AND HARC.
+Shared RLPD Parameters
+HARC Parameters
+Parameter
+Value
+Parameter
+Value
+Parameter
+Value
+Critic network
+256 × 256
+Actor network
+256 × 256
+critic head network
+256 × 256
+Image encoder
+ResNet-10 + MLP
+Proprioceptive encoder
+MLP
+Normalization
+RMSNorm
+Buffer size
+100k
+Critic ensemble
+2
+Discrete actor output
+3
+Critic subsamples
+None
+Discount factor
+0.97
+Discrete actor network
+256 × 256
+Batch size
+256
+UTD
+2
+Discrete actor LR
+3 × 10−4
+Image encoder output
+256
+Proprio encoder output
+64
+Temperature LR
+3 × 10−4
+Critic LR
+3 × 10−4
+Actor LR
+3 × 10−4
+Initial temperature
+0.01
+Temperature LR
+3 × 10−4
+Initial temperature
+0.01
+Target entropy
+0.1
+Target entropy
+−3
+Entropy backup
+False
+Discrete actor image
+Wrist camera
+Target update ratio
+0.005
+Target update frequency 1
+Grasp reward coefficient 1.0
+Actor update frequency 4
+Share encoder
+True
+method is compared with HIL-SERL, a state-of-the-art base-
+line, under dimension-wise domain randomization approx-
+imately 5-25× larger than those adopted by HIL-SERL,
+which uses 2-8 cm in x–y and 1-10◦rotational random-
+ization. The randomization configuration is described in
+Subsection IV-B. As reported in SERL, behavioral cloning
+(BC) with limited demonstrations is insufficient to solve
+their manipulation tasks without online exploration, and the
+limitation should be further amplified under large domain
+randomization due to the increased exploration space. Robot
+resetting is performed through scripted motions, while en-
+vironment resetting is manual. The initial end-effector pose
+is randomized within a 6 × 6 cm x–y region and up to 10◦
+z-axis rotation. All experiments are conducted on a single
+NVIDIA RTX 4090 GPU with approximately 2.5 hours of
+wall-clock training. The environment operates at 10 Hz.
+Policies output 6-DoF Cartesian delta poses with bounded
+step sizes and a 1-DoF discrete gripper command with three
+actions: open, close, and stay.
+The policy observations including RGB images, end-
+effector tool center point (TCP) pose, TCP velocity, grip-
+per position, and gripper torque. Since the Franka gripper
+does not provide torque feedback, torque observations are
+excluded. Following the baseline, a variable end-effector
+reference frame is adopted to encourage learning0 relative
+motions between the end-effector and target objects directly
+from visual. For fair comparison, both methods use the same
+RLPD hyperparameters listed on the left side of Table I.
+Additional hyperparameters on All discrete gripper actors
+in the proposed method use only wrist-camera inputs. All
+discrete actors in the proposed method use only wrist camera
+as the visual input. Despite this restricted observation, the
+gripper policies successfully learn grasping and releasing
+behaviors after convergence, enabled by critic decomposition
+and loss reformulation based on both task and grasp Q-
+values. RMSNorm [31] is adopted instead of LayerNorm for
+improved computational efficiency.
+B. Experimental Setups and Task Design Overview
+We evaluate our method against the baseline using two
+different robotic arms and a simulated humanoid robot: a 6-
+DOF custom manipulator, the 7-DoF Franka Emika Panda
+arm, and a Unitree G1, as shown in Fig. 1. The designed
+tasks are:
+1) P&P a tennis ball:
+The robot grasps a tennis ball and places it on a yellow
+marker. The ball is randomized within a 50 × 40 cm
+workspace. Failed grasps may transition into pick-and-
+catch as the ball rolls along the gripper closing direction.
+Observations are provided by a front camera and a wrist
+camera mounted on a customized gripper, with the wrist
+view enabling egocentric feedback for reliable control.
+Unless otherwise specified, all tasks use a maximum
+episode length of 200 steps.
+2) P&P a banana:
+This task uses the same visual observations as the tennis-
+ball task, but excludes gripper torque. The banana pose is
+randomized within a 30×30 cm planar region with 360◦
+orientation variation, requiring robust accurate grasp-
+point selection under large shape variations.
+3) Pot reset:
+The robot grasps a metal pot by its flat oval handle
+and places it on a marker within 250 steps. The pot
+is randomized within a 40 × 40 cm workspace with up
+to 90◦orientation variation. Its reflective surface, large
+pose variation, and unstable handle contacts increase task
+difficulty. Our compliant palm improves handle grasping
+reliability beyond the original 1-DoF revolute joint grip-
+per.
+4) Block relocation:
+The humanoid robot relocates two different-sized blocks
+into a container. The smaller cube requires fingertip
+grasping for stable transportation. Block positions are
+randomized within 20 × 10 cm and 10 × 10 cm regions
+with up to 360◦orientation variation. The arm policy
+receives head and wrist camera observations and must
+handle temporary occlusion of the remaining cube during
+transportation.
+C. Experiment Results
+1) Sample efficiency improvement
+Fig. 5 compares the total expert data required from
+initialization to training interventions, demonstrating that
+our method requires less expert supervision than HIL-
+SERL. Assuming consistent expert demonstrations and
+converting each initial demonstration transition set to 20
+
+
+0
+30
+60
+90
+Success Rate (%)
+P&P Tennis Ball
+P&P Banana
+Pot Reset
+Block Relocation
+0
+20
+40
+60
+Intervention Rate (%)
+0
+40
+80
+120
+160
+16
+24
+32
+Episode Time (s)
+0
+40
+80
+120
+160
+0
+40
+80
+120
+160
+0
+40
+80
+120
+160
+Training Time (min)
+Ours
+HIL-SERL
+Fig. 4.
+Learning curves for our method and HIL-SERL [13] across all tasks, showing 20-episode running averages of success rate, intervention rate, and
+episode duration. Success rates increase until convergence or the training-time limit, while intervention rates and episode durations decrease; intervention
+rates ultimately reach 0%.
+equivalent episodes, the total expert data corresponds to
+69, 76, 111, and 115 episodes for our method, compared
+with 80, 102, 132, and 189 episodes for HIL-SERL.
+Although the total number of demonstration episodes is
+not negligible, interventions occur only in short segments
+when the policy behaves poorly, concentrating expert
+on improving exploration. This helps to improve sample
+efficiency and data quality, and enables the policy to learn
+valuable metrics such as failure recovery. SERL reports
+that BC performs poorly even with 100 expert demon-
+strations, while HIL-SERL uses 200 demonstrations to
+train a diffusion policy. Therefore, our method improves
+sample efficiency while reducing the need for continuous
+expert supervision.
+Tennis Ball
+Banana
+Pot Reset
+Two Blocks
+Task
+0
+10000
+20000
+30000
+Demo Buffer Transitions
+2686
+6542
+2613
+7296
+2561
+11646
+2855
+13610
+2686
+8039
+2613
+10700
+2561
+14355
+2855
+24251
+9228
+9909
+14207
+16465
+10725
+13313
+16916
+27106
+Initial Demo
+Ours (training)
+HIL-SERL (training)
+Fig. 5. Comparison of demo buffer transitions across tasks. Light green bars
+indicate the initial 20 episodes of teleoperated demonstrations, while purple
+and pink bars show additional human-intervention transitions collected
+during training.
+2) Performance under large-scale randomization
+Table II reports success rates over 20 evaluation episodes
+for all tasks, while Fig. 4 presents the corresponding
+training curves. After 160 minutes of wall-clock training
+on the real-world tasks, our method achieves the highest
+success rate across all benchmarks, increasing the average
+success rate from 40% with HIL-SERL to 75%. On
+the simulated Unitree block relocation task, our method
+reaches a 95% success rate, whereas the baseline achieves
+only 25% under the same training budget, highlighting
+its difficulty in handling multi-object manipulation under
+large domain randomization. Overall, our method con-
+verges faster, requires fewer expert interventions, and
+completes episodes more efficiently, demonstrating supe-
+rior task performance, sample efficiency, and execution
+efficiency under large-scale domain randomization.
+TABLE II
+POLICY EVALUATION PERFORMANCES.
+Task
+Success Rate (%)
+HIL-SERL [13]
+Ours
+P&P tennis ball
+60
+80 (+33%)
+P&P banana
+60
+90 (+50%)
+Pot reset
+0
+55
+Block relocation
+25
+95 (+280%)
+V. CONCLUSIONS
+This work presents a practical framework for real-world
+online reinforcement learning in sparse-reward robotic ma-
+nipulation tasks with hybrid action spaces and large-scale
+domain randomization. The framework combines centralized
+training with decentralized execution (CTDE) and a Hybrid
+Reward Architecture (HRA), enabling multiple agents to
+share a centralized critic while optimizing task-specific ac-
+tors from heterogeneous observations. By leveraging global
+information during centralized training, CTDE mitigates the
+non-stationarity and credit assignment challenges inherent to
+multi-agent learning while allowing each actor to execute
+independently. The shared critic preserves the actor–critic
+paradigm of RLPD without introducing independent Q-
+learning modules, whereas the multi-head critic simplifies
+
+
+value estimation through reward decomposition and reshapes
+critic and actor objectives for policy optimization. We in-
+stantiate the framework using a continuous SAC arm policy
+and a discrete SAC gripper policy that share the joint critic
+while operating on local observations. Experimental results
+on challenging real-world and simulated manipulation tasks
+demonstrate that the proposed framework consistently out-
+performs HIL-SERL in task success rate, sample efficiency,
+expert intervention requirements, and episode execution time.
+Future work will extend the proposed framework to collab-
+orative dual-arm manipulation on humanoid platforms.
+REFERENCES
+[1] “A review of learning-based dynamics models for robotic manipulation
+| Science Robotics.” [Online]. Available: https://www.science.org/do
+i/10.1126/scirobotics.adt1497
+[2] A. A. Shahid, L. Roveda, D. Piga, and F. Braghin, “Learning Con-
+tinuous Control Actions for Robotic Grasping with Reinforcement
+Learning,” in 2020 IEEE International Conference on Systems, Man,
+and Cybernetics (SMC), Oct. 2020, pp. 4066–4072.
+[3] W. Chen, J. Xu, F. Xiang, X. Yuan, H. Su, and R. Chen, “General-
+Purpose Sim2Real Protocol for Learning Contact-Rich Manipulation
+With Marker-Based Visuotactile Sensors,” IEEE Transactions on
+Robotics, pp. 1–18, 2024, conference Name: IEEE Transactions on
+Robotics. [Online]. Available: https://ieeexplore.ieee.org/abstract/doc
+ument/10388459
+[4] F. Bjelonic, F. Tischhauser, and M. Hutter, “Towards bridging the
+gap: Systematic sim-to-real transfer for diverse legged robots,” arXiv
+preprint arXiv:2509.06342, 2025.
+[5] H. Zhang, G. Solak, G. J. G. Lahr, and A. Ajoudani, “Srl-vic: A
+variable stiffness-based safe reinforcement learning for contact-rich
+robotic tasks,” IEEE Robotics and Automation Letters, vol. 9, no. 6,
+pp. 5631–5638, 2024.
+[6] C. Tang, B. Abbatematteo, J. Hu, R. Chandra, R. Mart´ın-Mart´ın,
+and P. Stone, “Deep reinforcement learning for robotics: A survey
+of real-world successes,” Annual Review of Control, Robotics, and
+Autonomous Systems, vol. 8, no. 1, pp. 153–188, 2025.
+[7] Y. Guo, J. Zhang, X. Chen, X. Ji, Y.-J. Wang, Y. Hu, and J. Chen,
+“Improving vision-language-action model with online reinforcement
+learning,” in 2025 IEEE International Conference on Robotics and
+Automation (ICRA).
+IEEE, 2025, pp. 15 665–15 672.
+[8] Y. Li, Z. Zhou, Y. Chen, Y. Guo, J. Liu, S. Zhang, J. Chen, and Y. Zhu,
+“Hi-wm: Human-in-the-world-model for scalable robot post-training,”
+arXiv preprint arXiv:2604.21741, 2026.
+[9] K. Lei, H. Li, D. Yu, Z. Wei, L. Guo, Z. Jiang, Z. Wang, S. Liang,
+and H. Xu, “Rl-100: Performant robotic manipulation with real-world
+reinforcement learning,” arXiv preprint arXiv:2510.14830, 2025.
+[10] H. Zang, S. Yu, H. Lin, T. Zhou, Z. Huang, Z. Guo, X. Xu, J. Zhou,
+Y. Sheng, S. Zhang et al., “Rlinf-user: A unified and extensible system
+for real-world online policy learning in embodied ai,” arXiv preprint
+arXiv:2602.07837, 2026.
+[11] N. Turcato, M. Iovino, A. Synodinos, A. Dalla Libera, R. Carli,
+and P. Falco, “Towards Autonomous Reinforcement Learning for
+Real-World Robotic Manipulation With Large Language Models,”
+IEEE Robotics and Automation Letters, vol. 10, no. 9, pp. 8850–8857,
+Sep. 2025. [Online]. Available: https://ieeexplore.ieee.org/abstract/d
+ocument/11080043/authors
+[12] J. Luo, Z. Hu, C. Xu, Y. L. Tan, J. Berg, A. Sharma, S. Schaal,
+C. Finn, A. Gupta, and S. Levine, “Serl: A software suite for sample-
+efficient robotic reinforcement learning,” in 2024 IEEE International
+Conference on Robotics and Automation (ICRA).
+IEEE, 2024, pp.
+16 961–16 969.
+[13] J. Luo, C. Xu, J. Wu, and S. Levine, “Precise and dexterous robotic
+manipulation via human-in-the-loop reinforcement learning,” Science
+Robotics, vol. 10, no. 105, p. eads5033, 2025.
+[14] G. Lu, W. Guo, C. Zhang, Y. Zhou, H. Jiang, Z. Gao, Y. Tang,
+and Z. Wang, “Vla-rl: Towards masterful and general robotic ma-
+nipulation with scalable reinforcement learning,” arXiv preprint
+arXiv:2505.18719, 2025.
+[15] T. Zhang, C. Yu, S. Su, and Y. Wang, “Reinflow: Fine-tuning flow
+matching policy with online reinforcement learning,” Advances in
+Neural Information Processing Systems, vol. 38, pp. 106 282–106 319,
+2026.
+[16] H. Van Seijen, M. Fatemi, J. Romoff, R. Laroche, T. Barnes, and
+J. Tsang, “Hybrid reward architecture for reinforcement learning,”
+Advances in neural information processing systems, vol. 30, 2017.
+[17] P. J. Ball, L. Smith, I. Kostrikov, and S. Levine, “Efficient online
+reinforcement learning with offline data,” in International Conference
+on Machine Learning.
+PMLR, 2023, pp. 1577–1594.
+[18] M. Hausknecht and P. Stone, “Deep reinforcement learning in param-
+eterized action space,” arXiv preprint arXiv:1511.04143, 2015.
+[19] J. Xiong, Q. Wang, Z. Yang, P. Sun, L. Han, Y. Zheng, H. Fu,
+T. Zhang, J. Liu, and H. Liu, “Parametrized deep q-networks learning:
+Reinforcement learning with discrete-continuous hybrid action space,”
+arXiv preprint arXiv:1810.06394, 2018.
+[20] C. J. Bester, S. D. James, and G. D. Konidaris, “Multi-pass q-networks
+for deep reinforcement learning with parameterised action spaces,”
+arXiv preprint arXiv:1905.04388, 2019.
+[21] R. Lowe, Y. I. Wu, A. Tamar, J. Harb, O. Pieter Abbeel, and I. Mor-
+datch, “Multi-agent actor-critic for mixed cooperative-competitive
+environments,” Advances in neural information processing systems,
+vol. 30, 2017.
+[22] C. Yu, A. Velu, E. Vinitsky, J. Gao, Y. Wang, A. Bayen, and
+Y. Wu, “The surprising effectiveness of ppo in cooperative multi-agent
+games,” Advances in neural information processing systems, vol. 35,
+pp. 24 611–24 624, 2022.
+[23] Y. Xiao, W. Tan, and C. Amato, “Asynchronous actor-critic for
+multi-agent reinforcement learning,” Advances in Neural Information
+Processing Systems, vol. 35, pp. 4385–4400, 2022.
+[24] Y. Xu, Y. Wei, K. Jiang, L. Chen, D. Wang, and H. Deng, “Action
+decoupled sac reinforcement learning with discrete-continuous hybrid
+action spaces,” Neurocomputing, vol. 537, pp. 141–151, 2023.
+[25] C. Miao, Y. Cui, H. Li, and X. Wu, “Effective multi-agent deep
+reinforcement learning control with relative entropy regularization,”
+IEEE Transactions on Automation Science and Engineering, vol. 22,
+pp. 3704–3718, 2024.
+[26] T. Haarnoja, A. Zhou, K. Hartikainen, G. Tucker, S. Ha, J. Tan, V. Ku-
+mar, H. Zhu, A. Gupta, P. Abbeel et al., “Soft actor-critic algorithms
+and applications. arxiv 2018,” arXiv preprint arXiv:1812.05905, 1812.
+[27] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+recognition,” in Proceedings of the IEEE conference on computer
+vision and pattern recognition, 2016, pp. 770–778.
+[28] C. Amato, “An introduction to centralized training for decentralized
+execution in cooperative multi-agent reinforcement learning,” arXiv
+preprint arXiv:2409.03052, 2024.
+[29] P. Christodoulou, “Soft actor-critic for discrete action settings,” arXiv
+preprint arXiv:1910.07207, 2019.
+[30] E. Del Bianco, D. Torielli, F. Rollo, D. Gasperini, A. Laurenzi,
+L. Baccelliere, L. Muratore, M. Roveri, and N. G. Tsagarakis, “A
+high-force gripper with embedded multimodal sensing for powerful
+and perception driven grasping,” in 2024 IEEE-RAS 23rd International
+Conference on Humanoid Robots (Humanoids). IEEE, 2024, pp. 149–
+156.
+[31] B. Zhang and R. Sennrich, “Root mean square layer normalization,”
+Advances in neural information processing systems, vol. 32, 2019.

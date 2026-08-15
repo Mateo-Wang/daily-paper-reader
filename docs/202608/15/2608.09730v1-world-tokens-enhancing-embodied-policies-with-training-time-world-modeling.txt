@@ -1,0 +1,1230 @@
+World Tokens: Enhancing Embodied Policies with
+Training-Time World Modeling
+Qu Tang
+Benhui Zhuang
+Bo Yuan†
+Xue Yu
+Longteng Guo
+Junlan Feng
+JIUTIAN Research
+Zhongguancun Academy
+†Corresponding author.
+Abstract
+Vision-language-action (VLA) models are a widely adopted paradigm for embodied policies.
+They excel at efficient closed-loop control but do not explicitly model how physical scenes
+evolve as a task unfolds. Recently emerging world-action models (WAMs) leverage pretrained
+video world models to capture spatiotemporal evolution, yet retaining future generation or a
+large video backbone in the control loop substantially increases inference cost. We introduce
+World Tokens, an embodied policy architecture built around a World Adapter that bridges
+visual-language understanding, world-dynamics modeling, and action generation. It uses world
+modeling during training to enhance the action policy while preserving efficient deployment.
+Specifically, the World Adapter transforms VLM features into a fixed set of world tokens,
+which condition a jointly fine-tuned future-video denoiser and simultaneously serve as the
+action expert’s sole visual-language context. This shared conditioning allows gradients from
+future-video denoising to directly shape the representation used for action prediction, while
+exclusive routing prevents the policy from bypassing that representation. At deployment, the
+world-model branch is removed, leaving only the VLM, World Adapter, and action expert, with
+no online video-model inference. With a 2B backbone and no embodied action pretraining,
+World Tokens is highly competitive on LIBERO, attains the best reported averages on SIMPLER,
+substantially improves real-world R1 Pro success over a matched action-only baseline, and
+generates each action chunk at VLA-level latency.
+1
+Introduction
+Vision-language-action (VLA) policies pair a pretrained vision-language model (VLM) with
+an action expert that maps visual observations and language instructions to continuous robot
+commands (Kim et al., 2025b; Black et al., 2025b; NVIDIA, 2025a; Kim et al., 2025a; Black et al.,
+2025a). The VLM provides semantic recognition and instruction grounding, while the action
+expert supports efficient closed-loop control. However, image–text pretraining provides little
+direct supervision for action-relevant temporal transitions, such as contact, occlusion, and object
+displacement. Because appropriate action selection often depends on how the scene is likely to
+evolve rather than on current appearance alone, a VLA must learn these transitions primarily
+1
+arXiv:2608.09730v1  [cs.CV]  10 Aug 2026
+
+
+World Tokens
+A Preprint
+from robot demonstrations, which are typically much more limited than its visual-language
+pretraining data.
+Pretrained video world models offer complementary supervision by predicting how scenes
+change over time. World-action models (WAMs) incorporate this capability by jointly generating
+videos and actions, conditioning actions on predicted futures, or extracting features from a
+video-denoising backbone (Bi et al., 2026; Ye et al., 2026b; Kim et al., 2026; Ma et al., 2026; Li
+et al., 2026). These architectures have shown promising long-horizon and out-of-distribution
+manipulation performance, but iterative video denoising or a retained multi-billion-parameter
+backbone can substantially increase control latency.
+Action 
+Head
+Action 
+Head
+World Model
+VLM
+World Model
+Training only
+“Pick up
+the green 
+cube”
+VLM
+World Tokens
+✓Fast Inference
+−Weak Dynamics
+1
+VLAs
+2 WAMs
+3 Ours
+Actions
+Actions
+Supervise
+IDM/
+Joint Infer
+w/o explicit future supervision
+✓Dynamics Aware
+−Slow Inference
+Actions
+✓Dynamics Aware
+✓Fast Inference
+Future rollout supervision
+Figure 1: World Tokens combines the
+fast inference of behavior cloning with
+the dynamics awareness of world models
+by moving world modeling to training
+time. (1) Behavior-cloning VLAs act di-
+rectly on VLM features: fast, but without
+dynamics supervision. (2) World-model
+rollout predicts futures inside the con-
+trol loop: dynamics-aware, but slow. (3)
+Our method uses the world model only
+during training and discards it at deploy-
+ment.
+Recent evidence suggests separating the representational benefit of predictive training from
+the cost of online video inference (Figure 1). Fast-WAM shows that video co-training can
+contribute more than explicit future synthesis alone, yet its deployed controller still retains a
+video DiT together with a large companion action DiT and language encoder (Yuan et al., 2026).
+In parallel, lighter predictive objectives can improve VLAs without retaining a video backbone
+at deployment (Fang et al., 2025; Sun et al., 2026). A key design issue remains: predictive
+supervision typically acts only through a parallel branch, while the action expert still conditions
+on the full VLM context. The controller can then simply ignore the subspace shaped by world
+modeling, and prediction and action can drift apart in representation space. We therefore ask:
+how can world modeling better enhance the representation used for embodied control while the
+world model itself is removed completely after training?
+We address this question with a World Adapter (Figure 2), an intermediate module that
+bridges task understanding, dynamics evolution, and action generation (i.e., the VLM, a video
+world model, and an action DiT). During training, VLM features are expressed through the
+World Adapter as a fixed set of world tokens, which jointly condition a fine-tuned future-video
+denoiser and a flow-matching action expert. The action expert has no parallel access to the full
+VLM sequence; all visual and linguistic context must pass through these tokens. This exclusive
+routing precludes a direct controller bypass around the future-supervised representation. In
+parallel, we weaken the world model’s first-frame condition to an edge map that retains only
+scene-layout semantics. This prevents the video branch from relying on full appearance cues, so
+the world tokens must carry the rich visual-semantic content needed to guide the world model’s
+inference of scene evolution.
+2
+
+
+World Tokens
+A Preprint
+Consequently, the video world model is needed only to supervise the world tokens during
+training and need not enter the closed control loop. At deployment, the full video branch is
+removed and inference runs entirely through the VLM, World Adapter, and action expert: the
+control representation has already been shaped by world modeling, while inference latency
+remains close to that of a VLA. Empirically, World Tokens ranks among the strongest entries
+on LIBERO, where training and evaluation remain in simulation, and attains the best reported
+averages on SIMPLER, where policies trained on real data are evaluated in simulation; on a
+physical R1 Pro robot, it outperforms a matched action-only baseline at comparable latency.
+Overall, the World Tokens architecture folds world modeling into a deployable control interface,
+combining dynamics supervision with efficient closed-loop control.
+Our contributions are summarized as follows:
+• We introduce World Tokens, a training-time world-modeling architecture that jointly
+trains a video world model and a VLA policy. At deployment, the entire video branch is
+removed, retaining the benefit of predictive supervision at VLA-level inference latency.
+• We introduce the World Adapter, which maps the VLM sequence into 256 world tokens
+that condition the video world model and constitute the action expert’s sole visual-language
+context, so that future-video supervision directly shapes the representation used for control.
+• Our extensive experiments show that a 2B model without embodied action pretraining
+reaches 98.2% on LIBERO and the best performance on SIMPLER-WidowX (71.5%) and
+SIMPLER-GoogleRobot (82.1%), and improves real-robot success from 59.4% to 76.0%
+over a matched baseline.
+2
+Related Work
+Vision-language-action policies. Large-scale robot transformers established the benefits of
+scaling policy capacity and data diversity across tasks and embodiments (Brohan et al., 2023b;
+Ghosh et al., 2024), while RT-2 transferred web-scale visual-language knowledge into robotic
+control (Brohan et al., 2023a). Complementary action-generation approaches model multimodal
+behavior through latent action tokens or diffusion (Lee et al., 2024; Chi et al., 2023; Liu et al.,
+2025). Modern VLA models adapt multimodal foundation models to robot control through
+autoregressive action decoding (Kim et al., 2025b,a) or flow-matching and diffusion action
+experts conditioned on VLM features (Black et al., 2025b; NVIDIA, 2025a; Black et al., 2025a).
+We retain this dual-system organization but, rather than conditioning the action expert on the
+full VLM sequence, route control through a fixed-size token interface jointly constrained by
+action prediction and future-video denoising.
+WAMs. Earlier work connected video modeling to control by jointly predicting future images
+and actions, extracting predictive video representations, learning task-centric latent actions from
+heterogeneous videos, or generating synthetic robot trajectories (Wu et al., 2024; Hu et al., 2025;
+Bu et al., 2025; Jang et al., 2025). WAMs more tightly couple video prediction and control
+through a shared generative backbone. Motus and DreamZero jointly model video and action
+with large video DiTs (Bi et al., 2026; Ye et al., 2026b); other systems adapt video foundation
+3
+
+
+World Tokens
+A Preprint
+Condition 
+frame
+Noise
+tokens
+TRAINING ONLY
+Observation
+Edge Detection
+VAE
+Encoder
+Pretrained World Model
+Vision Language Hidden States
+…
+World Tokens
+…
+Action Prediction
+Conditioning
+Conditioning
+Vision-Language Model 🔥
+World Adapter
+🔥
+Action Head
+🔥
+"put the alphabet 
+soup in the basket"
+…
+Noised Actions
+Denoised 
+future tokens
+Conditioning
+Learnable Queries
+🔥
+…
+…
+Dynamic 
+guidance
+Structure Anchor
+Figure 2: Training architecture. Given multi-view observations and language, the VLM produces
+multimodal features that the World Adapter maps into a fixed set of world tokens 𝑞𝑡. These tokens
+condition a jointly fine-tuned video denoiser (top) and a flow-matching action expert (bottom right). A
+Canny edge map of the primary view, encoded as a first-frame latent, supplies appearance-suppressed
+spatial structure to the video branch. At deployment, the video tokenizer, denoiser, structural anchor, and
+future targets are removed; the VLM, World Adapter, and action expert remain.
+models for control and planning (Kim et al., 2026; Ma et al., 2026) or execute causal future
+rollouts asynchronously (Li et al., 2026). These methods differ in whether they decode future
+RGB frames, expose denoising features to the action module, or plan over predicted futures,
+but all retain substantial video-model computation at deployment. Fast-WAM removes explicit
+future synthesis yet still evaluates a pretrained video DiT as a world encoder (Yuan et al., 2026).
+Predictive world modeling for VLA policies. Predictive VLA methods vary in both the target
+they model and the computation they retain at inference. WorldVLA and UVA jointly generate
+images and actions (Cen et al., 2025; Li et al., 2025a), while DreamVLA predicts dynamic,
+spatial, and semantic world knowledge before action generation (Zhang et al., 2025). Other
+methods use lighter training signals, including future-latent alignment (Zheng et al., 2025),
+motion-image diffusion (Fang et al., 2025), and latent-state prediction of future images (Sun
+et al., 2026). Related token formulations either roll compact visual states forward in time or
+encode discrete world changes (Tang et al., 2026; Zhu et al., 2026). World Tokens differs in two
+respects: predictive supervision is sourced from a pretrained video world model rather than a
+lightweight proxy, and the tokens represent the current context—not a predicted future—and
+serve as the sole conditioning input to the policy.
+4
+
+
+World Tokens
+A Preprint
+3
+Method
+3.1
+Problem Formulation
+We consider vision-language-conditioned robotic manipulation. At control step 𝑡, the robot
+observes RGB images from 𝑉views, 𝑜𝑡= (𝑜1
+𝑡, . . . , 𝑜𝑉
+𝑡), and receives a language instruction
+ℓ. The policy predicts an 𝐻-step action chunk 𝑎𝐻
+𝑡≡(𝑎𝑡, . . . , 𝑎𝑡+𝐻−1). During training, each
+demonstration additionally provides a 𝑇-frame future RGB clip from the primary view, 𝑣𝑡≡
+(𝑜1
+𝑡+1, . . . , 𝑜1
+𝑡+𝑇). The clip is used only as a prediction target: it is never provided to the action
+policy and is unavailable at evaluation. Our goal is to use 𝑣𝑡to shape the control representation
+while preserving the standard deployed mapping from (𝑜𝑡, ℓ) to 𝑎𝐻
+𝑡.
+3.2
+Architecture Overview
+World Tokens uses different computational graphs for training and deployment, as shown in
+Figure 2. The deployed policy, shown along the lower path, contains a VLM, a World Adapter,
+and an action expert. The upper path adds a video world model only for training. A fixed set of
+world tokens connects the two paths: the action expert uses them to generate actions, while the
+video model uses a projected version to denoise the demonstrated future clip. The world tokens
+are the action expert’s sole visual-language context, and the video branch receives a Canny edge
+anchor (Canny, 1986) in place of the full RGB first frame.
+3.3
+World Adapter
+Observation and language encoding. A pretrained VLM 𝑓𝜙jointly encodes all image views
+and the instruction into a variable-length sequence ℎ𝑡∈R𝑁𝑡×𝑑ℎof patch and language tokens.
+We insert a World Adapter 𝑏𝜓that maps this sequence into a fixed-size representation:
+ℎ𝑡= 𝑓𝜙(𝑜𝑡, ℓ),
+𝑞𝑡= 𝑏𝜓(ℎ𝑡) ∈R𝐾×𝑑.
+(1)
+We term the 𝐾output vectors of 𝑞𝑡the world tokens; the name reflects their predictive training
+objective rather than any predefined slot semantics.
+Query-based token extraction. The adapter follows the Perceiver resampler design (Jaegle
+et al., 2021; Alayrac et al., 2022): it maintains 𝐾learned queries 𝑄(0) ∈R𝐾×𝑑, and each of its
+𝐿blocks cross-attends from the current queries to ℎ𝑡, exchanges information among the queries
+through self-attention, and applies a feed-forward update. Denoting the 𝑗-th block by 𝐵( 𝑗)
+𝜓, we
+write
+𝑄(0)
+𝑡
+= 𝑄(0),
+𝑄( 𝑗+1)
+𝑡
+= 𝐵( 𝑗)
+𝜓(𝑄( 𝑗)
+𝑡
+, ℎ𝑡),
+𝑗= 0, . . . , 𝐿−1,
+𝑏𝜓(ℎ𝑡) = 𝑄(𝐿)
+𝑡
+.
+(2)
+The action and video objectives jointly determine what information the queries retain.
+5
+
+
+World Tokens
+A Preprint
+Exclusive action pathway. The action expert 𝑔𝜃is a DiT flow-matching model (Peebles and
+Xie, 2023; Lipman et al., 2023) that generates the action chunk 𝑎𝐻
+𝑡conditioned solely on the
+world tokens:
+𝑎𝐻
+𝑡∼𝑔𝜃(· | 𝑞𝑡).
+(3)
+3.4
+Training-Time World Modeling
+Video denoiser. The training-only video branch is a pretrained video diffusion model, denoted
+by W𝜔. A lightweight projection 𝑝𝜌adapts the world tokens to its cross-attention dimension:
+𝑞wm
+𝑡
+= 𝑝𝜌(𝑞𝑡).
+A frozen VAE encoder 𝐸maps the demonstrated future clip to the latent target 𝑧𝑡= 𝐸(𝑣𝑡).
+During training, W𝜔denoises noisy versions of 𝑧𝑡, using 𝑞wm
+𝑡
+as cross-attention context and the
+structural anchor defined below as its first-frame condition. Because 𝑞wm
+𝑡
+is derived from 𝑞𝑡, the
+video-denoising gradient directly shapes the same representation consumed by the action expert.
+Structural anchor. The video branch uses a first-frame reference to anchor the current scene
+layout. Without this reference, the world tokens must also encode static geometry; with a full
+RGB frame, the denoiser can rely heavily on appearance persistence, weakening its dependence
+on the tokens. We therefore replace the RGB reference with a Canny edge map of the primary
+view, encoded by the same frozen VAE encoder:
+𝑐𝑡= 𝐸 Canny(𝑜1
+𝑡).
+The resulting latent preserves boundaries and spatial layout while suppressing most color and
+texture cues. The two conditions are complementary: 𝑐𝑡anchors scene geometry, while 𝑞wm
+𝑡
+supplies task semantics and evolution-relevant content.
+3.5
+Joint Training and Deployment
+Training objective. Both branches are trained with a conditional denoising objective. For a
+target 𝑦, we sample base noise 𝜖∼N (0, 𝐼) and a noise level 𝜏, and write the noised input as 𝑦𝜏
+and the regression target as 𝑢𝜏(𝑦, 𝜖). For a conditional prediction network 𝐹, we define
+Lden(𝐹; 𝑦| 𝑐) = E𝜏,𝜖
+
+∥𝐹(𝑦𝜏, 𝜏| 𝑐) −𝑢𝜏(𝑦, 𝜖)∥2
+2
+
+.
+(4)
+The two branches differ only in parameterization: the action expert uses flow matching on a
+linear interpolation path, with 𝜏∼U[0, 1], 𝑦𝜏= (1 −𝜏)𝜖+ 𝜏𝑦, and 𝑢𝜏(𝑦, 𝜖) = 𝑦−𝜖, while the
+video branch retains the native diffusion formulation of the underlying video model (NVIDIA,
+2025b). We apply this objective to the demonstrated action chunk and the future-video latent:
+Lact = Lden
+
+𝑔𝜃; 𝑎𝐻
+𝑡| 𝑞𝑡
+
+,
+Lvid = Lden
+ W𝜔; 𝑧𝑡| 𝑞wm
+𝑡
+, 𝑐𝑡
+ ,
+L = Lact + 𝜆𝑤Lvid,
+𝜆𝑤= 0.5.
+(5)
+6
+
+
+World Tokens
+A Preprint
+Gradient paths. The action loss updates 𝑓𝜙, 𝑏𝜓, and 𝑔𝜃, forcing the world tokens to retain
+information needed for control; the video loss updates 𝑓𝜙, 𝑏𝜓, 𝑝𝜌, and W𝜔, encouraging the
+same tokens to explain the demonstrated scene evolution. Because both gradient paths meet at
+𝑞𝑡, predictive supervision directly shapes the representation consumed by the policy rather than
+a detachable auxiliary feature.
+Initialization. The VLM and the video denoiser are initialized from pretrained checkpoints
+and fine-tuned jointly. The World Adapter, world-model projection, and action expert are trained
+from scratch. We fine-tune the video denoiser because robot demonstrations differ from its
+pretraining data in viewpoint, embodiment, and contact dynamics; a frozen denoiser could
+provide poorly matched supervision. The tokenizer 𝐸remains frozen to keep the target latent
+space stationary.
+Deployment. At deployment, the entire video branch—𝐸, 𝑝𝜌, and W𝜔—is removed, leaving
+only 𝑓𝜙, 𝑏𝜓, and 𝑔𝜃; neither the future target 𝑣𝑡nor the structural anchor is required. The policy
+recomputes 𝑞𝑡at each control step and generates the action chunk with four flow-integration
+steps. World modeling therefore shapes the control representation during training without adding
+video-model computation at deployment.
+Vision-language-action policies (VLAs)
+Method
+Backbone Size Emb. PT Latency (ms) Spatial Object Goal Long Avg.
+OpenVLA (Kim et al., 2025b)
+7B
+✓
+240
+84.7
+88.4
+79.2
+53.7
+76.5
+𝜋0 (Black et al., 2025b)
+3B
+✓
+73
+96.8
+98.8
+95.8
+85.2
+94.1
+𝜋0.5 (Black et al., 2025a)
+2B
+✓
+56.32
+98.8
+98.2
+98.0
+92.4
+96.9
+OpenVLA-OFT (Kim et al., 2025a)
+7B
+✓
+112
+97.6
+98.4
+97.9
+94.5
+97.1
+VLA-JEPA (Sun et al., 2026)
+2B
+✓
+–
+96.2
+99.6
+97.2
+95.8
+97.2
+StarVLA (Ye et al., 2026a)
+4B
+✗
+–
+98.7
+99.7
+98.6
+94.2
+97.8
+World2Act (Vuong et al., 2026)
+3B
+✓
+–
+99.5
+100.0
+98.8
+94.0
+98.1
+World Tokens (ours)
+2B
+✗
+61.85
+99.6
+98.8
+97.4
+97.0
+98.2
+WAMs
+Method
+Backbone Size Emb. PT Latency (ms) Spatial Object Goal Long Avg.
+WorldVLA (Cen et al., 2025)
+7B
+✗
+–
+87.6
+96.2
+83.4
+60.0
+81.8
+Fast-WAM (Yuan et al., 2026)
+5B
+✗
+182
+98.2
+100.0
+97.0
+95.2
+97.6
+Motus (Bi et al., 2026)
+5B + 2B
+✓
+–
+96.8
+99.8
+96.6
+97.6
+97.7
+Cosmos Policy (Kim et al., 2026)
+2B
+✗
+610
+98.1
+100.0
+98.2
+97.6
+98.5
+DiT4DiT (Ma et al., 2026)
+2B
+✗
+136
+98.4
+99.6
+98.6
+97.6
+98.6
+Table 1: LIBERO success rate (%) and latency per action chunk (ms). Each suite has 10 tasks; Avg. is
+the unweighted suite mean. Emb. PT denotes embodied action pretraining. World2Act discards its world
+model at deployment and is therefore listed with VLAs. Latency for World Tokens and 𝜋0.5 is measured
+on our hardware; other values are quoted from source papers for reference, with measurement details in
+Appendix B. Bold marks the best success rate in each column.
+7
+
+
+World Tokens
+A Preprint
+4
+Experiments
+Our evaluation addresses three questions: does training-time world modeling help once the video
+branch is removed at deployment? Which components drive the improvement? Does the policy
+remain effective beyond LIBERO? We answer them with LIBERO results, controlled ablations,
+SIMPLER, and R1 Pro experiments.
+4.1
+Experimental Setup
+Implementation. All experiments use the same configuration: Qwen3-VL-2B-Instruct (Qwen
+Team, 2025) as the VLM, a World Adapter with 𝐾=256 learned queries, a DiT-B action expert,
+and Cosmos Predict2.5-2B (NVIDIA, 2025b) as the training-only video denoiser, with eight-step
+action chunks and eight-frame future targets.
+Benchmarks. LIBERO comprises four language-conditioned manipulation suites—Spatial,
+Object, Goal, and Long—with 10 tasks and 500 demonstrations each (Liu et al., 2023). We pool
+the training data from all four suites and train a single policy across all 40 tasks. Evaluation uses
+multiple environment seeds and 50 episodes per task, giving 2,000 episodes in total. We report
+success for each suite together with the unweighted suite mean. For SIMPLER, we jointly train
+the policy on the BridgeV2 (Walke et al., 2023) and Fractal (Brohan et al., 2023b) real-robot
+datasets and evaluate it in a visually matched simulator (Li et al., 2025b), following the official
+WidowX protocol on spoon-on-towel, carrot-on-plate, block-stacking, and eggplant-in-basket,
+using the 24 prescribed object-pose configurations per task and averaging over configurations and
+seeds; we additionally evaluate the same policy on the standard Google Robot visual-matching
+tasks.
+R1 Pro real-world setup. We control the right arm of a Galaxea R1 Pro from a cropped
+head-mounted fisheye view with an 8-dimensional joint-and-gripper action, the crop removing
+large background regions while retaining the arm and workspace. The robot places a banana,
+mango, strawberry, or lemon into a basket. We run 24 trials per task, for 96 evaluation trials per
+policy, randomizing object–basket positions and the order in which policies are evaluated.
+Baselines and protocol. Our matched VLA baseline is Qwen-GR00T: the same Qwen3-VL
+backbone and GR00T-style action head as World Tokens, but with the action expert reading
+ℎ𝑡directly and with neither a World Adapter nor a training-time video branch. Table 1 and
+Table 3 further compare against published VLA and WAM results under the official protocols.
+The 𝜋0.5 variants with and without embodied pretraining (Black et al., 2025a) contrast large-
+scale pretraining followed by fine-tuning on limited demonstrations against training on those
+demonstrations alone. Success rate is the primary metric. We measure latency for World Tokens
+and 𝜋0.5 on a 24 GB RTX 5090 D; the remaining latency values in Table 1 are quoted from their
+source papers and should be interpreted as contextual comparisons.
+4.2
+LIBERO
+World Tokens averages 98.2% across the four LIBERO suites (Table 1). Without embodied
+pretraining, World Tokens exceeds the 4B StarVLA by 0.4 points with a 2B backbone. World2Act,
+8
+
+
+World Tokens
+A Preprint
+which likewise discards its world model at deployment, reaches 98.1% only with embodied
+pretraining and a 3B backbone. The WAMs with higher averages, DiT4DiT and Cosmos Policy,
+require 136 and 610 ms per chunk versus 61.85 ms for World Tokens. Measured on identical
+hardware, World Tokens stays within 1.1× of 𝜋0.5 (61.85 vs. 56.32 ms per chunk) while improving
+the suite average by 1.3 points.
+The Long suite is more informative, since its multi-stage tasks give sequential errors room
+to accumulate. World Tokens attains 97.0%, within 0.6 points of the highest reported value
+(97.6%), despite using neither embodied action pretraining nor an online generative backbone.
+4.3
+Ablation Studies
+Table 2 isolates four design factors under the LIBERO protocol.
+Design factor
+LIBERO success rate (%)
+Variant
+Video sup.
+Excl. routing
+Learned query
+Edge anchor
+Spatial
+Object
+Goal
+Long
+Avg.
+Qwen-GR00T
+✗
+✗
+✗
+✗
+97.6
+98.8
+98.2
+92.8
+96.9
+w/o wm
+✗
+✓
+✓
+✗
+98.6
+98.4
+97.5
+95.0
+97.4
+w/ VLM bypass
+✓
+✗
+✓
+✓
+98.8
+98.6
+97.2
+94.1
+97.2
+FFN adapter
+✓
+✓
+✗
+✓
+98.4
+98.6
+97.6
+93.4
+97.0
+RGB anchor
+✓
+✓
+✓
+✗
+98.2
+98.0
+97.2
+91.5
+96.2
+World Tokens (ours)
+✓
+✓
+✓
+✓
+99.6
+98.8
+97.4
+97.0
+98.2
+Table 2: Controlled LIBERO ablations under the protocol of Table 1. Each factor column marks one
+design choice: future-video supervision from the jointly fine-tuned video denoiser (Video sup.), exclusive
+action conditioning on the world tokens 𝑞𝑡rather than the full VLM sequence (Excl. routing), query-based
+extraction rather than a parameter-matched FFN (Learned query), and Canny first-frame conditioning
+rather than native RGB (Edge anchor). Qwen-GR00T is the VLA baseline; each subsequent ablation
+changes one operative factor from the full method, with the edge anchor inapplicable when video
+supervision is removed. Bold marks the best value in each column; the World Tokens row reproduces
+Table 1.
+Initial observation
+Instruction: put both the alphabet soup and the tomato sauce in the basket
+Ours
+w/o
+wm
+Head View
+Wrist View
+t=1
+t=2
+t=3
+t=4
+t=5
+Figure 3: Dynamics-aware attention from world tokens. World Adapter cross-attention from 𝑞𝑡on a
+LIBERO Long episode (put both the alphabet soup and the tomato sauce in the basket), with main-view
+spatial entropy on the right, averaged over one episode per LIBERO Long task (lower is more focused).
+Ours concentrates in a task-phase-dependent way; w/o wm remains diffuse.
+System-level comparison. Relative to Qwen-GR00T, World Tokens improves the average
+(98.2% vs. 96.9%), with the gap concentrated on Long (97.0% vs. 92.8%); the near-saturated
+suites move less and inconsistently, so we read Long as the informative column.
+9
+
+
+World Tokens
+A Preprint
+Mechanistic ablations. The next three rows change one factor at a time; all separate only on
+Long. w/o wm removes only the training-time predictive objective; Long falls to 95.0%, placing
+the World Adapter alone between Qwen-GR00T and the full method. w/ VLM bypass keeps
+the video branch but restores direct access to ℎ𝑡, falling to 94.1%—below the variant with no
+video branch at all. FFN adapter replaces query-based extraction with a matched-parameter
+feed-forward network, reaching 93.4%. One account is that aligning understanding, prediction,
+and decision-making calls for a dedicated, sufficiently expressive module learned from scratch,
+rather than a transformation of the VLM’s existing representation structure. Shaped from the
+start by the action and video objectives, the learned queries grow into a shared interface across
+the three roles. The FFN extractor, by contrast, merely reshapes VLM features, so the predictive
+gradient perturbs the representation the action expert relies on.
+The ordering matters more than the margins: both variants that keep world-model supervision
+but break the interface fall below w/o wm, so predictive supervision does not help unconditionally.
+When the action expert can bypass the supervised representation, or extraction lacks learned
+queries, the video objective competes with action prediction instead of shaping it. Exclusive
+routing and query-based extraction are thus the mechanism that makes training-time world
+modeling useful, not implementation details.
+Structural-anchor comparison. The RGB anchor row changes only the structural anchor:
+the denoiser receives its native RGB first frame instead of the Canny edge map, while video
+supervision, exclusive routing through 𝑞𝑡, and query-based extraction remain unchanged. Long
+success falls from 97.0% to 91.5%, supporting appearance-suppressed conditioning: a full RGB
+anchor lets the denoiser rely on appearance cues instead of recovering task-relevant content from
+the world tokens. In all rows, the video-model components remain training-only.
+Attention analysis. Figure 3 examines how future-video supervision shapes the world tokens
+on a LIBERO Long episode. We visualize World Adapter cross-attention from 𝑞𝑡onto the head
+and wrist views. With world-model supervision, the maps are sharper and phase-dependent:
+at 𝑡=1, 4, when the gripper has not yet secured a target object, attention concentrates on the
+instructed cans, and after a grasp (𝑡=2, 3, 5) it shifts to the destination basket; without supervision
+it remains diffuse and does not track this approach–place structure. To quantify concentration,
+we report the spatial entropy of the main-view attention over the 8×8 patch grid, averaged over
+one episode per LIBERO Long task: World Tokens averages 3.29 bits versus 5.22 for w/o wm
+(uniform is log2 64=6), and is lower at every one of the 32 paired timesteps on the visualized
+episode. This contrast indicates that the predictive objective shapes 𝑞𝑡—the action expert’s sole
+visual-language context—toward dynamics-relevant structure, consistent with the Long-suite
+drop under w/o wm.
+4.4
+SIMPLER
+Having isolated the design factors on LIBERO, we next evaluate the resulting policy’s system-
+level competitiveness when trained on real-robot data and evaluated in a visually matched
+simulator. World Tokens achieves 71.5% average visual-matching success on SIMPLER-WidowX
+(Table 3), the highest Avg. among the listed methods; with a 2B VLM backbone, it exceeds the
+published 4B Qwen-GR00T result by 6.2 points. Because SIMPLER evaluates real-robot-trained
+10
+
+
+World Tokens
+A Preprint
+WidowX Robot (VM)
+Google Robot (VM)
+Method
+Backbone Spoon Carrot Block Eggpl. Avg. Pick Move Drawer Place Avg.
+𝜋0 (Black et al., 2025b)
+3B
+29.1
+0.0
+16.6
+62.5
+27.1 72.7 65.3
+38.3
+–
+58.8
+GR00T-N1.5 (NVIDIA, 2025a)
+3B
+75.3
+54.3
+57.0
+61.3
+61.9 51.7 54.0
+27.8
+7.4
+35.2
+OpenVLA-OFT (Kim et al., 2025a)
+7B
+34.2
+30.0
+30.0
+72.5
+41.8
+–
+–
+–
+–
+63.0
+SpatialVLA (Qu et al., 2025)
+3B
+16.7
+25.0
+29.2
+100.0 42.7 86.0 77.9
+57.4
+–
+75.1
+VLA-JEPA (Sun et al., 2026)
+2B
+75.0
+70.8
+12.5
+70.8
+57.3 88.3 64.1
+59.3
+49.1 65.2
+𝜋0.5 (Black et al., 2025a)
+2B
+49.3
+64.7
+44.7
+69.7
+57.1
+–
+–
+–
+–
+72.7
+StarVLA (Ye et al., 2026a)
+4B
+79.7
+59.8
+22.8
+98.5
+65.2 90.1 82.6
+56.3
+68.7 74.3
+Qwen-GR00T (Ye et al., 2026a)
+4B
+83.0
+59.4
+18.8
+100.0 65.3
+–
+–
+–
+–
+75.3
+World Tokens (ours)
+2B
+74.0
+85.0
+32.0
+95.0
+71.5 91.0 65.0
+78.7
+93.5 82.1
+Table 3: SIMPLER VM success (%) on WidowX and Google Robot (Ye et al., 2026a; Sun et al., 2026;
+Qu et al., 2025). Google tasks are Pick Coke Can, Move Near, Open/Close Drawer, and Open Top Drawer
++ Place Apple; reported Google averages may omit Place. – denotes unavailable; bold marks the best
+value in each column.
+policies in simulation, success here depends on features that survive a change of rendering. The
+advantage is broad-based rather than concentrated in one task: carrot-on-plate tops the table,
+eggplant-in-basket approaches the best entries, and spoon-on-towel sits mid-table. Block-stacking
+remains the weakest task, though it is hard for every listed method—none exceeding 57%—and
+we make no claim of an advantage on precise stacking.
+On the Google Robot embodiment, the same policy attains the highest average (82.1%),
+with the best entries on Pick Coke Can, Open/Close Drawer, and Place Apple; Move Near goes
+to StarVLA. Because several reported Google averages omit the Place task, we treat the per-task
+columns as the more reliable comparison.
+4.5
+Real-World Manipulation
+Instruction: pick the lemon and place it into the basket
+Ours
+Qwen-
+GR00T
+Instruction: pick the strawberry and place it into the basket
+Ours
+Qwen-
+GR00T
+Figure 4: Representative R1 Pro roll-
+outs. For lemon and strawberry, the
+initial head/wrist views are followed by
+seven uniformly sampled head-camera
+frames. World Tokens completes both
+placements; Qwen-GR00T does not.
+These examples are illustrative; Table 4
+reports aggregate success.
+Pooled over the four tasks, World Tokens succeeds on 76.0% of trials against 59.4% for
+Qwen-GR00T (Table 4). Strawberry and banana account for most of the difference (25.0 points
+each), lemon for 16.6, and mango is unchanged, where Qwen-GR00T is already strongest and
+headroom is smallest, so we rest the claim on the 96 pooled trials.
+The two 𝜋0.5 rows are context rather than a matched comparison: trained only on the same
+demonstrations, 𝜋0.5 reaches 15.6%, while its embodied-pretrained checkpoint solves every
+11
+
+
+World Tokens
+A Preprint
+Policy
+Lemon
+Straw.
+Mango
+Banana
+Avg.
+𝜋0.5 (w/o pretrain)
+12.5
+20.8
+12.5
+16.7
+15.6
+Qwen-GR00T
+54.2
+58.3
+75.0
+50.0
+59.4
+World Tokens
+70.8
+83.3
+75.0
+75.0
+76.0
+𝜋0.5 (pretrained)
+100.0
+100.0
+100.0
+100.0
+100.0
+Table 4: R1 Pro closed-loop success (%), 24 trials per object; Avg. pools 96 trials. Bold marks the best
+without embodied pretraining; gray row is context.
+trial, reflecting how embodied pretraining already covers near-in-distribution pick-and-place;
+the controlled comparison remains Qwen-GR00T.
+Figure 4 shows representative rollouts on lemon and strawberry under randomized scene
+layouts, where the target fruit is often barely visible initially. Qwen-GR00T fails in two
+characteristic ways—homing in on a wrong object, or losing the correct fruit to an insecure
+grasp—whereas World Tokens localizes the instructed fruit from the first frames and completes
+the placement, consistent with its SIMPLER placement strength.
+5
+Conclusion
+We presented World Tokens, an embodied policy architecture that obtains the representational
+benefits of world modeling without inheriting its inference cost. Its central mechanism is a fixed
+set of world tokens that jointly condition future-video denoising during training and exclusively
+condition the action expert; at deployment the video branch is discarded entirely, leaving a
+policy that runs at VLA-level latency. Across LIBERO, SIMPLER, and a real-robot R1 Pro
+protocol, this design proves both effective and efficient. Our analysis further clarifies why it
+works: predictive supervision improves control only when it shapes the representation the policy
+actually consumes, which is precisely what exclusive routing and query-based extraction enforce,
+and attention visualizations suggest that the resulting tokens acquire dynamics-relevant structure
+from the world model. Limitations remain—the world model adds considerable training-time
+cost, and the Canny anchor is hand-designed—both motivating lighter, learned alternatives.
+Future work will explore large-scale joint training of the World Adapter across diverse robot
+datasets, embodiments, and tasks, with the goal of learning a more general world-token interface
+for embodied control.
+References
+Jean-Baptiste Alayrac et al. Flamingo: a visual language model for few-shot learning. In Advances in
+Neural Information Processing Systems, 2022.
+Hongzhe Bi et al. Motus: A unified latent action world model. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, 2026.
+Kevin Black et al. 𝜋0.5: A vision-language-action model with open-world generalization. In Proceedings
+of the 9th Conference on Robot Learning, 2025a.
+Kevin Black et al. 𝜋0: A vision-language-action flow model for general robot control. In Proceedings of
+Robotics: Science and Systems, 2025b.
+12
+
+
+World Tokens
+A Preprint
+Anthony Brohan et al. RT-2: Vision-language-action models transfer web knowledge to robotic control.
+In Proceedings of the 7th Conference on Robot Learning, 2023a.
+Anthony Brohan et al. RT-1: Robotics transformer for real-world control at scale. In Proceedings of
+Robotics: Science and Systems, 2023b.
+Qingwen Bu et al. Learning to act anywhere with task-centric latent actions. In Proceedings of Robotics:
+Science and Systems, 2025.
+John Canny. A computational approach to edge detection. IEEE Transactions on Pattern Analysis and
+Machine Intelligence, 8(6):679–698, 1986.
+Jun Cen et al. WorldVLA: Towards autoregressive action world model. arXiv preprint arXiv:2506.21539,
+2025.
+Cheng Chi et al. Diffusion policy: Visuomotor policy learning via action diffusion. In Proceedings of
+Robotics: Science and Systems, 2023.
+Yu Fang et al. Robotic VLA benefits from joint learning with motion image diffusion. arXiv preprint
+arXiv:2512.18007, 2025.
+Dibya Ghosh et al. Octo: An open-source generalist robot policy. In Proceedings of Robotics: Science
+and Systems, 2024.
+Yucheng Hu et al. Video prediction policy: A generalist robot policy with predictive visual representations.
+In Proceedings of the 42nd International Conference on Machine Learning, 2025.
+Andrew Jaegle et al. Perceiver: General perception with iterative attention. In Proceedings of the 38th
+International Conference on Machine Learning, 2021.
+Joel Jang et al. DreamGen: Unlocking generalization in robot learning through video world models. In
+Proceedings of the 9th Conference on Robot Learning, 2025.
+Moo Jin Kim et al. Fine-tuning vision-language-action models: Optimizing speed and success. In
+Proceedings of Robotics: Science and Systems, 2025a.
+Moo Jin Kim et al. OpenVLA: An open-source vision-language-action model. In Proceedings of the 8th
+Conference on Robot Learning, 2025b.
+Moo Jin Kim et al. Cosmos Policy: Fine-tuning video models for visuomotor control and planning. In
+International Conference on Learning Representations, 2026.
+Seungjae Lee et al. Behavior generation with latent actions. In Proceedings of the 41st International
+Conference on Machine Learning, 2024.
+Lin Li et al. Causal world modeling for robot control. arXiv preprint arXiv:2601.21998, 2026.
+Shuang Li et al. Unified video action model. In Proceedings of Robotics: Science and Systems, 2025a.
+Xuanlin Li et al. Evaluating real-world robot manipulation policies in simulation. In Proceedings of the
+8th Conference on Robot Learning, 2025b.
+Yaron Lipman et al. Flow matching for generative modeling. In International Conference on Learning
+Representations, 2023.
+Bo Liu et al. LIBERO: Benchmarking knowledge transfer for lifelong robot learning. In Advances in
+Neural Information Processing Systems, 2023.
+Songming Liu et al. RDT-1B: A diffusion foundation model for bimanual manipulation. In International
+Conference on Learning Representations, 2025.
+Teli Ma et al. DiT4DiT: Jointly modeling video dynamics and actions for generalizable robot control.
+arXiv preprint arXiv:2603.10448, 2026.
+13
+
+
+World Tokens
+A Preprint
+NVIDIA. GR00T N1: An open foundation model for generalist humanoid robots. arXiv preprint
+arXiv:2503.14734, 2025a.
+NVIDIA. Cosmos world foundation model platform for physical AI. arXiv preprint arXiv:2501.03575,
+2025b.
+William Peebles and Saining Xie. Scalable diffusion models with transformers. In International
+Conference on Computer Vision, 2023.
+Delin Qu et al. SpatialVLA: Exploring spatial representations for visual-language-action models. In
+Proceedings of Robotics: Science and Systems, 2025.
+Qwen Team. Qwen3-VL technical report. arXiv preprint arXiv:2511.21631, 2025.
+Jingwen Sun et al. VLA-JEPA: Enhancing vision-language-action model with latent world model. arXiv
+preprint arXiv:2602.10098, 2026.
+Zuojin Tang et al. One token per frame: Reconsidering visual bandwidth in world models for VLA policy.
+arXiv preprint arXiv:2605.07931, 2026.
+An Dinh Vuong et al. World2Act: Latent action post-training via skill-compositional world models. arXiv
+preprint arXiv:2603.10422, 2026.
+Homer Rich Walke et al.
+BridgeData V2: A dataset for robot learning at scale.
+arXiv preprint
+arXiv:2308.12952, 2023.
+Hongtao Wu et al. Unleashing large-scale video generative pre-training for visual robot manipulation. In
+International Conference on Learning Representations, 2024.
+Jinhui Ye et al. StarVLA-𝛼: Reducing complexity in vision-language-action systems. arXiv preprint
+arXiv:2604.11757, 2026a.
+Seonghyeon Ye et al. World action models are zero-shot policies. arXiv preprint arXiv:2602.15922,
+2026b.
+Tianyuan Yuan et al. Fast-WAM: Do world action models need test-time future imagination? arXiv
+preprint arXiv:2603.16666, 2026.
+Wenyao Zhang et al. DreamVLA: A vision-language-action model dreamed with comprehensive world
+knowledge. In Advances in Neural Information Processing Systems, 2025.
+Ruijie Zheng et al. FLARE: Robot learning with implicit world modeling. In Proceedings of the 9th
+Conference on Robot Learning, 2025.
+Yijie Zhu et al. 𝛿VLA: Prior-guided vision-language-action models via world knowledge variation. arXiv
+preprint arXiv:2603.08361, 2026.
+14
+
+
+World Tokens
+A Preprint
+Appendix
+A
+Implementation Details
+Optimization. All benchmarks share one optimization recipe. We use AdamW with 𝛽=
+(0.9, 0.95), 𝜖= 10−8, and weight decay 10−8, under a cosine schedule with linear warmup.
+Learning rates are assigned per parameter group according to whether the group is adapted from
+a pretrained checkpoint or trained from initialization: 1 × 10−5 for the pretrained vision-language
+model, 2 × 10−5 for the jointly fine-tuned video denoiser, and 1 × 10−4 for the World Adapter,
+the world-model projection, and the action expert. The smallest rate on the backbone limits drift
+from its pretrained visual-language grounding; the video denoiser is likewise adapted rather than
+trained from scratch and takes an intermediate rate; the from-scratch modules take the largest
+rate.
+Structural anchor. The anchor is computed on the primary view of the first frame at the video
+branch’s own resolution. We convert the frame to grayscale, apply the Canny detector with
+hysteresis thresholds 60 and 140, blur the resulting binary edge map with an isotropic Gaussian
+of 𝜎= 2.5, and replicate the single channel to RGB before encoding it as the first-frame latent.
+Training scale. All policies are trained on H100 GPUs with 16 samples per device and no
+gradient accumulation. The LIBERO policy is trained for 70K steps at an effective batch size of
+128 across 8 GPUs; the SIMPLER policy, which covers the larger BridgeV2 and Fractal mixture,
+for 140K steps at an effective batch size of 256 across 16 GPUs; and the R1 Pro policy for 30K
+steps at an effective batch size of 128 across 8 GPUs. On all three benchmarks the matched
+Qwen-GR00T baseline is trained at an identical step count and batch size, so every comparison
+against it holds the data and optimization budget fixed and varies only the architecture. This
+training hardware is not the hardware used for the latency measurements in Section B.
+Deployment footprint. The World Adapter uses 𝐾=256 world tokens and 𝐿=12 blocks at
+width 𝑑=2048 with 8 attention heads. Each block applies cross-attention to the vision-language
+sequence, self-attention over the world tokens, and a feed-forward layer whose inner dimension
+equals the width, which is 10𝑑2 parameters per block and approximately 0.5B in total. It is the
+only component the deployed policy adds over the matched Qwen-GR00T baseline (NVIDIA,
+2025a); its runtime cost is measured in Section B.
+B
+Latency Measurement
+Protocol. All latency values correspond to producing one eight-action chunk rather than a single
+action. We measure policy inference only—encoding the current observations and instruction
+with the vision-language model, recomputing the world tokens, and integrating the action
+flow—and exclude image capture, observation transport, robot communication, environment
+stepping, action execution, and policy-server overhead. Every method we time ourselves uses
+LIBERO’s (Liu et al., 2023) two 224×224 camera views, batch size one, and an eight-action
+horizon, on a single 24 GB RTX 5090 D unless noted otherwise. We time on-device with CUDA
+events, discard the warm-up iterations that absorb graph compilation and allocator growth, and
+report the steady-state median. We report the median rather than the mean because the tail is
+15
+
+
+World Tokens
+A Preprint
+dominated by occasional allocator and scheduling stalls that would not be experienced as control
+latency in a closed loop.
+Measurements. We time four policies ourselves—World Tokens, 𝜋0.5 (Black et al., 2025a),
+Fast-WAM (Yuan et al., 2026), and DiT4DiT (Ma et al., 2026)—by running the released code
+and weights of the three baselines under the same two-view input and the same eight-action
+chunk. Because we hold the chunk length at eight rather than adopting each method’s native
+setting, these values are not intended to reproduce the runtimes reported in the corresponding
+papers. Because per-chunk latency also depends on how many denoising steps a policy takes
+and on whether its graph is compiled, we group the comparisons by those two factors rather
+than placing all methods on one axis (Figure A1).
+Four flow-integration steps is our default and the setting behind every result in the paper;
+with a compiled graph and cached conditioning, World Tokens produces one chunk in 61.85 ms,
+an action throughput of roughly 129 actions per second. 𝜋0.5, timed on the same GPU under
+the same four-step compiled setting with its own default JAX/XLA compilation and KV cache,
+produces a chunk in 56.32 ms, placing World Tokens within 1.1× of it. DiT4DiT also denoises
+in four steps by default and takes 136 ms, measured on an H100 rather than on our GPU; if
+anything this cross-hardware comparison favors DiT4DiT, so we read it as evidence that World
+Tokens is not the slower of the two rather than as a measured speedup.
+Fast-WAM is the exception: it denoises in ten steps without compilation. We therefore
+re-timed World Tokens in that same ten-step uncompiled configuration purely to make the
+comparison fair, and report 119.72 ms against Fast-WAM’s 182 ms, a factor of 1.5; the ten-step
+number is a like-for-like control, not a configuration we deploy. Fast-WAM is also the most
+informative comparison of the three, being the design closest to ours in intent—video supervision
+without test-time future imagination—so reading this gap against our four-step default instead
+would overstate it, since part of that difference is a choice of integration budget rather than a
+property of the architecture.
+Ours
+π0.5
+Ours
+Fast-WAM
+0
+100
+200
+61.85
+56.32
+119.72
+182
+4 steps (our default)
+10 steps (matching Fast-WAM)
+P50 latency per 8-action chunk (ms)
+Figure A1: Latency on a single RTX 5090 D with two 224×224 views and batch size one. Each pair holds
+the number of denoising steps and the compilation setting fixed, so the two comparisons are like-for-like.
+World Adapter overhead. A comparison against the matched Qwen-GR00T baseline, which
+shares the same vision-language model and action expert but computes no adapter, attributes
+16
+
+
+World Tokens
+A Preprint
+roughly 10 ms of the 61.85 ms to the World Adapter. The vision-language forward pass and the
+four-step flow integration are identical between the two policies, so this is the adapter’s own
+contribution rather than misattributed shared cost: at 0.5B parameters the adapter is not the
+deployment bottleneck.
+Comparability. The 𝜋0.5, Fast-WAM, and DiT4DiT numbers above are timed under one
+protocol; the remaining latency entries in the main text are quoted from their sources and
+are not controlled: OpenVLA’s 240 ms (Kim et al., 2025b) is an A100 measurement of
+one autoregressively decoded action rather than an eight-action chunk; OpenVLA-OFT’s
+112 ms (Kim et al., 2025a) is an A100 measurement of an eight-step chunk produced by
+parallel decoding with continuous regression actions, including a wrist image and proprioceptive
+state; 𝜋0’s 73 ms (Black et al., 2025b) is total on-board inference on a consumer RTX 4090,
+excluding the network latency its off-board configuration reports separately; and Cosmos Policy’s
+610 ms (Kim et al., 2026) is measured on one H100 with five denoising steps, covering action,
+future-state, and value predictions generated in parallel over a longer chunk than ours. Any
+specific speedup factor against these four should be read as hardware- and recipe-specific.
+C
+World-Model Rollout
+Figure A2 shows the world-model branch rolled out autoregressively from a single observed
+frame, on the same LIBERO Long episode (put both the alphabet soup and the tomato sauce
+in the basket) used for the attention maps in Figure 3 and in Section D. Frames are sampled
+uniformly over the rollout. The scene layout and the arm stay coherent across the rollout, and
+the arm moves through repeated reaching and retracting motions between the objects and the
+basket, consistent with the branch having fit the scene dynamics of the task rather than its static
+appearance alone. This branch is used only during training and is discarded at deployment.
+D
+Attention Analysis
+Procedure. For a given control step we take the cross-attention weights of the World Adapter’s
+final block, from all 256 world tokens to the vision-language sequence, average them over the 8
+attention heads and over the world tokens, and restrict the result to the image-token positions
+of one camera view. Each view contributes an 8×8 grid of 64 patch tokens, so this yields a
+distribution over 64 spatial positions per view and per control step, whose Shannon entropy is at
+most log2 64 = 6 bits. A control step is one policy invocation: the World Adapter recomputes the
+world tokens once per action chunk, so the 32 control steps of the episode in Figure A3 span 256
+environment steps. We compute this quantity at every control step of one episode per LIBERO
+Long task and average across tasks. World Tokens and the w/o wm ablation are evaluated on
+the same episodes under the same environment seeds, so the two trajectories are step-aligned
+and can be compared step by step. The maps visualized in the main text are these distributions
+rendered over the observation and upsampled for display; no smoothing, contrast adjustment, or
+per-map renormalization is applied beyond a shared color scale.
+Additional metrics. The main text reports the main-view entropy contrast as an average.
+Resolving it per control step on the visualized episode (Figure A3) shows that the separation is
+17
+
+
+World Tokens
+A Preprint
+Figure A2: Autoregressive world-model rollout. Sixteen frames sampled uniformly from a video rolled
+out autoregressively by the world-model branch from a single observed frame, on the same LIBERO
+Long episode as Figure 3. Frames read left to right, top row first.
+not an artifact of averaging: World Tokens attends more sharply at all 32 control steps on both
+views and the two curves never approach each other. An exact paired sign test over those steps
+returns its floor value 2−32 on each view; we report it only as a description of how uniform the
+ordering is, since consecutive control steps of one episode are not independent samples. The
+effect is also not confined to the primary camera—on the wrist view, entropy averages 4.18 bits
+for World Tokens against 5.44 for w/o wm, a smaller but same-signed gap, consistent with the
+wrist view carrying less task-discriminative layout information. Nor is it only visible in the
+entropy summary: on the main view the single most-attended patch receives 0.42 of the total
+attention mass under World Tokens versus 0.10 without world-model supervision, and the top
+18
+
+
+World Tokens
+A Preprint
+1
+8
+16
+24
+32
+3
+4
+5
+6
+Entropy (bits)
+w/o wm
+Ours
+Main view
+1
+8
+16
+24
+32
+uniform
+Wrist view
+Control step
+Figure A3: Spatial entropy of World Adapter attention at each control step of the LIBERO Long episode
+visualized in the main text. The dashed line is the uniform-attention bound log2 64 = 6 bits. The separation
+holds at every step on both views rather than at a few frames.
+four of the 64 patches receive 0.63 versus 0.29. All of these are descriptive statistics of where
+the adapter attends; the causal claim rests on the ablations in the main text.
+E
+Additional Real-World Rollouts
+Figure A4 shows additional R1 Pro rollouts on lemon, banana, and mango, complementing
+the lemon and strawberry examples in the main text. Within each task, World Tokens and
+Qwen-GR00T start from the same object arrangement, and all six episodes come from the same
+evaluation session as the examples in the main text.
+19
+
+
+World Tokens
+A Preprint
+Instruction: pick the lemon and place it into the basket
+Ours
+✓
+Qwen-
+GR00T
+✗
+Instruction: pick the banana and place it into the basket
+Ours
+✓
+Qwen-
+GR00T
+✗
+Instruction: pick the mango and place it into the basket
+Ours
+✓
+Qwen-
+GR00T
+✗
+Figure A4: Additional R1 Pro rollouts. Further examples on the three tasks not shown in the main text.
+As in the figure in the main text, the two leftmost cells are the initial head and wrist views, followed by
+seven head-camera frames sampled uniformly over the rest of the episode. A check marks an episode
+ending with the named object in the basket and a cross one that does not. Aggregate success is reported
+in Table 4.
+20
