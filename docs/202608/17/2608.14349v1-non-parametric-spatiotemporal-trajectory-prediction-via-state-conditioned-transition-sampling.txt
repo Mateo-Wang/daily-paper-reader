@@ -1,0 +1,208 @@
+Title: Non-Parametric Spatiotemporal Trajectory Prediction via State-Conditioned Transition Sampling
+
+URL Source: https://arxiv.org/pdf/2608.14349v1
+
+Published Time: Mon, 17 Aug 2026 00:53:49 GMT
+
+Number of Pages: 5
+
+Markdown Content:
+# Non-Parametric Spatiotemporal Trajectory Prediction via State-Conditioned Transition Sampling 
+
+## Michael Fore, Akshay Jain, Justin Downes, Rohan Pradhan, Duncan Botti 
+
+Amazon Web Services Seattle, WA, USA {mikefore,jainaaks,jusdow,awsrohan,dunbotti}@amazon.com 
+
+## Abstract 
+
+We present a training-free method for multi-modal trajectory pre-diction that achieves comparable accuracy to a 57M-parameter transformer while requiring no GPU and zero learned parameters. The method builds a transition table of historical state-to-next-position pairs and retrieves neighbors using a product kernel over spatial proximity, bearing, speed, and temporal context. Two in-ference modes operate over this shared representation: diversity-penalized sampling produces trajectories covering distinct plausible routes, while beam search finds the highest-likelihood path. On the TrAISformer benchmark (Danish Maritime AIS), our method achieves competitive accuracy at full data availability and dra-matically outperforms the transformer in data-scarce regimes— remaining stable down to 10% of training data where TrAISformer degrades catastrophically. This enables deployment in new geo-graphic regions from an order of magnitude less historical data, and with no GPU training. 
+
+## 1 Introduction 
+
+Predicting the future positions of moving entities—vessels, vehi-cles, pedestrians—is a core spatial computing problem with applica-tions in maritime surveillance, traffic management, and search-and-rescue [12]. The task is inherently multi-modal: at route junctions, a vessel may proceed in any of several directions and a useful predictor must represent this uncertainty. Recent deep learning approaches frame trajectory prediction as sequence modeling. TrAISformer [7] discretizes AIS (Automatic Identification System) positions into grid cells and applies a trans-former architecture to predict future cell sequences, achieving state-of-the-art results on maritime trajectory benchmarks. However, such models require GPU training, degrade with limited training data, and must be retrained for new geographic regions or entity types. Classical nonparametric methods avoid these costs. Hexeberg et al. [5] proposed Single Point Neighbor Search (SPNS): retrieve the historical observations near the current position, discard those whose course deviates beyond a threshold, and dead-reckon on the median course and speed of the rest. This requires no training but produces a single route, cannot represent branching sea lanes, and offers no uncertainty. Its successor NCDM [2] samples a course from the same gated set instead of collapsing it, giving several trajectories; both were built for collision avoidance at horizons of 5 to 15 minutes. Other statistical approaches [8, 9] similarly rely on pattern extraction but lack multi-modal output. Our approach bridges this gap by retrieving neighbors (state-to-next-position pairs) weighted by a product kernel over spatial proximity, bearing, speed, and time-of-day/day-of-week. We intro-duce two inference modes over this shared representation: (1) Diverse sampling with a spatial repulsion penalty that forces successive trajectory samples to explore different routes. (2) Beam search that maintains multiple candidate paths and prunes by cumulative path likelihood, producing accurate single-trajectory predictions. On the TrAISformer benchmark (DMA Danish maritime AIS, 1,481 test trajectories, 3-hour prediction horizon), our method achieves: 
+
+• Top-1 FDE: 9.00 km (beam search) vs. 9.84 km (TrAISformer argmax) 
+
+• Best-of-16 FDE: 2.49 km (diverse sampling) vs. 2.66 km (TrAISformer sampling) while requiring no GPU, no learned parameters, and only seconds of CPU setup. These results are particularly significant for deploy-ment in new geographic regions: the method maintains reasonable accuracy with as little as 10% of training data, a regime where the transformer degrades catastrophically. Our contributions are: (1) A state-conditioned transition predictor that replaces the hard course gate of neighbor search [5] with product-kernel weighting over spatial proximity, bearing, speed, and tem-poral conditioning. (2) Diversity-promoting sequential sampling [10] applied to spatial transition lookup, producing multi-modal trajectory predictions that cover distinct plausible routes. (3) Systematic evaluation demonstrating that this training-free approach matches a 57M-parameter transformer at full data and dramatically outperforms it in data-scarce regimes— retaining its full-data accuracy on an order of magnitude less data. 
+
+## 2 Method 
+
+Our method operates in two phases. 1 First, in an offline setup step, we construct a transition table with spatial indices. Second, we leverage the transition table in online inference via one of two modes: diverse sampling or beam search. 
+
+> 1AI coding assistants were used in the implementation of the codebase, experiment scripts, and baseline training infrastructure. The method design, experimental method-ology, hyperparameter selection, and interpretation of results are the authors’ own work. All AI-generated code was reviewed and validated by the authors. arXiv:2608.14349v1 [cs.LG] 14 Aug 2026 Michael Fore, Akshay Jain, Justin Downes, Rohan Pradhan, Duncan Botti
+
+## 2.1 Transition Table 
+
+From training trajectories sampled at regular intervals (10 min-utes in our experiments), we extract all pairs of observations sep-arated by a fixed prediction step Δ𝑡 (1 hour). Each row stores the current state s𝑖 = (lat 𝑖 , lon 𝑖 , 𝑣 𝑖 , 𝜃 𝑖 , ℎ 𝑖 , 𝑑 𝑖 )—position, speed, bear-ing, hour-of-day, and day-of-week—along with the next position 
+
+p+ 
+
+> 𝑖
+
+= (lat + 
+
+> 𝑖
+
+, lon + 
+
+> 𝑖
+
+) observed Δ𝑡 later. The table is a flat collection of such records—150,000 rows of eight numbers, about 9.6 MB—not a matrix over a discretised state space: nothing is binned, and the kernel of Section 2.2 rather than a grid cell decides how much each row contributes. We build a BallTree spatial index on the current positions for neighbor retrieval. 
+
+## 2.2 State-Conditioned Weighted Lookup 
+
+Given a query state q = (lat , lon , 𝑣, 𝜃, ℎ, 𝑑 ) representing position, speed (knots), bearing (degrees), hour-of-day, and day-of-week, we retrieve all transitions within the spatial kernel’s support and assign each transition 𝑖 a weight that is the product of five kernel terms: 
+
+𝑤 𝑖 = 𝐾 sp · 𝐾 brg · 𝐾 spd · 𝐾 hr · 𝐾 dow (1) where: 
+
+• 𝐾 sp : Quartic kernel with adaptive bandwidth on great-circle distance, following Abramson’s square-root rule [1]. 
+
+• 𝐾 brg = 𝑓 vM (𝜃 − 𝜃 𝑖 ; 𝜅 ): von Mises density on bearing differ-ence. 
+
+• 𝐾 spd = exp (−( 𝑣 − 𝑣 𝑖 )2/2𝜎 2 
+
+> 𝑣
+
+): Gaussian on speed difference. 
+
+• 𝐾 hr = exp (− Δcirc (ℎ, ℎ 𝑖 ; 24 )2/2𝜎 2 
+
+> ℎ
+
+): cyclic Gaussian on hour-of-day. 
+
+• 𝐾 dow = exp (− Δcirc (𝑑, 𝑑 𝑖 ; 7 )2/2𝜎 2 
+
+> 𝑑
+
+): cyclic Gaussian on day-of-week. Here Δcirc (𝑎, 𝑏 ; 𝑃 ) = min (| 𝑎 −𝑏 |, 𝑃 − | 𝑎 −𝑏 |) is the circular distance with period 𝑃 . This ensures that, for example, using a 24-hour period, hour 23 and hour 1 are two hours apart rather than twenty-two. We omit month-of-year because the benchmark data cannot support it: ten of its twelve months are represented by only two or three days each, too sparse to estimate a seasonal effect. The result is a weighted set of next-positions {( p+ 
+
+> 𝑖
+
+, 𝑤 𝑖 )} repre-senting where entities in similar states went next. This is a form of Nadaraya-Watson [6, 11] kernel regression applied to state-conditioned spatial transitions. 
+
+## 2.3 Autoregressive Inference 
+
+Both inference modes generate trajectory branches autoregressively. At each step 𝑡 of a branch, the shared procedure is: (1) Compute weights {𝑤 𝑖 } via the product kernel (Section 2.2). (2) Optionally modify weights (mode-specific; see below). (3) Sample one or more candidate next-positions from the weight distribution. (4) Smooth each candidate: compute the weighted mean of all next-positions, modulated by a Gaussian ( 𝜎 =15 ◦) on angu-lar difference from the candidate’s bearing. This mitigates single-sample noise that would otherwise compound across steps. (5) Update the query state (position, bearing, hour-of-day) from the smoothed prediction and proceed to step 𝑡 + 1. 11.0 11.2 11.4 11.6 11.8 12.0 12.2 12.4 
+
+> Longitude (°E)
+> 57.1 57.2 57.3 57.4 57.5 57.6 57.7 57.8
+> Latitude (°N) Best-of-16: 0.1 km CV error: 42 km
+> Observed Ground truth Const. velocity Ours (N=16)
+
+Figure 1: Diverse predictions covering multiple plausible shipping corridors at a route junction in the DMA dataset. Background shading shows traffic density (KDE, for visual context only—not used by the method). The best-of-16 branch lands within 0.5 km of ground truth. 
+
+The prediction horizon is 𝐻 steps of Δ𝑡 each. Speed is held fixed at the initial observed value for simplicity. Branches are ranked by cumulative unpenalized log-density. 
+
+## 2.4 Diverse Sampling 
+
+To produce 𝑁 branches that collectively cover plausible future routes, we take inspiration from Diverse Beam Search [10] by sam-pling branches sequentially with a spatial repulsion penalty applied to the observations in continuous space (as opposed to the discrete space version in the original paper). For branch 𝑗 > 1, step (2) applies a spatial repulsion penalty: 
+
+𝑤 ′ 
+
+> 𝑖
+
+= 𝑤 𝑖 · 
+
+> 𝑗 −1
+
+Ö
+
+> 𝑘 =1
+
+1 − exp − ∥p+ 
+
+> 𝑖
+
+− p(𝑡 ) 
+
+> 𝑘
+
+∥2
+
+2𝜎 2div 
+
+!! 
+
+(2) where p(𝑡 ) 
+
+> 𝑘
+
+is the position of previously generated branch 𝑘 at step 𝑡 .This suppresses observations whose next-positions are near existing branches, forcing successive branches to explore different routes. Each branch samples one candidate per step (step 3). 
+
+## 2.5 Beam Search 
+
+Beam search maintains 𝐵 active branches in parallel. Step (2) is skipped (no diversity penalty). At step (3), 𝐶 candidates are sampled per active branch, yielding 𝐵 ×𝐶 total candidates; only the top 𝐵 by cumulative log-density are retained. Paths on high-traffic corridors accumulate high scores; paths that wander off-route are pruned. Non-Parametric Spatiotemporal Trajectory Prediction via State-Conditioned Transition Sampling 
+
+## 3 Experiments 3.1 Setup 
+
+Dataset. We evaluate on the DMA AIS dataset [3] (Danish Maritime Authority), which covers vessel traffic in the Kattegat/Danish Straits region, sampled at 10-minute intervals. We follow TrAISformer’s reference split: 10,605 training trajectories (all of 2019 excluding March 21–31, comprising 2,517 vessels) and 1,481 test trajectories (March 21–31, 2019, with no temporal overlap with training). Each trajectory has a 3-hour observation window followed by a 3-hour prediction horizon. 
+
+Baselines. 
+
+• Constant velocity (CV) : Linear extrapolation from the last observed position and bearing. 
+
+• Hexeberg SPNS [5]: Dead reckoning on the median course and speed of neighbors within a radius, gated at 35 ◦ of course deviation, applied autoregressively. Produces one trajectory (no multi-modal output). 
+
+• NCDM [2]: SPNS’s multi-modal successor, sampling a course per branch from the same gated neighbors instead of taking the median, giving 𝑁 =16 unranked trajectories. 2
+
+• Spatial-only + diversity : Ablation of our method using spa-tial kernel weighting only (no bearing, speed, or temporal conditioning), with diversity penalty ( 𝑁 =16, 𝜎 div =5 km). Isolates the contribution of multi-dimensional conditioning. 
+
+• LSTM seq2seq : 2-layer encoder-decoder LSTM (401,924 pa-rameters), trained for 50 epochs with MSE loss. Best-of-16 via Gaussian noise injection on the hidden state. 
+
+• TrAISformer [7]: 57.4M-parameter transformer trained for 50 epochs. Top-1 via argmax decoding (the standard de-terministic output for categorical models, following TrAIS-former’s own evaluation protocol); best-of-16 via categori-cal sampling. While recent surveys [12] cover various deep learning approaches to maritime trajectory prediction, we compare primarily against TrAISformer as it is the only published method with both public code and multi-modal evaluation on the DMA benchmark. We report results from our own reproduction; all methods are evaluated on identical test trajectories. 
+
+Metrics. We report Final and Average Displacement Error (FDE, ADE) in kilometers at 1-hour and 3-hour horizons—the haversine distance between predicted and true position at the horizon end-point, and averaged over the path up to it. We report top-1 (error of the single best-ranked prediction) and, following standard multi-modal evaluation practice [4], best-of-𝑁 (minimum error across 
+
+𝑁 predictions), with 𝑁 = 16 as in TrAISformer. Since our predic-tions are hourly and the baselines’ are every ten minutes, ADE is computed with our waypoints linearly interpolated onto the finer grid. To assess probabilistic calibration, we additionally report the Continuous Ranked Probability Score (CRPS) in its energy form: CRPS = E[∥ 𝑋 − 𝑦 ∥] − 12 E[∥ 𝑋 − 𝑋 ′ ∥] , where 𝑋, 𝑋 ′ are samples and 
+
+𝑦 is the ground truth.     
+
+> 2Our implementation of both neighbor-search baselines advances a fixed time step rather than the published fixed distance, and draw neighbors from our spatial index rather than a 100 m radius. 1510 50 100
+> Training data (%)
+> 2346810 15
+> 3h best-of-16 FDE (km)
+> Ours (diverse) TrAISformer open marker: no interval
+
+Figure 2: Data efficiency: 3-hour best-of-16 FDE vs. training data fraction, with 95% bands over subset draws. Log axes; open markers have no interval. Parameters. We cap our transition table at 150,000 transitions subsampled from training data and select the following hyperpa-rameters based on data characteristics (e.g., typical route separation, AIS measurement precision). Kernel bandwidths: 𝜅 =16 (bearing, effective within ≈ ± 20 ◦), 𝜎 𝑣 =1 knot (speed), 𝜎 ℎ =6h (hour-of-day), 
+
+𝜎 𝑑 =2d (day-of-week). Beam search: 𝐵 =16, 𝐶 =3. Diverse sampling: 
+
+𝑁 =16, 𝜎 div =5 km. These are held fixed without systematic tuning. A formal sensitivity analysis is left to future work. 
+
+## 3.2 Main Results 
+
+Table 1 presents the full comparison on the DMA test set. Our beam search achieves the best 3-hour top-1 FDE and the best top-1 ADE, while our diverse sampling achieves the best 3-hour best-of-16 FDE. TrAISformer retains the best 1-hour top-1 and the best 3-hour best-of-16 ADE, though neither ADE difference is significant under a paired bootstrap. On CRPS both learned baselines outperform both of our modes. 
+
+## 3.3 Data Efficiency 
+
+We evaluate how both methods degrade as training data is reduced. For these experiments, we train on subsets of voyages from January– November 2019 and test on December (290 trajectories), a different split from the main results (which use the March test set); this is necessary to vary the training set size while maintaining a held-out evaluation. Full data is 10,266 voyages carrying observations on 67 days—nearer ten weeks of regional traffic than the eleven months it spans—so the 10% setting is roughly 1 week. For our method only, the transition table is capped at 150,000 transitions, which binds above 22.1% of the pool, so 50% and 100% build an identical table. Our method’s performance is stable from 100% down to 10% of training data (2.46–2.60 km); degradation becomes measurable at 5% and substantial at 1% (5.24 km). TrAISformer degrades from 2.61 km at full data to 14.33 km at 1%—a 5.5 × increase. At 10% of data our method is 2.2 × more accurate than TrAISformer. Michael Fore, Akshay Jain, Justin Downes, Rohan Pradhan, Duncan Botti 
+
+Table 1: Trajectory prediction on DMA AIS (1,481 test trajectories, 3-hour prediction). FDE and ADE in km. Single-route baselines have no best-of-16; NCDM’s samples are exchangeable, so it has no top-1.                                                                                              
+
+> 1h top-1 1h best-16 3h top-1 3h best-16 Method Params FDE ADE FDE ADE FDE ADE FDE ADE 3h CRPS Const. velocity 03.67 1.79 ––19.31 8.17 –––Hexeberg SPNS [5] 05.74 3.14 ––18.51 9.32 –––NCDM [2] 0––4.13 2.41 ––11.76 6.54 15.15 Spatial-only + div. 014.92 8.84 2.72 1.83 42.00 22.96 8.90 5.20 32.52 LSTM seq2seq 402K 3.12 2.70 1.62 2.11 9.05 4.86 4.78 3.58 7.84 TrAISformer 57.4M 2.20 1.32 0.81 0.70 9.84 4.42 2.66 1.76 6.02
+> Ours (beam) 02.29 1.49 1.99 1.33 9.00 4.31 7.17 3.57 8.29 Ours (diverse) 04.29 2.66 1.01 0.86 14.10 7.19 2.49 1.85 9.00
+
+Table 2: Data efficiency subsets remove whole voyages. Inter-vals are 95% over 10 subset draws for ours and 3 for TrAIS-former, and absent where only one subset exists.                     
+
+> Training data Ours ↓TrAISformer ↓Advantage 100% 2.49 2.61 0.12 50% 2.46 ±0.08 3.21 0.76 10% 2.60 ±0.10 5.61 ±0.63 3.05 ±0.53 5% 2.85 ±0.18 7.78 ±1.32 5.02 ±1.26 1% 5.24 ±0.38 14.33 ±0.70 9.36 ±0.98
+
+## 3.4 Computational Requirements 
+
+Our method requires no training and runs on CPU. On an AMD EPYC 9R14, inference costs 46 ms per trajectory for diverse sampling and 14 ms for beam search, and building the transition table takes 21 s at full data, falling to 0.3 s at 1%. Training TrAISformer took 69 minutes on a T4 GPU. The cap bounds the index and the per-query cost but not extraction, and since it binds only above 22.1% of the pool, the stability from 50% to 10% in Table 2 is a property of the method rather than of the cap. 
+
+## 4 Discussion and Conclusion 
+
+Our results suggest that nonparametric transition-based prediction is competitive across a broad operating range: it matches learned models at full data availability while offering dramatically better performance in data-scarce deployment scenarios that are common when expanding to new regions. Beam search’s best-of-16 (7.17 km) is weaker than diverse sam-pling (2.49 km), as expected—without a diversity mechanism its branches cluster on the same high-likelihood route. The spatial-only ablation’s top-1 (42.00 km) is worse than SPNS (18.51 km) for the analogous reason: diversity sampling optimizes for multi-modal coverage at the expense of top-1, whereas SPNS deterministically follows its neighbors’ median course. Adding bearing, speed, and temporal conditioning reduces best-of-16 to 2.49 km, a 72% improve-ment over spatial-only, quantifying the value of multi-dimensional kernel conditioning; NCDM, which samples the same neighbor set uniformly, reaches only 11.76 km. Diverse sampling’s CRPS (9.00 km) is higher than beam’s (8.29 km) because the diversity penalty deliberately places samples on routes the vessel did not take, increasing the expected distance to ground truth—the same property that yields its best-of-16 advantage. Both trail the learned baselines, so we claim displacement error and data efficiency rather than calibration. TrAISformer retains an advantage at the 1-hour top-1 metric (2.20 vs. 2.29 km), where its attention over the 3-hour observa-tion window helps disambiguate routes at junctions. At the 3-hour horizon, TrAISformer generates 16 branches by independently sam-pling from its categorical distribution at each step [7]; since most probability mass concentrates in the dominant direction, repeated samples cluster on the same route. Its argmax decoding selects the highest-probability bin independently at each attribute (lat, lon, SOG, COG), which can produce positions between modes at route junctions. Our beam search scores complete paths by cumulative log-density, naturally favoring trajectories that stay on shipping lanes throughout. 
+
+Limitations. Without physics-based conditioning, our method cannot extrapolate behavior in states unrepresented in the transi-tion table, such as rare maneuvers taken by <1% of historical traffic. The fixed-speed assumption further limits accuracy for vessels that accelerate or decelerate mid-trajectory. Neither inference mode dominates all metrics simultaneously: beam search excels at top-1 while diverse sampling excels at best-of-N, and TrAISformer retains an advantage at shorter horizons (1-hour), requiring practitioners to select the appropriate mode for their use case. Finally, for regions with extremely dense traffic, the number of neighbors per query grows; the transition table cap bounds this in practice, but scaling behavior in high-density environments warrants further study. 
+
+Practical implications. The method requires no GPU and no training loop. While kernel bandwidths and inference parameters must be specified, we set all values from data characteristics without systematic tuning and held them fixed across experiments. For a new geographic region, deployment requires only accumulating AIS data: 10% of training data matches what TrAISformer achieves with 10 times as much. The transition table can be updated incrementally as new data arrives. Our method’s non-parametric nature suggests applicability to other domains (pedestrian traffic, aviation, etc.) but we leave this to future work. 
+
+## References    
+
+> [1] Ian S. Abramson. 1982. On Bandwidth Variation in Kernel Estimates—A Square Root Law. The Annals of Statistics 10, 4 (1982), 1217–1223.
+
+Non-Parametric Spatiotemporal Trajectory Prediction via State-Conditioned Transition Sampling 
+
+[2] Bjørnar R. Dalsnes, Simen Hexeberg, Andreas L. Flåten, Bjørn-Olav H. Eriksen, and Edmund F. Brekke. 2018. The Neighbor Course Distribution Method with Gaussian Mixture Models for AIS-based Vessel Trajectory Prediction. In Proc. 21st International Conference on Information Fusion (FUSION) . Cambridge, UK. [3] Danish Maritime Authority. 2019. Historical AIS Data. https://dma.dk/safety-at-sea/navigational-information/ais-data. [4] Agrim Gupta, Justin Johnson, Li Fei-Fei, Silvio Savarese, and Alexandre Alahi. 2018. Social GAN: Socially Acceptable Trajectories with Generative Adversarial Networks. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) . IEEE, Salt Lake City, UT, USA, 2255–2264. [5] Simen Hexeberg, Andreas L. Flaten, Bjørn-Olav H. Eriksen, and Edmund F. Brekke. 2017. AIS-Based Vessel Trajectory Prediction. In Proceedings of the 20th International Conference on Information Fusion . IEEE, Xi’an, China, 1–8. [6] Elizbar A. Nadaraya. 1964. On Estimating Regression. Theory of Probability and Its Applications 9, 1 (1964), 141–142. [7] Duong Nguyen and Ronan Fablet. 2024. A Transformer Network With Sparse Augmented Data Representation and Cross Entropy Loss for AIS-Based Vessel Trajectory Prediction. IEEE Access 12 (2024), 21596–21609. doi:10.1109/ACCESS. 2024.3349957 [8] Giuliana Pallotta, Michele Vespe, and Karna Bryan. 2013. Vessel Pattern Knowl-edge Discovery from AIS Data: A Framework for Anomaly Detection and Route Prediction. Entropy 15, 6 (2013), 2218–2245. [9] Branko Ristic, Barbara La Scala, Mark Morelande, and Neil Gordon. 2008. Statis-tical Analysis of Motion Patterns in AIS Data: Anomaly Detection and Motion Prediction. In Proceedings of the 11th International Conference on Information Fusion . IEEE, Cologne, Germany, 1–7. [10] Ashwin K. Vijayakumar, Michael Cogswell, Ramprasaath R. Selvaraju, Qing Sun, Stefan Lee, David Crandall, and Dhruv Batra. 2018. Diverse Beam Search for Improved Description of Complex Scenes. In Proceedings of the AAAI Conference on Artificial Intelligence , Vol. 32. AAAI Press, New Orleans, LA, USA, 7371–7379. [11] Geoffrey S. Watson. 1964. Smooth Regression Analysis. Sankhy¯ a: The Indian Journal of Statistics, Series A 26, 4 (1964), 359–372. [12] Xin Zhang, Xiuju Fu, Zhe Xiao, Han Xu, and Zhiwei Qin. 2022. Vessel Trajectory Prediction in Maritime Transportation: Current Approaches and Beyond. IEEE Transactions on Intelligent Transportation Systems 23, 11 (2022), 19980–19998. doi:10.1109/TITS.2022.3192574
