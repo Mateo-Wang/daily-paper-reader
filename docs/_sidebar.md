@@ -3,7 +3,8 @@
 
 <!-- dpr-frontier-sidebar:start -->
 * AI 前沿
-  * 暂无精选 <!--dpr-frontier:empty-->
+  * 2026 第 34 周 <!--dpr-frontier:2026-W34-->
+    * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/frontier/2026-W34/intern-s2-preview-scientific-agentic-foundation-model" data-sidebar-item="{&quot;title&quot;:&quot;Intern-S2-Preview: Scientific Agentic Foundation Model&quot;,&quot;link&quot;:&quot;https://arxiv.org/abs/2608.13505v1&quot;,&quot;score&quot;:&quot;9.0&quot;,&quot;tags&quot;:[{&quot;kind&quot;:&quot;query&quot;,&quot;label&quot;:&quot;frontier&quot;},{&quot;kind&quot;:&quot;other&quot;,&quot;label&quot;:&quot;论文&quot;}],&quot;evidence&quot;:&quot;作为科学智能体基础模型，统一多模态理解、推理与长程工具交互，可迁移至多科学领域。&quot;,&quot;published&quot;:&quot;2026-08-13&quot;,&quot;selection_source&quot;:&quot;frontier&quot;}">Intern-S2-Preview: Scientific Agentic Foundation Model</a>
 <!-- dpr-frontier-sidebar:end -->
 
 * Daily Papers
