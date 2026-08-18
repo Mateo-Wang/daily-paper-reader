@@ -1,0 +1,709 @@
+Title: StructRL: Structured Action-Space Exploration for Flow-Based VLAs
+
+URL Source: https://arxiv.org/pdf/2608.15139v1
+
+Published Time: Tue, 18 Aug 2026 00:32:41 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# StructRL: Structured Action-Space Exploration for Flow-Based VLAs 
+
+Jiarui Yang 1 Bin Zhu 2 Jingjing Chen 1,∗ Na Zou 3
+
+Yanwei Fu 1 Jianggang Zhu 1 Yu-Gang Jiang 11Fudan University 2Singapore Management University 
+
+> 3
+
+Shanghai Artificial Intelligence Laboratory 
+
+Abstract: Flow-based Vision-Language-Action (VLA) models are now widely used for continuous robotic manipulation, and online reinforcement learning (RL) is emerging as a key technique for adapting them to new tasks. Existing RL methods typically inject stochasticity inside the denoising chain, often through isotropic or temporally independent noise. However, effective robot exploration calls for structured noise: temporally smooth and scaled differently across action groups. We show that simply switching the in-chain noise to a structured form does not suffice: noise added at an intermediate flow time can be weakened by the remaining denoising steps before execution, a phenomenon we call Structured Noise Dilution . We propose StructRL , which avoids dilution by relocating policy stochasticity to the action space via three coupled choices: (i) a deterministic ODE decoder, (ii) structured noise injected directly in the action space, and (iii) last-step replay, where policy-gradient updates avoid assigning likelihoods to intermediate denoising states. This keeps structured exploration tied to the executed action while providing a tractable training signal for the flow decoder. Across three flow-based VLA models on multiple simulated manipulation benchmarks and two real-world tasks, StructRL improves exploration efficiency and OOD performance over prior in-chain baselines, demonstrating the effectiveness of structured action-space exploration for adapting flow-based VLA with RL. Project page: https://flyfaerss.github.io/structrl/ 
+
+Keywords: Flow-based VLA, Reinforcement Learning, Structured Exploration, Real-World RL 
+
+## 1 Introduction 
+
+Vision-Language-Action (VLA) models cast robot control as instruction-conditioned action prediction, conditioning on visual observations and language instructions while typically pairing pretrained VLM backbones with continuous action heads trained on heterogeneous robot data [1, 2, 3, 4]. Among continuous action-head designs, flow matching [5] has become a common choice in recent VLA policies: it learns a velocity field and supports efficient few-step inference over action chunks. Recent flow-based VLAs such as π0 [2], π0.5 [3], and GR00T [4] are trained by large-scale behavior cloning. This imitation objective, however, is fundamentally bounded by the quality and coverage of the offline demonstrations. Improving these pretrained policies beyond the offline data therefore requires feedback from environment interaction, motivating recent RL approaches for flow-based VLAs [6, 7]. In these RL approaches, the exploration distribution determines which actions are evaluated during interaction and therefore shapes what the policy can learn. For continuous robot control, exploratory actions should reflect the structure of robot actions (Fig. 1a). First, actions sampled within a chunk should be temporally smooth, since jittery actions can make execution unstable or unsafe. Second, noise should be scaled differently across action groups, since position , rotation , and gripper actions vary in range and safety sensitivity. Existing RL methods for flow-based VLAs [6, 8, 7] instead inject random noise inside the denoising chain, without explicitly controlling temporal correlation or action-group scale at the action level. 
+
+> *
+
+Corresponding author. arXiv:2608.15139v1 [cs.RO] 15 Aug 2026 (a) Why structure matters 
+
+(b) In-chain injection overwrites structure (c) Endpoint injection preserve structure 
+
+Structured noise enables smooth, robot-compatible exploration beyond the base VLA     
+
+> iid noise
+> pos rot grip
+> no temporal continuity pos rot grip same scale time
+> structured noise
+> pos rot grip
+> temporal continuity pos rot grip group-wise scale time
+> Remaining flow progressively dilutes the injected structure
+
+x1 xt xtk xt1 x0 
+
+> ∆k
+> inject at x tk
+> remaining ODE flow
+> Endpoint injection preserves structure in action space
+> pos structured noise rot grip SFT manifold
+
+x1 xt xt1 x0  
+
+> pos structured noise rot grip
+> no remaining flow
+> pos preserved structure rot grip
+
+=
+
+> deterministic flow
+> ∆0
+> inject at action space
+
+aFigure 1: Structured exploration for flow-based VLA-RL. (a) Robot exploration benefits from smooth action chunks and group-aware noise scales. (b) In-chain noise can lose its intended structure during the remaining denoising steps. (c) StructRL keeps denoising deterministic and applies structured noise directly in the action space. We find that this in-chain design makes structured exploration difficult to realize (Fig. 1b). When structured noise is injected at an intermediate flow time, the remaining denoising steps map the perturbed sample back toward the SFT action manifold. As a result, the temporal and action-group structure specified by the injected noise can be weakened or overwritten before the action is executed. We refer to this phenomenon as Structured Noise Dilution (Sec. 3). This observation suggests a simple alternative: keep the flow decoder deterministic and place the exploration distribution directly in the action space (Fig. 1c). We propose StructRL based on this idea. Given the clean action chunk produced by ODE denoising, StructRL samples structured action-space noise from an AR(1)-correlated distribution with separate scales for action groups, conditioned on the decoder’s terminal representation. During training, the policy likelihood is evaluated on the sampled action-space noise, so structured exploration stays tied to the executed action rather than to an intermediate denoising state. StructRL then uses last-step replay to pass policy-gradient updates to the flow decoder without defining likelihoods along the denoising chain. Across three flow-based VLA backbones ( π0, π0.5, GR00T N1.5) on multiple manipulation benchmarks, StructRL improves exploration efficiency and consistently outperforms prior in-chain baselines on out-of-distribution and long-horizon manipulation tasks. We further deploy π0.5 on a Franka robot and instantiate the same action-space likelihood in an asynchronous AWAC [9] learner. The comparisons between Gaussian exploration and StructRL on pick-banana and plug-charger-in tasks show faster and more effective online adaptation from sparse binary rewards. These results suggest that preserving structure in action-space exploration is important for efficient and robust VLA adaptation. The main contributions can be summarized as follows: • We identify Structured Noise Dilution : structured noise injected inside the flow chain can be weakened by the remaining denoising steps before it reaches the executed action. • We introduce an action-space RL framework for flow-based VLA with last-step replay mechanism, showing that the flow decoder can be updated through the final Euler step alone, without assigning policy likelihoods to intermediate denoising states. 2• Based on this framework, we propose StructRL , which injects structured exploration noise directly in the action space using AR(1) temporal correlation and separate scales for position, rotation, and gripper actions. • Across multiple simulated manipulation benchmarks and two real-world tasks, we show that StructRL improves exploration efficiency and OOD performance over in-chain baselines and endpoint Gaussian exploration. 
+
+## 2 Related Work 
+
+Vision-Language-Action Models. Early VLAs such as RT-1 [10], RT-2 [11], OpenVLA [1], and 
+
+π0-FAST [12] represent robot actions as language tokens and train the model autoregressively. Another line keeps the vision–language backbone fixed and trains an attached continuous action head [13, 14]. Recent VLA policies often use flow-matching [5, 15] or diffusion [16, 17] decoders to model continuous action chunks with few-step inference. Our work focuses on RL adaptation of representative flow-based VLAs, including π0 [2], π0.5 [3], and GR00T N1.5 [4], which are trained by large-scale imitation learning on heterogeneous robot data. 
+
+RL for Generative Robot Policies. RL has been used to optimize generative policies. DDPO [18] treats the denoising process of a diffusion model as a multi-step stochastic policy and applies policy-gradient updates to the denoising chain. In offline continuous-control RL, Diffusion-QL [19], IDQL [20], CPQL [21], and QAM [22] combine generative policy classes with value-based objectives. For flow-based VLAs, πRL [6] introduces two methods: Flow-Noise models denoising as a discrete-time MDP with a learnable noise network, and Flow-SDE converts ODE denoising into an SDE for exploration. Flow-CPS [8] proposes a coefficient-preserving stochastic sampler for RL with flow matching, while π-StepNFT [7] introduces a critic and likelihood-free step-wise negative-aware fine-tuning objective for flow-based VLAs. These works make RL feasible for denoising policies, but their exploration signal is not defined as a structured distribution over executed actions. 
+
+Structured Exploration in Continuous-Control RL. Continuous-control RL has explored several ways to structure exploration, including temporally correlated noise across environment steps (OU noise in DDPG [23], colored noise [24, 25]), learned action-dimension coupling [26, 27], state-dependent linear noise [28], parameter-space perturbation [29], and on-manifold exploration [30]. These methods mainly define structure on policy actions or parameters. Flow-based VLAs complicate this design because action samples are produced through a denoising chain, while existing RL methods usually place stochasticity inside the chain. StructRL moves the structured perturbation to the action space and uses last-step replay to pass policy-gradient updates back to the flow decoder. 
+
+## 3 Structured Noise Dilution 
+
+This section studies why structure injected inside the denoising chain may not survive to the executed action. We first explain how the remaining denoising steps can filter an intermediate perturbation, then test this effect on a GR00T N1.5 SFT model by injecting noise with controlled temporal correlation and per-group scale at different locations. We finally discuss why the structure induced by the SFT model is not a substitute for task-specific exploration. 
+
+Mechanism. In-chain exploration specifies noise before the decoder has finished predicting an action. The remaining denoising steps are still those of the SFT model, so the perturbed state is processed toward demonstration-like action regions. The action-level perturbation is therefore not the injected noise itself: its temporal correlation and action-group scale can be changed by the rest of the decoder, which we call Structured Noise Dilution .
+
+Empirical Verification. We test whether Structured Noise Dilution appears in flow-based VLAs, and Table 1 provides direct empirical evidence. Specifically, we use a GR00T N1.5 SFT model on LIBERO-Long [31], and inject structured perturbations ∆ with either a prescribed AR(1) coefficient 
+
+ρinj along the chunk axis or prescribed per-group magnitudes across position, rotation, and gripper actions. The perturbation is inserted at one of two sites: in-chain , before the remaining denoising steps, or action-space , after denoising completes. We then measure the structure of the resulting executed action. The table reports one representative temporal-correlation setting and one representative action-group scale setting. 3Table 1: Structured noise dilution. Output statistics after injecting structured noise into a GR00T N1.5 SFT model on LIBERO-Long. We compare action-space injection with in-chain injec-tion under two requested structures: strong tempo-ral correlation ( ρinj = 0 .95 ) and a position-heavy scale ratio Rapproach = (1 .0, 0.5, 0.05) , both using base noise level σ = 0 .2. Action-space injection better follows the requested structure, while in-chain injection stays close to the SFT baseline. 
+
+Action-space In-chain 
+
+pos rot grip pos rot grip 
+
+ˆρSFT 0.78 0 .72 0 .57 0 .78 0 .72 0 .57 
+
+ρinj = 0 .95 0.70 0 .64 0 .63 0 .79 0 .72 0 .58 ˆσSFT 0.10 0 .08 0 .21 0 .10 0 .08 0 .21 
+
+Rapproach 0.23 0 .13 0 .19 0 .11 0 .08 0 .19 
+
+For strong temporal correlation ( ρinj = 0 .95 ), action-space injection changes the measured out-put correlation, while in-chain injection stays close to the SFT baseline. For the position-heavy scale ratio Rapproach = (1 .0, 0.5, 0.05) over (po-sition, rotation, gripper), action-space injection increases the position standard deviation from 
+
+0.10 to 0.23 , whereas in-chain injection changes it only from 0.10 to 0.11 . Additional experi-mental details and full results are provided in App. B. 
+
+SFT Structure Constrains Exploration. The structure that survives in-chain injection comes from the SFT model. The SFT-induced correla-tion ρSFT (o) reflects the behavior distribution in the offline data [32, 33], and may be useful as an imitation prior. However, if exploration is mainly shaped by this prior, the policy remains biased toward actions that the SFT model already favors. This makes it harder to reach useful actions outside the SFT prior and can reduce exploration efficiency during RL. These limitations motivate us to move structured exploration to the action space, where temporal correlation and action-group scale can be specified directly. 
+
+## 4 Method: StructRL VLA backbone Deterministic reverse ODE x1 +    
+
+> ∆0is added after denoising; no later flow steps dilute it
+> x0clean
+> ∆0
+> Action →Env
+> AR(1) temporal correlation (ρ)
+> pos rot grip
+> update — policy-gradient update via last-step replay
+> Action Space xtxtn
+> ...
+> replay step
+> Structured Action-Space Noise
+> Observation
+> one-jump
+> action-group scale (σ) time
+
+Figure 2: The StructRL framework. The re-verse flow runs as a deterministic ODE to pre-dict a clean actions xclean  
+
+> 0
+
+. StructRL then samples structured noise ∆0 directly in the action space, with AR(1) temporal correlation and action-group-aware scales. During RL training, the likelihood is evaluated on this action-space noise, and last-step replay passes policy-gradient updates back to the flow decoder. We propose StructRL, an action-space RL framework for flow-based VLAs, illustrated in Fig. 2. StructRL keeps the flow decoder deter-ministic, injects structured noise at the action output, and uses last-step replay to update the decoder from the log-probability of the sam-pled action-space noise. In this section, we first review flow-based VLA policies and the RL likelihood problem, then describe the action-space RL framework, and finally instantiate the noise distribution with temporal correlation and action-group-aware scaling. 
+
+4.1 Preliminaries Flow-Matching VLAs. A flow-based VLA pre-dicts an action chunk by integrating a learned velocity field vθ (xt, t, o ), where o is the multi-modal observation and xt ∈ RC×D is a noised action chunk. Starting from x1 ∼ N (0 , I ), the reverse flow is integrated with T Euler steps: 
+
+xtk −δ = xtk − δ v θ (xtk , t k, o ), k = T, T −1, . . . , 1, (1) The final state x0 is used as the clean action a. We denote by F θk→0 the deterministic map from xtk
+
+to x0 obtained by the remaining k denoising steps. 
+
+Policy Likelihood for Flow-based RL. Likelihood-based RL objectives require a tractable policy density, such as policy ratios in PPO [34] or entropy terms in SAC [35]. For a flow-matching VLA, the executed action is obtained after the multi-step denoising process in Eq. 1, so its likelihood is not directly exposed. Existing flow-based VLA RL methods attach likelihoods to denoising-chain transitions [6]. Such chain-level likelihoods are tied to intermediate denoising states, while action-space structured noise is defined on the perturbation added to the executed output action. 44.2 Action-Space RL with Last-Step Replay 
+
+Action-space exploration avoids dilution by the remaining denoising steps. Therefore, we first design a framework that can inject noise at the action output while still providing a tractable likelihood for RL. The pretrained flow decoder is run as a deterministic ODE to predict a clean action chunk, 
+
+xclean  
+
+> 0
+
+= F θT →0(x1), (2) and then add noise at the action output: 
+
+a = xclean  
+
+> 0
+
++ ∆ 0. (3) Since ∆0 is added after denoising, the likelihood is evaluated on the perturbation applied to the executed action. As a simple example, let ∆0 ∼ N (0 , σ 2I) in the action space. Its log-probability is 
+
+log pbase (∆ 0) = X
+
+> c,d
+
+log N
+
+ ∆0,c,d 
+
+σ ; 0 , 1
+
+
+
+− CD log σ. (4) To update the flow decoder, we use last-step replay. During rollout, we store the executed action together with a stored late denoising state xtn . At each policy update, we replay the deterministic jump from tn to 0:
+
+ˆxclean  
+
+> 0
+
+= F θn→0(xtn ). (5) In our default setting, xtn is the last denoising state before the clean action chunk (i.e., n = 1 ). During policy updates, this terminal jump is replayed to compute the log-probability without rerunning the full denoising chain. The action-space noise assigned to the stored action is then 
+
+∆θ 
+
+> 0
+
+= a − ˆxclean  
+
+> 0
+
+, (6) and the policy log-probability is evaluated as 
+
+log πθ (a | o) = log pbase (∆ θ
+
+> 0
+
+). (7) The likelihood is therefore evaluated for the executed action, rather than for an intermediate denoising-chain transition. This action-level log-probability can be used in either on-policy or off-policy likelihood-based objectives, with the value or critic loss defined by the chosen algorithm. In simu-lation, where rollouts can be collected in parallel, we use PPO. For real-world interaction, we use replay-based advantage-weighted actor–critic (AWAC) [36] with an expectile value function [37], because physical rollouts are sequential and collected data must be reused many times. Last-step replay updates the decoder through a short terminal denoising jump, while the policy likelihood is evaluated on the action-space noise. This avoids assigning likelihoods to intermediate denoising-chain transitions and provides the basic action-space RL framework used by both the Gaussian baseline and the structured noise in Sec. 4.3. In Sec. 5.3, by setting T ∈ { 2, 3, 4, 5}, we demonstrate that this framework provides an effective optimization signal for the full flow field. 
+
+4.3 Structured Noise Instantiation 
+
+We now replace the Gaussian baseline in Sec. 4.2 with a learnable structured distribution pϕ(∆ 0 | hθ ),where hθ ∈ RC×dh is the decoder’s final hidden representation. This distribution makes two properties explicit at the action output: temporal correlation within an action chunk and different noise scales across action groups. 
+
+Action-Group-aware Scaling. Robot manipulation policies commonly represent actions as rela-tive end-effector motion, typically covering position, rotation, and gripper control. These action groups have different units, ranges, and safety sensitivity, so a single isotropic noise scale is poorly matched to this action representation. We partition the D action dimensions into three groups, 
+
+G = {G pos , Grot , Ggrip }. A global base noise level σbase sets the overall noise magnitude, while group-specific bounds control the allowed scale range for each action group. A lightweight MLP head fϕ
+
+predicts the bounded element-wise multipliers from hθ :
+
+σc,d = σbase · clip  fϕ(hθ )c,d , [αg(d), β g(d)], (8) where g(d) is the group of dimension d. The group-specific bounds [αg , β g ] keep the learned scale within a controlled range. 5Table 2: LIBERO benchmark results. Average success rates (%) across four task suites, each containing 10 tasks. The few-shot SFT models are directly taken from the πRL checkpoints.                                                                                                             
+
+> Model Spatial Object Goal Long Avg. ∆Avg. GR00T N1.5 – Few-shot SFT 41.4 58.6 48.2 61.9 52.5 —
+> +πRL (Flow-SDE +PPO) 96.6 100 93.8 95.6 96.5 +44.0
+> +Baseline 96.2 99.4 91.8 95.6 95.8 +43.3
+> +StructRL 99.2 100 97.6 99.0 99.0 +46.3
+> π0– Few-shot SFT 65.3 64.4 49.8 51.2 57.6 —
+> +πRL (Flow-SDE +PPO) 98.4 99.4 96.2 90.2 96.0 +38.4
+> +π-StepNFT 93.5 98.0 83.7 86.7 90.5 +32.9
+> +Baseline 98.8 99.0 97.2 90.2 96.3 +38.7
+> +StructRL 98.8 99.8 98.4 91.8 97.2 +39.6
+> π0.5– Few-shot SFT 84.6 95.4 84.6 43.9 77.1 —
+> +πRL (Flow-SDE +PPO) 99.6 100 98.8 93.0 97.9 +20.8
+> +π-StepNFT 97.8 100 98.2 79.8 94.0 +16.9
+> +Baseline 99.4 100 93.8 86.0 94.8 +17.7
+> +StructRL 99.6 100 98.8 90.2 97.2 +20.1
+
+AR(1) Temporal Correlation. Within an action chunk, adjacent actions are executed in order, so independent noise across the chunk may introduce unnecessary jitter. Therefore, we further add temporal structure by sampling an AR(1) noise sequence. For each action dimension d,
+
+ε1,d ∼ N (0 , 1) , εc+1 ,d = ρ ε c,d + p1 − ρ2 ζc,d , ζc,d ∼ N (0 , 1) , (9) with ρ ∈ [0 , 1) controlling the temporal correlation. The final action-space perturbation combines the group-aware scale and the AR(1) noise sequence: 
+
+∆0,c,d = σc,d εc,d . (10) This construction gives temporally correlated action-space noise with different scales across action groups, making the exploration distribution better aligned with the structure of robot actions. 
+
+Structured log-probability. Given the replayed action-space perturbation ∆θ
+
+> 0
+
+, we evaluate its likelihood under the generative rule in Eq. 10. The AR(1) density is applied to the corresponding noise coordinates, with the scale change-of-variables term:                   
+
+> log pϕ(∆ θ
+> 0|hθ) = PDd=1
+> h
+> log N(εθ
+> 1,d ; 0 ,1) + PC−1
+> c=1 log N(εθc+1 ,d ;ρε θc,d ,1−ρ2)
+> i
+> −P
+> c,d log σc,d ,
+
+(11) where εθc,d = ∆ θ
+
+> 0,c,d
+
+/σ c,d is used only for likelihood evaluation: it is the AR(1) noise value corre-sponding to the replayed perturbation under the current scale. This structured likelihood replaces Eq. 4 inside the same action-space RL framework. We provide the detailed derivation in App. C. 
+
+Regularization. The learned scale σ controls action-space exploration, so unconstrained updates can collapse or over-amplify the perturbations. Therefore, we regularize σ with three lightweight terms: a dimension-entropy term that discourages scale collapse onto a few action dimensions, a budget term that keeps the overall noise magnitude near the target level, and a temporal smoothness term that avoids abrupt scale changes along the chunk. The full form is given in App. D. 
+
+## 5 Experiments 
+
+5.1 Experimental Setup Benchmarks. We conduct experiments on three standard simulation benchmarks: LIBERO [31], ManiSkill [38], and CALVIN [39]. Hyperparameter settings and CALVIN results are provided in App. G and App. F, respectively. All experiments are conducted on 4 NVIDIA A800 GPUs. 
+
+Baseline variants. We adopt π0 [2], π0.5 [3], and GR00T N1.5 [4] as the base VLA models through-out the experiments. For simulation, we train the RL variants with PPO, since the environments allow parallel rollout collection. The physical experiments instead use the off-policy AWAC instantiation described in Sec. 5.4 and App. E. StructRL is compared against several baselines: the SFT model, 
+
+πRL [6] (Flow-SDE +PPO), and π-StepNFT [7]. Flow-SDE injects noise inside the denoising chain 6Table 3: ManiSkill benchmark results. Success rates (%) on in-distribution (IND) tasks and three OOD splits: Vision (5 tasks), Semantic (5 tasks), and Execution (2 tasks). Avg. reports the mean success rate across the OOD splits. 
+
+Model IND OOD Vision Semantic Execution Avg. 
+
+π0 – SFT 38.4 32.6 8.4 13.2 18.1 
+
++ πRL (Flow-SDE +PPO) 78.8 61.1 25.4 31.5 39.3 
+
++ π-StepNFT 79.2 69.1 49.1 33.1 50.4 
+
++ Baseline 84.1 79.4 63.3 59.1 67.3 
+
++ StructRL 87.8 80.0 64.2 56.2 66.8 
+
+π0.5 – SFT 40.1 38.8 16.6 22.3 25.9 
+
++ πRL (Flow-SDE +PPO) 90.9 68.0 34.5 45.4 49.3 
+
++ π-StepNFT 85.4 76.9 56.6 45.1 59.5 
+
++ Baseline 85.9 76.2 62.2 59.4 65.9 
+
++ StructRL 90.9 78.3 68.4 64.2 70.3 0 25 50 75 100 125 150 175 Training step 0.6 0.7 0.8 0.9 1.0 Success rate      
+
+> σ= 0.05
+> σ= 0.1 (main)
+> σ= 0.2
+> σ= 0.3
+
+(a) Action-space noise level σbase 0 25 50 75 100 125 150 175 Training step 0.6 0.7 0.8 0.9 1.0 Success rate  
+
+> StructRL (main) StructRL-ρlow
+> Baseline Flow-SDE Flow-SDE-structured
+
+(b) Noise injection scheme 0 25 50 75 100 125 150 175 Training step 0.6 0.7 0.8 0.9 1.0 Success rate  
+
+> Last-Last (main, consistent) 2ndlast-2ndlast (consistent) 2ndlast-Last (mismatch) Random-Last (mismatch)
+
+(c) Train–inference consistency 0 25 50 75 100 125 150 175 Training step 0.6 0.7 0.8 0.9 1.0 Success rate       
+
+> T= 2
+> T= 3
+> T= 4 (main)
+> T= 5
+
+(d) Number of denoising steps T
+
+Figure 3: Four ablations on LIBERO-Long with GR00T N1.5. (a) Moderate action-space noise gives stable online improvement. (b) Structured action-space noise explores more efficiently than Gaussian or in-chain variants. (c) Matched train–inference replay improves performance, with larger matched jumps further improving exploration efficiency. (d) Last-step replay mechanism provides an effective optimization signal for the full flow field across different denoising steps. and trains with PPO, while π-StepNFT keeps SDE-based in-chain exploration but replaces likelihood-based policy-gradient training with a step-wise fine-tuning objective. We define the version that adds Gaussian noise within our action-space RL framework as Baseline . StructRL further replaces this Gaussian noise with structured action-space noise. 
+
+5.2 Main Results Results on LIBERO. Table 2 presents the results across the four LIBERO suites. On GR00T N1.5, where the few-shot SFT model reaches only 52.5 % average, StructRL pushes the average success rate to 99.0 %, outperforming Flow-SDE +PPO by 2.5 % with consistent gains on the four suites. On π0, StructRL yields a modest improvement against Flow-SDE +PPO. Because all RL methods approach saturation on LIBERO, we treat this benchmark primarily as an in-distribution sanity check; ManiSkill OOD and the learning curves in Sec. 5.3 provide the more diagnostic comparisons of injection location and structured exploration. 
+
+Results on ManiSkill. Table 3 reports the simulated results on the ManiSkill benchmark. StructRL achieves the highest in-distribution success rate of 87.8 % on π0, and matches the best on π0.5.For OOD evaluation, the action-space RL framework shows a clear advantage over Flow-SDE’s in-chain noise injection. Moving only the injection location from Flow-SDE to the endpoint Gaussian Baseline improves the OOD average by 28 .0 points on π0 (39.3 % → 67 .3% ) and 16 .6 points on π0.5
+
+(49.3 % → 65 .9% ). This identifies endpoint action-space exploration, rather than AR structure alone, as the main source of the large final OOD gain. StructRL further changes the endpoint covariance and is most consistently beneficial in learning efficiency; its final values can be close to, or occasionally below, the Gaussian Baseline after saturation (e.g., the π0 Execution split). Thus, the controlled results support two distinct conclusions: the injection location expands effective exploration beyond the flow-shaped SFT distribution, while temporal and group structure make that exploration more efficient. 75.3 Ablation Studies 
+
+All ablations use GR00T N1.5 with PPO on LIBERO-Long, the LIBERO suite that most directly tests long-horizon execution. For a fair comparison, all runs use the same 200 training iterations and are evaluated every 5 iterations (Fig. 3). 
+
+(a) Sensitivity to the Noise Level σbase . We set σbase ∈ { 0.05 , 0.1, 0.2, 0.3} to test how the magnitude of exploration noise affects training stability. As shown in Fig. 3(a), small noise levels under-explore, while large noise levels over-perturb the executed actions and destabilize training. The intermediate setting provides learnable signals over a broader action region, enabling efficient online improvement. 
+
+(b) Noise Injection Scheme. We compare five ways of injecting exploration noise: action-space Gaussian noise (the Baseline), StructRL , StructRL −ρlow (reduced temporal correlation), Flow-SDE 
+
+(isotropic in-chain noise), and Flow-SDE −structured (the same structured noise injected in-chain). These controls separate two factors. Flow-SDE versus the Gaussian Baseline changes the injection location, whereas the Gaussian Baseline versus StructRL changes only the endpoint noise structure. Fig. 3(b) shows that StructRL reaches 90 % success in about 40 training steps, compared with about 80 steps for the endpoint Gaussian Baseline. The final values become close after saturation, so this ablation supports an efficiency benefit from temporal and group structure rather than a universal final-performance advantage. 
+
+(c) Train–Inference Consistency. Last-step replay allows action-space RL to update the flow field by replaying a terminal ODE jump during training. This gives a flexible setting: the replay can cover one or more final denoising steps, and the inference-time ODE step can either match or differ from the training replay. We therefore compare four configurations. Last-Last: last-step replay (n = 1 ) in training and last-step inference. 2ndlast-2ndlast: second-last-step replay ( n = 2 ) in training and second-last-step inference. 2ndlast-Last: second-last-step replay ( n = 2 ) in training but last-step inference. Random-Last: randomly selected replay depth in training and last-step inference. The first two settings are consistent between training and inference, while the last two deliberately introduce mismatch. As shown in Fig. 3(c), the train–inference consistent settings substantially outperform the mismatched settings. We also find that a larger replay jump brings a more evident gain in exploration efficiency. 
+
+(d) Robustness Evaluation. To evaluate the robustness of last-step replay mechanism for our action-space RL framework, we vary the number of denoising steps as T ∈ { 2, 3, 4, 5}. As shown in Fig. 3(d), all settings show similar convergence speeds and achieve comparable final performance. 
+
+This result shows that last-step replay can route gradients only through a terminal denoising jump while still providing an efficient optimization signal for the full flow field. 5.4 Real-World Experiment 
+
+We evaluate StructRL in the real world on pick-banana , a pick-and-place (PnP) task, and plug-charger-in , a fine-manipulation task (Fig. 4). Because physical rollouts have low throughput and each transition is expensive to collect, we combine StructRL with AWAC [9] to obtain an off-policy real-world RL algorithm that can repeatedly reuse collected data. 
+
+Algorithm: To retain the unlimited transition-reuse advantage of off-policy learning, we set the ODE denoising horizon to a single step ( T = 1 ). The latent saved by last-step replay is therefore the initial Gaussian noise x1, which is independent of the policy that collected the transition. Each chunk-based transition is stored as 
+
+Tt =  ot, a bt , rt, dt, o t+C , x 1
+
+, (12) where ot and ot+C are the current and next observations; abt is the executed action chunk, either generated by the policy with exploration noise or human intervention; rt and dt are the rewards and termination/truncation indicators within the chunk. Given the stored x1, the current actor recomputes the one-step action chunk without noise injection and evaluates abt under the StructRL action-space distribution. Its AWAC objective is 
+
+LAWAC (θ) = −ETt∼D 
+
+wt log πθ (abt | ot, x 1) , (13) 8Pick-Banana Plug-Charger-In       
+
+> Task / metric Baseline StructRL
+> Pick-banana, SR at 60 min 56% (14/25) 84% (21/25)
+> Plug-charger-in, convergence ∼35 min ∼30 min
+
+Figure 4: Real-world tasks and online-RL comparisons. Both task-specific policies are initialized by SFT on 10 pre-collected demos and achieve 0% success rate (SR) before online RL. where the advantage weight is 
+
+wt = exp 
+
+
+
+clip 
+
+ min i Q′
+
+> i
+
+(ot, a bt ) − V (ot)
+
+β , −3, 3
+
+ 
+
+, β = 0 .5. (14) Thus, previously collected rollout actions and human corrections can be repeatedly reused through advantage-weighted BC, while higher-advantage actions receive larger likelihood updates. 
+
+Setup: We conduct the experiments on a FR3 robot. Pick-banana uses C = 10 and a 7-DoF action while Plug-charger-in uses C = 5 and a 6-DoF action with fixed gripper dimension. Both tasks use delta end-effector pose actions to represent action space. 
+
+Results: For each task, we first perform SFT on ten pre-collected demos. This initialization provides only a coarse motion trend and achieves 0% success rate. We then run online RL with few human interventions. In pick-banana , the limited demos do not cover the banana’s varying positions, so the initial policy usually fails during grasping. After 60 minutes of online RL, StructRL reaches an 84% success rate (21/25), whereas the Gaussian baseline reaches 56% (14/25), as shown in Fig. 4. For plug-charger-in , the SFT prior mainly produces a downward insertion motion but cannot make the necessary lateral alignment corrections. StructRL reaches a stable, fully successful regime after approximately 30 minutes, while the Gaussian baseline requires approximately 35 minutes (Fig. 4). These results show that structured exploration also improves exploration efficiency in real-world online RL. Additional implementation, training, and safety details are provided in App. E. 
+
+## 6 Conclusion 
+
+We presented StructRL, an action-space RL framework for RL adaptation of flow-based VLAs. Motivated by structured noise dilution, StructRL keeps the flow decoder deterministic, injects temporally correlated and group-aware noise on the executed action chunk, and uses last-step replay to update the flow field from action-space likelihoods. Controlled simulation results show that moving exploration to the action space accounts for most of the OOD gain, while structuring the action-space noise primarily improves learning efficiency. Real-world experiments further show that StructRL enables more efficient online adaptation than Gaussian exploration. 
+
+## References 
+
+[1] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. P. Foster, P. R. Sanketi, Q. Vuong, et al. Openvla: An open-source vision-language-action model. In 
+
+Conference on Robot Learning , pages 2679–2713. PMLR, 2025. [2] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman, B. Ichter, et al. π0: A vision-language-action flow model for general robot control. arXiv preprint arXiv:2410.24164 , 2024. [3] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, et al. π0.5: a vision-language-action model with open-world generalization. 
+
+arXiv preprint arXiv:2504.16054 , 2025. [4] J. Bjorck, F. Castañeda, N. Cherniadev, X. Da, R. Ding, L. Fan, Y. Fang, D. Fox, F. Hu, S. Huang, et al. Gr00t n1: An open foundation model for generalist humanoid robots. arXiv preprint arXiv:2503.14734 , 2025. [5] Y. Lipman, R. T. Chen, H. Ben-Hamu, M. Nickel, and M. Le. Flow matching for generative modeling. arXiv preprint arXiv:2210.02747 , 2022. 9[6] K. Chen, Z. Liu, T. Zhang, Z. Guo, S. Xu, H. Lin, H. Zang, X. Li, Q. Zhang, Z. Yu, et al. 
+
+πrl : Online rl fine-tuning for flow-based vision-language-action models. arXiv preprint arXiv:2510.25889 , 2025. [7] S. Wang, X. Wang, Z. Zhu, M. Pei, X. Cui, C. Deng, J. Zhao, G. Huang, H. Zhang, and J. Wang. π-stepnft: Wider space needs finer steps in online rl for flow-based vlas. arXiv preprint arXiv:2603.02083 , 2026. [8] F. Wang and Z. Yu. Coefficients-preserving sampling for reinforcement learning with flow matching. arXiv preprint arXiv:2509.05952 , 2025. [9] A. Nair, A. Gupta, M. Dalal, and S. Levine. Awac: Accelerating online reinforcement learning with offline datasets. arXiv preprint arXiv:2006.09359 , 2020. [10] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn, K. Gopalakrishnan, K. Haus-man, A. Herzog, J. Hsu, et al. Rt-1: Robotics transformer for real-world control at scale. Robotics: Science and Systems Foundation, 2023. [11] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart, S. Welker, A. Wahid, et al. Rt-2: Vision-language-action models transfer web knowledge to robotic control. In Conference on Robot Learning , pages 2165–2183. PMLR, 2023. [12] K. Pertsch, K. Stachowicz, B. Ichter, D. Driess, S. Nair, Q. Vuong, O. Mees, C. Finn, and S. Levine. Fast: Efficient action tokenization for vision-language-action models. arXiv preprint arXiv:2501.09747 , 2025. [13] O. M. Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees, S. Dasari, J. Hejna, T. Kreiman, C. Xu, et al. Octo: An open-source generalist robot policy. arXiv preprint arXiv:2405.12213 ,2024. [14] M. J. Kim, C. Finn, and P. Liang. Fine-tuning vision-language-action models: Optimizing speed and success. arXiv preprint arXiv:2502.19645 , 2025. [15] X. Liu, C. Gong, and Q. Liu. Flow straight and fast: Learning to generate and transfer data with rectified flow. In The Eleventh International Conference on Learning Representations (ICLR) ,2023. [16] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song. Diffusion policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics Research , 44(10-11):1684–1704, 2025. [17] Y. Ze, G. Zhang, K. Zhang, C. Hu, M. Wang, and H. Xu. 3d diffusion policy: Generalizable visuomotor policy learning via simple 3d representations. Robotics: Science and Systems Foundation, 2024. [18] K. Black, M. Janner, Y. Du, I. Kostrikov, and S. Levine. Training diffusion models with reinforcement learning. In International Conference on Learning Representations , volume 2024, pages 4965–4987, 2024. [19] Z. Wang, J. J. Hunt, and M. Zhou. Diffusion policies as an expressive policy class for offline reinforcement learning. arXiv preprint arXiv:2208.06193 , 2022. [20] P. Hansen-Estruch, I. Kostrikov, M. Janner, J. G. Kuba, and S. Levine. Idql: Implicit q-learning as an actor-critic method with diffusion policies. arXiv preprint arXiv:2304.10573 , 2023. [21] Y. Chen, H. Li, and D. Zhao. Boosting continuous control with consistency policy. In Pro-ceedings of the 23rd International Conference on Autonomous Agents and Multiagent Systems ,pages 335–344, 2024. [22] Q. Li and S. Levine. Q-learning with adjoint matching. arXiv preprint arXiv:2601.14234 , 2026. 10 [23] T. P. Lillicrap, J. J. Hunt, A. Pritzel, N. Heess, T. Erez, Y. Tassa, D. Silver, and D. Wierstra. Continuous control with deep reinforcement learning. In 4th International Conference on Learning Representations, ICLR 2016, San Juan, Puerto Rico, May 2-4, 2016, Conference Track Proceedings , 2016. [24] O. Eberhard, J. Hollenstein, C. Pinneri, and G. Martius. Pink noise is all you need: Colored noise exploration in deep reinforcement learning. In The Eleventh International Conference on Learning Representations , 2023. [25] J. Hollenstein, G. Martius, and J. Piater. Colored noise in ppo: Improved exploration and performance through correlated action sampling. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 38, pages 12466–12472, 2024. [26] A. S. Chiappa, A. Marin Vargas, A. Huang, and A. Mathis. Latent exploration for reinforcement learning. Advances in Neural Information Processing Systems , 36:56508–56530, 2023. [27] J. Yang, B. Zhu, J. Chen, and Y.-G. Jiang. Actor-critic for continuous action chunks: A reinforcement learning framework for long-horizon robotic manipulation with sparse reward. In 
+
+Proceedings of the AAAI Conference on Artificial Intelligence , volume 40, pages 18692–18700, 2026. [28] A. Raffin, J. Kober, and F. Stulp. Smooth exploration for robotic reinforcement learning. In 
+
+Conference on robot learning , pages 1634–1644. PMLR, 2022. [29] M. Plappert, R. Houthooft, P. Dhariwal, S. Sidor, R. Y. Chen, X. Chen, T. Asfour, P. Abbeel, and M. Andrychowicz. Parameter space noise for exploration. In International Conference on Learning Representations , 2018. [30] Y. Jin, J. Lv, H. Xue, W. Chen, C. Wen, and C. Lu. Soe: Sample-efficient robot policy self-improvement via on-manifold exploration. arXiv preprint arXiv:2509.19292 , 2025. [31] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems , 36: 44776–44791, 2023. [32] S. Ross, G. Gordon, and D. Bagnell. A reduction of imitation learning and structured prediction to no-regret online learning. In Proceedings of the fourteenth international conference on artifi-cial intelligence and statistics , pages 627–635. JMLR Workshop and Conference Proceedings, 2011. [33] C. G. Atkeson and S. Schaal. Robot learning from demonstration. In International Conference on Machine Learning (ICML) , 1997. [34] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347 , 2017. [35] T. Haarnoja, A. Zhou, P. Abbeel, and S. Levine. Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor. In International conference on machine learning , pages 1861–1870. Pmlr, 2018. [36] A. Nair, A. Gupta, M. Dalal, and S. Levine. Awac: Accelerating online reinforcement learning with offline datasets. arXiv preprint arXiv:2006.09359 , 2020. [37] I. Kostrikov, A. Nair, and S. Levine. Offline reinforcement learning with implicit q-learning. In 
+
+International Conference on Learning Representations , 2022. [38] S. Tao, F. Xiang, A. Shukla, Y. Qin, X. Hinrichsen, X. Yuan, C. Bao, X. Lin, Y. Liu, T.-K. Chan, et al. Maniskill3: Gpu parallelized robot simulation and rendering for generalizable embodied ai. In 7th Robot Learning Workshop: Towards Robots with Human-Level Abilities , 2025. 11 [39] O. Mees, L. Hermann, E. Rosete-Beas, and W. Burgard. Calvin: A benchmark for language-conditioned policy learning for long-horizon robot manipulation tasks. IEEE Robotics and Automation Letters , 7(3):7327–7334, 2022. 
+
+## A StructRL Training Pseudocode 
+
+This appendix provides the training pseudocode for the framework introduced in Sec. 4.2. Algorithm 1 summarizes the action-space RL framework used by both the Gaussian baseline and StructRL. During rollout, the flow decoder first predicts a clean action through the deterministic ODE, and exploration noise is then added in the action space. During policy updates, last-step replay recomputes the clean action from a stored late denoising state, so the likelihood can be evaluated on the action-space perturbation assigned to the executed action. 
+
+Algorithm 1 StructRL 
+
+Require: Flow decoder F θ initialized from the SFT model; action-space noise distribution p;likelihood-based RL objective LRL  
+
+> 1:
+
+for each rollout iteration do  
+
+> 2:
+
+Sample x1 ∼ N (0 , I ) and run the flow decoder as a deterministic ODE.  
+
+> 3:
+
+Store a late denoising state xtn and obtain xclean  
+
+> 0
+
+= F θT →0(x1). 
+
+> 4:
+
+Sample action-space noise ∆0 ∼ p, where p is either the Gaussian baseline or the structured distribution defined by Eq. 10.  
+
+> 5:
+
+Execute a = xclean  
+
+> 0
+
++ ∆ 0 and store the transition, including a, xtn , and the rollout log-probability when required by the RL objective.  
+
+> 6:
+
+end for  
+
+> 7:
+
+for each policy update do  
+
+> 8:
+
+Replay the terminal denoising jump from the stored state: ˆxclean  
+
+> 0
+
+= F θn→0(xtn ). 
+
+> 9:
+
+Recover the replayed action-space perturbation ∆θ 
+
+> 0
+
+= a − ˆxclean  
+
+> 0
+
+. 
+
+> 10:
+
+Evaluate the action-level log-probability using Eq. 4 for the Gaussian baseline or Eq. 11 for StructRL.  
+
+> 11:
+
+Optimize LRL with this action-level log-probability.  
+
+> 12:
+
+end for 
+
+## B Full Empirical Verification of Structured Noise Dilution 
+
+This appendix expands the empirical verification in Sec. 3. Table 1 in the main paper reports one representative temporal-correlation setting and one representative action-group scale setting. Here we provide the full sweep at σ = 0 .2 (Table A1) and an additional run at σ = 0 .5 (Table A2). The larger noise level checks that the observed dilution is not an artifact of using a small perturbation. 
+
+Setup. We use a GR00T N1.5 SFT model on LIBERO-Long and inject structured perturbations ∆
+
+in two ways. For temporal structure, ∆ is sampled with a prescribed AR(1) coefficient ρinj along the chunk axis. For action-group scale, ∆ uses target magnitudes σinj = σ · R over the (position, rotation, gripper) groups, where σ is the base noise level and R is a ratio vector. We evaluate three ratios: Rapproach = (1 .0, 0.5, 0.05) (position-heavy), Rpregrasp = (0 .05 , 0.1, 1.0) (gripper-heavy), and 
+
+Rcarry = (0 .5, 0.5, 0.1) (position+rotation, low gripper). The perturbation is inserted either in-chain ,before the remaining denoising steps, or in the action space , after denoising completes. We then measure the lag-1 autocorrelation ˆρout and per-group standard deviation ˆσout of the executed action. 1
+
+The SFT baseline rows report the unperturbed reverse flow. 
+
+Note on Monte-Carlo fluctuation. The SFT baseline rows should be the same across the σ = 0 .2 and 
+
+σ = 0 .5 runs because they involve no injected perturbation. The small numerical differences in the tables (e.g., ˆρSFT,pos = 0 .7840 at σ = 0 .2 vs. 0.7799 at σ = 0 .5) come from independent Monte-Carlo estimates. With 256 perturbation samples and 16 observations, the standard error is larger than these small shifts, so they do not affect the conclusions. 
+
+Temporal correlation is diluted in-chain. Table A1(a) reports ˆρout as ρinj sweeps from 0 to 
+
+0.95 . Under in-chain injection, the output correlation stays close to the SFT baseline ρSFT ≈    
+
+> 1All measurements average over 256 Monte-Carlo perturbation samples and 16 test-set observations.
+
+12 Table A1: Full per-condition data at base noise level σ = 0 .2. GR00T N1.5 SFT model on LIBERO-Long. (a) Lag-1 autocorrelation ˆρout under different injected ρinj . (b) Per-group standard deviation ˆσout under different magnitude profiles (target σinj = 0 .2 · R). Action-space injection tracks the requested structure, while in-chain injection stays close to the SFT baseline. 
+
+Injected structure Action-space output In-chain output 
+
+pos rot grip pos rot grip 
+
+(a) Lag-1 autocorrelation ˆρout 
+
+SFT baseline ( ρSFT , no injection) 0.784 0.718 0.566 0.784 0.718 0.566 
+
+ρinj = 0 .00 (no banding) 0.115 −0.033 0.225 0.785 0.718 0.564 
+
+ρinj = 0 .30 0.310 0.203 0.378 0.787 0.721 0.562 
+
+ρinj = 0 .70 0.556 0.493 0.560 0.788 0.725 0.577 
+
+ρinj = 0 .95 (strong banding) 0.705 0.643 0.634 0.789 0.723 0.577 
+
+output range (max −min over ρinj ∈ [0 , 0.95] ) 0.590 0.676 0.409 0.004 0.007 0.015 
+
+(b) Per-group standard deviation ˆσout (target σinj = 0 .2 · R)
+
+SFT baseline ( σSFT , no injection) 0.105 0.077 0.206 0.105 0.077 0.206 
+
+Rapproach = (1 .0, 0.5, 0.05) (pos-heavy) 0.227 0.128 0.192 0.109 0.078 0.193 
+
+Rpregrasp = (0 .05 , 0.1, 1.0) (grip-heavy) 0.106 0.080 0.314 0.106 0.077 0.214 
+
+Rcarry = (0 .5, 0.5, 0.1) (pos +rot) 0.147 0.127 0.205 0.106 0.077 0.190 
+
+output range (max −min across the three ratios) 0.121 0.048 0.122 0.003 0.001 0.024 
+
+Table A2: Full per-condition data at base noise level σ = 0 .5. Same GR00T N1.5 SFT model on LIBERO-Long as Table A1, with a larger base noise level (target σinj = 0 .5 · R). The same dilution pattern appears: action-space injection follows the requested structure, while in-chain injection remains close to the SFT baseline. 
+
+Injected structure Action-space output In-chain output 
+
+pos rot grip pos rot grip 
+
+(a) Lag-1 autocorrelation ˆρout 
+
+SFT baseline ( ρSFT , no injection) 0.780 0.723 0.584 0.780 0.723 0.584 
+
+ρinj = 0 .00 (no banding) −0.038 −0.061 0.275 0.785 0.737 0.589 
+
+ρinj = 0 .30 0.192 0.181 0.390 0.797 0.752 0.597 
+
+ρinj = 0 .70 0.489 0.484 0.558 0.812 0.772 0.612 
+
+ρinj = 0 .95 (strong banding) 0.644 0.635 0.609 0.803 0.759 0.617 
+
+output range (max −min over ρinj ∈ [0 , 0.95] ) 0.682 0.696 0.334 0.027 0.035 0.028 
+
+(b) Per-group standard deviation ˆσout (target σinj = 0 .5 · R)
+
+SFT baseline ( σSFT , no injection) 0.105 0.077 0.208 0.105 0.077 0.208 
+
+Rapproach = (1 .0, 0.5, 0.05) (pos-heavy) 0.511 0.262 0.209 0.116 0.080 0.199 
+
+Rpregrasp = (0 .05 , 0.1, 1.0) (grip-heavy) 0.109 0.093 0.572 0.107 0.077 0.249 
+
+Rcarry = (0 .5, 0.5, 0.1) (pos +rot) 0.273 0.262 0.206 0.109 0.081 0.197 
+
+output range (max −min across the three ratios) 0.402 0.169 0.366 0.009 0.004 0.052 
+
+(0 .78 , 0.72 , 0.57) for all injected values, changing by less than 0.02 in each group. Under action-space injection, the output correlation changes with the requested value; for example, position correlation increases from 0.11 to 0.70 as ρinj increases from 0 to 0.95 . This shows that temporal structure can be specified directly in the action space, while the remaining denoising steps largely absorb the same structure when it is injected in-chain. 
+
+Per-group magnitude follows the same pattern. Table A1(b) repeats the comparison for group-wise magnitude profiles. Action-space injection follows the requested group scale: the position-heavy profile increases ˆσpos from 0.105 to 0.227 , while the gripper-heavy profile increases ˆσgrip from 0.206 
+
+to 0.314 . In-chain injection changes the same statistics only slightly. The in-chain output is still anisotropic, but the anisotropy mostly reflects the SFT model rather than the injected profile. 
+
+Robustness across base noise levels. Table A2 repeats the protocol at σ = 0 .5, which is 2.5× larger than the setting in Table A1. The qualitative pattern remains the same. Action-space injection still tracks both the requested temporal correlation and the requested group scale. In-chain injection changes the executed action statistics only mildly; for example, the position-heavy profile increases 13 ˆσpos from 0.105 to 0.116 , far below the action-space value of 0.511 . This confirms that structured noise dilution is not caused only by a small base noise level. 
+
+## C Log-Probability of Structured Action-Space Noise 
+
+This appendix derives Eq. 11. The sampling process first draws an AR(1) noise sequence for each action dimension d:
+
+ε1,d ∼ N (0 , 1) , εc+1 ,d = ρ ε c,d + p1 − ρ2 ζc,d , ζc,d ∼ N (0 , 1) , c = 1 , . . . , C − 1. (15) The action-space perturbation is obtained by applying the learned diagonal scale: 
+
+∆0,c,d = σc,d εc,d . (16) The density of the AR(1) sequence factorizes as 
+
+log p(ε) = 
+
+> D
+
+X
+
+> d=1
+
+"
+
+log N (ε1,d ; 0 , 1) + 
+
+> C−1
+
+X
+
+> c=1
+
+log N (εc+1 ,d ; ρε c,d , 1 − ρ2)
+
+#
+
+. (17) During last-step replay, the stored action and the replayed clean action define the perturbation ∆θ
+
+> 0
+
+.Under the current scale, its corresponding AR(1) coordinate is 
+
+εθc,d = ∆θ
+
+> 0,c,d
+
+σc,d 
+
+. (18) The transformation from ε to ∆0 is diagonal, with Jacobian determinant Q 
+
+> c,d
+
+σc,d . The change of variables gives 
+
+log pϕ(∆ θ 
+
+> 0
+
+| hθ ) = log p(εθ ) − X
+
+> c,d
+
+log σc,d , (19) which yields Eq. 11. This derivation only describes likelihood evaluation for the replayed perturbation. Sampling still follows the forward construction ε → ∆0 in Eq. 10. 
+
+## D Regularizer for the Structured Noise Module 
+
+This appendix details the regularizer for the structured noise module in Sec. 4.3. The learned scale σ
+
+controls the magnitude of action-space exploration. To keep it in a useful range during RL, we use three lightweight penalties: 
+
+Lreg (σ) = λent 
+
+  log D − H (¯ σ) + λb
+
+ ∥σ∥F − σbase √CD 2 + λs
+
+> C−1
+
+X
+
+> c=1
+
+∥σc+1 − σc∥2, (20) where ¯σc,d = σc,d / P 
+
+> d′
+
+σc,d ′ and H(¯ σ) = − P 
+
+> d
+
+¯σc,d log ¯ σc,d , averaged over batch and chunk positions. The dimension-entropy term discourages scale collapse onto a few dimensions, the magnitude-anchor term keeps the total exploration scale near the target level, and the smoothness term avoids abrupt scale changes along the chunk. 
+
+## E Real-World Experimental Details 
+
+This appendix provides additional details for the real-world experiments in Sec. 5.4. 
+
+Scene setup. Experiments are conducted on a Franka Research 3 (FR3) robot with a ROS 2 Cartesian-impedance control stack. The policy observes two 256 × 256 RGB views and a 19-dimensional proprioceptive state containing the relative TCP pose and velocity, gripper position, force, and torque. In pick-banana , the robot must grasp a banana and place it in a basket. The policy uses C = 10 and a 7-dimensional action at each step, consisting of 3D translation, a 3D rotation vector, and gripper control. In plug-charger-in , the connector is held by the gripper and must be aligned with and inserted into a socket. The policy uses C = 5 and a 6-dimensional end-effector action, while the gripper is held fixed. Both tasks use delta end-effector pose actions in the current end-effector frame and execute primitive commands at 10 Hz. 
+
+Algorithm. We instantiate StructRL with π0.5 and an asynchronous off-policy AWAC learner. The implementation reuses replay-buffer and target-network infrastructure from a SAC worker, but optimizes the AWAC objective rather than a maximum-entropy SAC objective. As in Sec. 5.4, we set 14 the ODE denoising horizon to T = 1 . The rollout policy first predicts a clean action chunk and then applies StructRL exploration noise in normalized action space. For plug-charger-in , we use fixed AR(1) parameters σ = 0 .1 and ρ = 0 .8 for both translation and rotation. Because T = 1 , the stored latent is the policy-independent initial Gaussian noise x1. The current policy can therefore recompute the clean action from the same x1 and evaluate previously executed policy or human-intervention actions under its current action-space distribution. Every full action chunk forms one transition Tt as defined in Eq. 12. Executing abt from ot advances the robot by C primitive steps and produces the next observation ot+C . All transitions enter the online buffer. Transitions containing SpaceMouse corrections and transitions from the ten fastest successful episodes are additionally retained in the demo buffer; when both buffers are available, each minibatch contains equal numbers of online and demo transitions. Human-intervention actions are mapped to the same normalized model space as policy actions before forming abt . If an intervention begins within a chunk, the remaining policy tail is discarded and replaced by continued human input or a zero-delta hold, avoiding actions predicted for a counterfactual state sequence. The critic consumes the cached 2048-dimensional pooled PaliGemma feature, the raw 19-dimensional proprioceptive state, and the full executed action chunk abt . A shared state trunk feeds one value branch and two action-conditioned Q branches, while a GRU encodes the temporal order within the action chunk. Let Rt and dt denote the chunk return and terminal indicator computed from rt and dt,respectively. The target for each Qi is 
+
+yt = Rt + (1 − dt)γC V ′(ot+C ). (21) The target value of the replay action is 
+
+qt = min  
+
+> i∈{ 1,2}
+
+Q′
+
+> i
+
+(ot, a bt ). (22) Here, primes denote target networks. The twin Q functions are trained by squared regression to yt,and V is fit to the 0.7 expectile of qt. The replay advantage is 
+
+At = qt − V (ot). (23) The corresponding AWAC weight is 
+
+wt = exp 
+
+
+
+clip 
+
+ At
+
+β , −3, 3
+
+ 
+
+, β = 0 .5. (24) Finally, the actor is optimized using the same objective as in Eqs. 13–14: 
+
+LAWAC (θ) = −ETt∼D 
+
+wt log πθ (abt | ot, x 1) . (25) Successful policy actions and useful human corrections therefore receive larger likelihood updates. Rollout runs on one GPU, while four learner GPUs update the critic and action expert asynchronously. Cached VLM features allow multiple critic updates per physical transition without repeatedly evalu-ating the visual-language encoder. 
+
+Training setup. Both tasks use sparse success feedback, with no dense distance shaping or learned reward model. Each task starts from a task-specific π0.5 checkpoint obtained by SFT on ten pre-collected demonstrations. The resulting policies exhibit only a coarse task-directed motion trend and achieve 0% success over 25 independent trials before online RL. The critic is warmed up on the initially collected replay before actor updates begin. Physical interaction, replay ingestion, critic learning, actor learning, and policy synchronization then proceed asynchronously. 
+
+Control and safety. Normalized delta actions are first clipped to the environment bounds, transformed from the current end-effector frame to the robot base frame, scaled to metric delta poses, and integrated from the latest measured pose. The resulting absolute equilibrium pose is then clipped to a task-specific workspace and orientation window before being sent to the Cartesian-impedance controller. Additional safeguards include SpaceMouse override, removal of an interrupted chunk’s stale policy tail, controller target clipping, and the robot’s collision thresholds. For plug-charger-in , success is detected when every Cartesian position coordinate is within 5 mm of the target; the configured orientation threshold is not used by the current success checker. Safety-stop and timeout transitions remain in the online buffer as zero-reward evidence, but enter the demo buffer only when they contain a human intervention. 15 F Long-Horizon Chaining on CALVIN 
+
+This appendix presents the CALVIN long-horizon evaluation referenced in Sec. 5. CALVIN evaluates long-horizon behavior by chaining up to five language instructions in one episode. This setting stresses the temporal axis of StructRL because jitter or unstable exploration in an early subtask can affect later subtasks. Table F1 reports per-length success on π0.5. StructRL achieves the highest average sequence length and is the only method above 0.93 at Len4. The gap over the time-independent in-chain baselines becomes larger as the sequence length increases, which is consistent with the role of action-space temporal correlation. Table F1: Long-horizon chaining on CALVIN. Per-length success rate (fraction in [0 , 1] ) and average sequence length on π0.5. StructRL achieves the highest average and maintains the strongest performance at longer sequence lengths. 
+
+Model Len1 Len2 Len3 Len4 Len5 Avg. 
+
+π0.5 – SFT 0.927 0.843 0.767 0.688 0.613 3.838 
+
++ πRL (Flow-SDE +PPO) 0.997 0.982 0.958 0.910 0.870 4.717 
+
++ πRL (Flow-Noise +PPO) 0.996 0.976 0.939 0.896 0.845 4.652 
+
++ Baseline 0.998 0.990 0.964 0.929 0.868 4.749 
+
++ StructRL 1.000 0.993 0.968 0.934 0.880 4.775 
+
+## G Training Hyperparameters 
+
+Table G1: Training hyperparameters for LIBERO across the three VLA backbones and four task suites.                                                                                                                                                                          
+
+> Parameters LIBERO
+> GR00T N1.5 π0π0.5
+> Spatial Object Goal Long Spatial Object Goal Long Spatial Object Goal Long
+> Train epochs 200 200 200 200 200 200 400 400 400 400 400 400 Batch size 1024 1024 1024 1024 2048 2048 2048 2048 2048 2048 2048 2048 Update epochs 111111441144Actor lr 2e-5 2e-5 2e-5 2e-5 2e-5 2e-5 5e-6 5e-6 5e-6 5e-6 5e-6 5e-6 Value lr 2e-5 2e-5 2e-5 2e-5 2e-5 2e-5 1e-4 1e-4 1e-4 1e-4 1e-4 1e-4 Noise lr 2e-5 2e-5 2e-5 2e-5 2e-5 2e-5 1e-4 1e-4 1e-4 1e-4 1e-4 1e-4 Interaction steps 240 240 320 480 240 240 320 480 240 240 320 480 Parallel environments 64 64 64 64 64 64 64 64 64 64 64 64 Rollout epochs 888888888888Action chunk C55510 55510 55510 Denoise steps 444444443555Noise level σ0.2 0.2 0.2 0.2 0.2 0.1 0.1 0.1 0.1 0.05 0.05 0.05 Structured noise AR(1) ρ(pos, rot, grip): (0 .8,0.6,0.7)
+> Clip scale (pos/rot/grip): (0 .1,2.0) /(0 .1,1.5) /(0 .1,3.0)
+
+16 Table G2: Training hyperparameters for CALVIN and ManiSkill multitask settings. 
+
+Parameters CALVIN ManiSkill 
+
+π0.5 π0 π0.5
+
+Train epochs 300 400 400 Batch size 2048 5120 5120 Update epochs 4 4 5Actor lr 5e-6 2e-5 2e-5 Value lr 1e-4 2e-5 2e-5 Noise lr 1e-4 2e-5 2e-5 Interaction steps 480 80 80 Parallel environments 64 320 320 Rollout epochs 8 1 1Action chunk H 5 5 5Denoise steps 5 4 4Noise level σ 0.2 0.2 0.2 Structured noise AR(1) ρ: (0 .8, 0.6, 0.7) 
+
+Clip scale s: (0 .1, 2.0) /(0 .1, 1.5) /(0 .1, 3.0) 
+
+17

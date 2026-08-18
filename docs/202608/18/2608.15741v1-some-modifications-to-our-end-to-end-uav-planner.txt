@@ -1,0 +1,238 @@
+Title: Some Modifications to Our End-to-End UAV Planner
+
+URL Source: https://arxiv.org/pdf/2608.15741v1
+
+Published Time: Tue, 18 Aug 2026 01:31:17 GMT
+
+Number of Pages: 7
+
+Markdown Content:
+> 1
+
+# Some Modifications to Our End-to-End UAV Planner 
+
+Junjie Lu, Bailing Tian* 
+
+Abstract —The one-stage planner YOPO maps a single depth image and the robot state directly to a set of candidate trajectories, trained by backpropagating through differentiable trajectory costs. This yields dense, geometrically informative supervision, but inherits the pathologies of soft-constrained optimization: the safety cost competes with the smoothness and goal-reaching terms, is non-convex across homotopy classes, and the single-piece polynomial is limited in expressiveness. In this report, we summarize several effective modifications. We adopt a two-piece MINCO parameterization, trading time for smoothness without altering the trajectory’s spatial profile. We further lift YOPO’s multi-modal prediction to span distinct homotopy classes, treating each motion primitive as a homotopy anchor that confines the trajectory to a feasible basin—without explicit safe-flight-corridor construction or front-end search. For dynamic feasibility, we impose barrier penalties on velocity and acceleration together with a curvature-dependent speed limit whose gradient acts only on the velocity, producing an adaptive-speed behavior that decelerates in cluttered regions or sharp turns. We replace score regression with a ranking loss, preventing small score errors from reordering the candidate set. These yield richer trajectory representations, safer obstacle avoidance, and more direct flight paths. Code: https://github.com/ TJU-Aerial-Robotics/YOPO/tree/YOPO-MINCO. 
+
+Index Terms —Aerial systems: perception and autonomy, mo-tion and path planning, collision avoidance 
+
+I. I NTRODUCTION 
+
+# LARGE models have advanced so rapidly in recent years, making robots increasingly intelligent. Before shifting my research direction, I have summarized the useful attempts to improve YOPO [1] below to document the development of the open-source branch. Classical planners [2] decompose navigation into mapping, front-end path search, and back-end optimization, which has evolved into a mature and well-established pipeline. The learning-based planners avoid explicit mapping and are in-herently data-driven, achieving impressive performance in high-speed flight with only a depth camera and a resource-constrained onboard computer. Among these, some methods fit the trajectory with a single-piece fifth-order polynomial [3] or a spline [4], while more of them let the network predict control commands directly [5], [6]. Predicted trajectories are relatively smooth and have been studied extensively in classi-cal methods, whereas predicting control commands achieves more aggressive performance. In [1], we leverage the multi-modal commonality shared by navigation and detection tasks to enable multi-modal predic-tion through a set of predefined primitive anchors. Instead of relying on expert actions or scalar environment rewards, the network is trained with differentiable trajectory costs borrowed from classical trajectory optimization. This yields dense, ge-ometrically accurate supervision without online rollout or rendering. A limitation is intrinsic to this paradigm: this supervision is essentially a weighted sum of multiple soft constraints, and different weight combinations steer the optimizer toward different local optima. This is a shared drawback of the soft-constraint paradigm itself, rather than a problem specific to learning-based methods: imitation learning requires tuning the weights within the expert policy that generates the demonstra-tions, while reinforcement learning requires tuning the weights within the reward function. Classical methods typically rely on front-end search to identify a local minimum in advance for soft-constrained gradient optimization, or place waypoints at well-chosen turning points—often the interfaces between adjacent corridors—to solve a hard-constrained problem. Hard-constrained methods in particular have achieved im-pressive high-speed flight, although the corridor is sensitive to noise, which confines them mostly to high-accuracy LiDAR. They first extract a collision-free corridor and then optimize within it, thereby anchoring the solution to a homotopy class, while the corridor junctions provide well-placed turning points for initialization. Bernstein-basis formulations [7] exploit the convex-hull property of B´ ezier curves to keep the whole trajec-tory inside the corridor—elegant, but conservative. MINCO [8] relaxes this by constraining only the waypoints to lie on the interfaces between consecutive corridors through a diffeomor-phic transformation, while the trajectory segments themselves are handled softly, demonstrating remarkable performance. Notably, several MINCO-based works [9] achieve impressive results without enforcing hard constraints at all, penalizing only the distance from each trajectory sample to the center of a spherical corridor. This suggests that the strength of these methods can be carried over to soft-constrained network training, as long as the waypoint is placed in the right basin (e.g., at corridor intersections). Without front-end search or safe flight corridors, a learning framework cannot reliably place the intermediate waypoint in the correct basin beforehand. Some methods [10] feed the corridor to the network explicitly; we instead exploit the fact that the network predicts in parallel, and lay out a set of preset homotopy anchors—much as YOLO tiles the image with a large number of anchor boxes. We therefore reconsider our strategy through the 2-piece MINCO trajectory representation. The spatio-temporal joint optimization of MINCO [8] allows safety to shape the trajectory first, trading extended trajectory duration for smoothness. Meanwhile, we re-express YOPO’s primitives as homotopy anchors: each intermediate waypoint anchors a distinct obstacle-avoidance direction, so as to cover different local minima with higher quality. The endpoint accounts for the goal cost independently, decoupling obstacle avoidance from the goal term. We modify the safety cost to be aggregated by LogSumExp, so that the optimal intermediate-waypoint position converges to the most dangerous instant of arXiv:2608.15741v1 [cs.RO] 16 Aug 2026 2
+
+> Fig. 1. Comparison: (a–d) predictions of YOPO-MINCO, the homotopy anchor in this work, the original YOPO, and the original primitive anchor, respectively.
+
+the trajectory; the intermediate waypoint therefore becomes a homotopy anchor located at the avoidance bottleneck (i.e., the turning point). A comparison is presented in Fig. 1. Speed also has to be regulated to balance smoothness against safety. Classical reactive schemes do so in velocity space: velocity obstacles [11] exclude velocities that lead to future collisions, and the dynamic window approach [12] further restricts them to those from which the robot can brake in time. Learning-based and optimization-based flight systems define speed costs from environment density or from the projection of the nearest obstacle onto the velocity direction [13], or compute a required safety margin from the current speed [14]; others learn to adapt the speed or the weights of the classical trajectory optimization to the environment. Time-optimal path parameterization [15] decouples speed planning from path geometry, which is the theoretical basis for regulating speed by centripetal acceleration. In this spirit, we impose barrier penalties on speed and acceleration, together with a curvature-dependent speed cap whose geometry is detached from the gradient, from which environment-adaptive speed regulation emerges. For example, this avoids high-speed U-turns when the user clicks a new goal. Finally, many end-to-end driving and navigation systems predict occupancy or other geometric quantities as auxiliary tasks [16] to regularize feature learning, and learned corridors have been used as an interface to a downstream optimizer [17]. Following this line, we predict a safety radius (i.e., safe corridors) for each trajectory, allowing the policy to “anticipate what will happen after executing a given trajectory.” This can be seen as a minimal reduction of a world model for the navigation task: it predicts only safety-relevant quantities, avoiding the prediction of unnecessary depth details. II. M ETHOD 
+
+A. Overview 
+
+The network consumes a single depth image and the body-frame state o = [ v, a, g] (velocity, acceleration and clipped goal direction), and predicts for each of the N anchors the raw parameters of one trajectory together with a scalar score. A differentiable decoder maps the raw parameters to the intermediate waypoint qinner , the terminal state [pf , vf , af ]
+
+and the two segment durations T1, T 2, from which a two-piece MINCO trajectory is reconstructed in closed form. Interme-diate points are predicted as offsets from different anchors (as in YOPO) to ensure multi-modality, while the endpoint is left unconstrained to approach the target. Every candidate is scored by the differentiable costs of safety, smoothness, goal, and feasibility (Sections II-D–III-A), while the score head is trained by the ranking loss of Section II-F. This partially decouples the competing costs by assigning each to a separate variable: time for smoothness, the interme-diate point for avoidance, and the endpoint for goal reaching .
+
+B. Two-Piece Spatio-Temporal Representation 
+
+We enrich the trajectory with additional degrees of free-dom through a two-piece, s = 3 (minimum-jerk) MINCO parameterization [8], so that obstacle avoidance and goal reaching are taken over by two separate waypoints instead of being shouldered by a single terminal state: the intermediate waypoint carries the avoidance topology (Section II-C), while the terminal state carries the goal guidance (Section III-A). Its diffeomorphism M : ( q, T ) 7 → c reconstructs the polynomial coefficients analytically from sparse waypoints and durations, with minimum control effort and continuity up to order 
+
+2s−2. Smoothness and duration then form one spatio-temporal objective 
+
+J = Jsmooth + ρ T, Jsmooth =
+
+Z T
+
+> 0
+
+p(3) (t) 2 dt, (1) with T = P 
+
+> k
+
+Tk, both differentiable in (q, T ).
+
+C. The Intermediate Waypoint as a Homotopy Anchor 
+
+Obstacle avoidance is a multi-homotopy problem: one may pass an obstacle on either side but not through it, so the safety cost of a whole trajectory is non-convex with multiple local minima. Moreover, safety gradients at different positions along the same trajectory conflict—the first half may need to shift left while the second half needs to shift right—and cancel on the shared decision variables. We therefore promote qinner from an extra degree of freedom to a homotopy anchor . Placing it on one side of an obstacle selects a homotopy class and locks the trajectory into the corresponding feasible basin, inside which the safety cost is approximately convex and the internal gradient conflict disappears. The ideal location is the corridor interface, i.e. the bottleneck where the “which way around” decision is made; Section II-D shows that the focused safety cost drives the anchor there by itself. This yields the benefit of hard-constrained methods—anchoring a homotopy class and es-caping local minima—without ever forming a corridor. We 3 
+
+> Fig. 2. In subfigure (c), each frustum defines a fan-shaped optimization corridor for an intermediate point, which can be further constrained by the gradient obtained at its projection on the depth image.
+
+therefore lay out a family of homotopy anchors in parallel over the lattice; for the short field of view of a depth camera two pieces already suffice to express the required detour topology [18]. We explored predicting spherical corridors with ESDF supervision, similar to detecting safe regions, and then solving MINCO within them. However, this approach did not show clear advantages over directly predicting the trajectory. Moreover, the smoothest and fastest solution can occasionally approach the constraint boundary, where the learned corridors may be less reliable. Following the diffeomorphic idea of MINCO, the network predicts raw parameters in an unbounded space and maps them into a frustum (Fig. 2). This guarantees visibility and a sensible spatial range and, since the frustum of each anchor spans a disjoint region, ensures that the anchors cover mutually exclusive detour topologies. We can project the intermediate waypoint onto the image plane and build a cost from the normalized depth at the projected pixel, so that the first segment conservatively follows an open direction while the second explores a trajectory towards the goal, which may lie behind an obstacle [19]. 
+
+D. Focused Differentiable Safety Cost 
+
+Averaging the safety cost along the trajectory is harmful twice over: for a trajectory that penetrates an obstacle, the samples distributed beyond it contribute gradients that pull it further in, and a long collision lets the exponential barrier diverge, which also leaves the score with an unbounded target to predict. We therefore sample densely and aggregate dif-ferently depending on collision. For collision-free trajectories a LogSumExp soft-maximum focuses the cost on the most dangerous sample, 
+
+Jsafe = 1
+
+β log X
+
+> i
+
+exp  β c (xi), (2) with the barrier c(x) = exp   − (sdf( x) − d0)/r ; β → ∞ 
+
+degenerates to the worst sample and β → 0 to the mean. For colliding trajectories we penalize only the last sample before 
+
+the first collision, so the gradient always points backwards and the trajectory is never pushed to the far side of the obstacle. Every collision is thus equally bad, independent of penetration depth. This aggregation is also what places the anchor at the bottleneck. Because the softmax weights of (2) concentrate on the most dangerous instant t∗ = arg max t c(p(t)) , both the direction and the magnitude of the gradient are taken over by that single sample, whereas under an averaged cost the same signal would be diluted among the harmless ones. The intermediate waypoint, in turn, influences the trajectory only in the neighborhood of T1, since both ends are pinned by the boundary conditions and its influence peaks at t = T1. The fastest way to relieve the violation is therefore to move T1 onto 
+
+t∗, where the waypoint has maximal leverage, and then to push the waypoint along the ESDF gradient; as the trajectory opens up, t∗ drifts and T1 follows, so the optimization settles with the waypoint at the bottleneck. 
+
+E. Dynamic Feasibility 
+
+The time cost compresses the duration and raises speed, so speed and acceleration are clamped by hinge (barrier) penalties on densely sampled states, active only beyond the dynamic limits and taken at the peak violation, 
+
+Jfeas = max  
+
+> i
+
+relu  ∥vi∥− vmax 
+
++max  
+
+> i
+
+relu  ∥ai∥− amax 
+
+. (3) Besides, in a soft-constrained formulation the smoothness term has a shortcut—it may reshape the trajectory directly, straightening it, instead of adjusting the duration T . A hard-constrained formulation offers no such shortcut, because the corridor confines the shape and time is the only currency left. Speed must therefore be constrained explicitly. Cutting the gradient of the smoothness cost with respect to the terminal and waypoint positions, keeping only its effect on time, is a natural alternative but performed worse; we instead regulate speed geometrically. The intuitive choice is to cap the speed by the braking distance afforded by the ESDF clearance, but the ESDF reports only the nearest obstacle, often the ground rather than one along the flight direction, and a multirotor avoids obstacles by lateral detours rather than by braking— which introduces a centripetal acceleration constraint. With a normal-acceleration budget asoft = ρ a max (ρ < 1 leaves tangential margin) and the path decomposition an = κv 2,
+
+κ = ∥v × a∥/∥v∥3, the bound an ≤ asoft gives the curvature-dependent speed cap 
+
+v ≤ vcap = pasoft /κ, (4) penalized per sample by relu( ∥vi∥ − vcap ,i ). Crucially , the curvature is detached and the gradient flows only through speed, so “higher curvature, lower speed” never straightens the trajectory the way the smoothness cost does (Fig. 3). When the goal lies to the side, an unconstrained planner flies straight past it. Following the L1 guidance law, the lateral acceleration required to align the vehicle with the goal over a look-ahead distance L1 is acmd = 2 v2 sin η/L 1. Taking L1 = d
+
+(the goal distance) and η = θ gives the required curvature 
+
+κreq = 2 sin θ/d and, under the same budget, the lateral speed limit 
+
+vlim =
+
+q
+
+asoft /κ req = pasoft d/ (2 sin θ). (5) Near-goal deceleration follows the same principle by penaliz-ing the terminal speed once the goal is close. 4
+
+> Fig. 3. Curvature–maximum velocity relationship under different acceleration limits.
+
+Since the required normal acceleration grows with the square of speed, a high-curvature trajectory necessarily re-stricts the achievable speed—the rationale of time-optimal path parameterization [15] for decoupling speed planning from path geometry. Environment-adaptive speed then emerges from (4): the more cluttered the scene, the larger the curvature needed to avoid obstacles and maintain the homotopy class, hence the lower the speed bound, and MINCO extends the corresponding duration accordingly; in open space the trajectory straightens, the bound is released and the duration shortens. 
+
+F. Ranking-Based Candidate Evaluation 
+
+We initially regressed the trajectory cost as the score. Only the safety cost must be predicted, since the smoothness and goal terms can be evaluated in closed form at runtime, yet even that is hard: obstacles may be occluded, the cost grows very fast under penetration, and the collision duration is difficult to estimate. More importantly, a small score error can badly reorder the candidates. We therefore supervise the score head by ranking [21], with a one-hot target marking the cheapest 
+
+collision-free candidate, 
+
+Jrank = CE 
+
+
+
+s, arg min 
+
+> n
+
+Jn + Λ · ⊮(collide n)
+
+, (6) where the large offset Λ ranks colliding candidates behind all feasible ones and degenerates to the least-bad one when all collide. The generation loss acts on the total cost of each candidate. Since training states are sampled at random, many fall into dangerous regions. This is not necessarily a drawback, as it exposes the model to diverse situations to handle arbitrary observations. As the safety cost grows exponentially while the smoothness cost grows with a high power of speed, those samples would dominate the gradient. We therefore normalize the N candidates of each image by their mean, 
+
+˜Jn = Jn
+
+. 1
+
+> N
+
+P 
+
+> m
+
+Jm
+
+
+
+, (7) so that hazardous and benign samples contribute equally re-gardless of their absolute cost magnitude, and weight the result by the detached score, Jgen = 1
+
+> BN
+
+P 
+
+> n
+
+sg( sn) ˜Jn, concentrat-ing optimization on the candidates the network considers good. 
+
+G. Time-Scale Invariance 
+
+Being piecewise polynomial, the representation is time-scale invariant, so one policy covers a range of cruise speeds. For a piece p(t) = P 
+
+> k
+
+cktk and the scaling t 7 → t/α ,
+
+˜p(t) = p(t/α ) = X
+
+> k
+
+ckα−ktk, t ∈ [0 , αT ], (8) the spatial path is identical and ˜p(n)(t) = α−np(n)(t/α ), so velocity, acceleration and jerk scale by α−1, α −2, α −3.The minimum-jerk energy obeys R αT  
+
+> 0
+
+∥ ˜p(3) ∥2dt =
+
+α−5 R T 
+
+> 0
+
+∥p(3) ∥2dt , a monotone rescaling for a fixed geometry, so the optimum remains optimal within the same geometric family. We train at vtrain  
+
+> max
+
+and deploy at v with α = vtrain 
+
+> max
+
+/v :the predicted geometry and topology are unchanged and only the time axis is scaled. 
+
+H. Safe-Corridor Radius Prediction 
+
+Each candidate additionally predicts the minimum clearance at K instants along its trajectory, letting the network anticipate what will happen once its own prediction is executed (Fig. 4). It can also serve as a corridor for a downstream refinement and as an auxiliary task supervising feature learning towards correct geometry, as in methods predicting occupancy [16]. The distance is first warped by y = 1 −exp( −d/λ ), concentrat-ing precision near obstacles, and supervised by an asymmetric Laplace negative log-likelihood 
+
+L = w |y − μ|
+
+b + log b, (9) in which over-estimation is weighted more heavily (a corri-dor must contain no obstacle), forcing μ to a conservative quantile. The scale b lets occluded or out-of-view samples release pressure by inflating b instead of pulling μ towards the dataset mean. The two terms are the negative log-likelihood of 
+
+p(y | μ, b ) = 12b exp( −| y − μ|/b ), so the output is not a point estimate but the statement “the truth is about μ, within ±b”; setting ∂L/∂b = 0 gives b⋆ = w |e|, the expected absolute error at that point. However, this auxiliary task brings only marginal value. The trajectory head already receives exact per-sample geometric gradients through the differentiable ESDF, so the corridor task adds almost no information. The negative result is itself good news: the learned features are already geometrically correct and need no additional supervision. We nevertheless keep the design as a safety fallback, since it comes at no cost. III. O THERS 
+
+A. Geodesic Goal Guidance Field 
+
+Although the intermediate point and the endpoint handle safety and goal reaching, respectively, the safety and goal costs can still compete around large obstacles. An overly high ESDF-induced cost forms high-cost saddles in the gaps be-tween obstacles, sealing them off, while the Euclidean distance to the goal induces trajectories that cut into the obstacles. The lattice supplies a multi-modal prior in cluttered scenes, but large obstacles call for stronger look-ahead guidance. A 5 
+
+> Fig. 4. Predicted safe-corridor radii along a candidate trajectory.
+
+guidance path is single-modal and degenerates the cost into a distance to one labeled path; the Voronoi potential of hybrid A∗ [22] keeps narrow passages traversable, avoiding the saddle points that the ESDF leaves between obstacles. We instead replace the Euclidean goal cost by a Dijkstra-type geodesic cost-to-go field V , obtained by solving the eikonal equation ∥∇ V (x)∥ = 1 /f (x) with the Fast March-ing Method [23], the continuous counterpart of Dijkstra’s algorithm, with the traversal speed f lowered near obsta-cles (Fig. 5). V is the value function of the corresponding minimum-time problem over the whole free space: clearance is embedded in the geodesic distance itself, and descending 
+
+−∇ V traces the minimum-cost path to the goal. Unlike a guidance path, it gives every candidate a valid descent direction whatever its homotopy class, instead of collapsing them onto one path; and since the geodesics bend around obstacles, the guidance is far-sighted and does not conflict with the safety cost. 
+
+B. Temporal Consistency 
+
+Temporal consistency is not explicitly considered: to keep the training method simple and elegant, the network decides independently at every frame. This is not a serious issue, since many classical methods also follow a front-end-search / back-end-optimization scheme without considering the previous decision, and the problem can be mitigated indirectly in various ways. For example, (1) enforcing continuity of the initial state together with a high-order trajectory representation avoids the discontinuities that arise from directly predicting control commands; (2) among the multiple optimal candidates, selecting the one closest to the past trajectory, similar to [3]; and (3) more fundamentally, with larger-scale data the network can learn to produce consistent decisions in similar scenarios, as suggested by self-supervised vision models: DINO [24] is trained on still images with no temporal supervision, yet its per-frame features are stable enough across consecutive frames. 
+
+C. Implicit Positional Encoding 
+
+Convolutions are translation invariant and treat all feature-map locations alike, which is at odds with planning, where different image regions correspond to different topologies. We therefore express the observation and the prediction of every cell in its own primitive frame, so the task becomes equivalent  
+
+> Fig. 5. Cost-to-go field visualization, with the right one coupled with the ESDF.
+
+across cells and all N primitives share one head— removing the ambiguity of “the same output meaning different topolo-gies at different locations” and accelerating convergence, since one forward pass is approximately N supervisions of the planning head. This plays the role of positional encoding in transformers and can equivalently be replaced by concate-nating the pitch and yaw angles of each primitive to the observation. Removing the transformation, however, does not degrade performance noticeably, because zero padding already leaks absolute position: boundary padding makes the receptive-field statistics of different cells systematically different, which the network exploits as a free positional encoding. Islam et al. [25] show that freezing an ordinary ResNet without positional em-bedding and regressing image coordinates succeeds whenever zero padding is present. 
+
+D. Sim-to-Real Generalization 
+
+To evaluate sim-to-real generalization, a real-world dataset is collected with a RealSense camera and a LiDAR to serve as the validation set. We augment our CUDA simulator with structured-light stereo imaging: a speckle texture is rendered in the world and RealSense-style depth is computed by Sim-Sense [26] (stereo/pseudo-infrared with SGM), Fig. 6, and we experiment with a variety of augmentation strategies, including erosion, holes, noise and occlusion (Fig. 7). However, none of the strategies we tried—stereo matching, lower resolution, and depth augmentation—brought a noticeable gain in generaliza-tion over simply training on ground-truth depth. Besides, to determine whether the unsafety is caused by network adaptation or by depth inaccuracies themselves, we train the network with ground-truth depth in simulation and evaluate it on the real-world dataset using two collision met-rics: collisions against the ground-truth environmental point cloud and collisions against obstacles projected from the RealSense depth image. The collision rate evaluated from the projected depth image is much lower than that evaluated against the ground-truth point cloud. This indicates that the network effectively avoids obstacles captured in the depth images and is robust to the image style. But perception is not always accurate in the real world. Training on ground truth and evaluating with a RealSense D455, most collisions occur at long range , where the sensor reports obstacles as 6
+
+Fig. 6. Comparison of RealSense, ground-truth, and stereo depth. Right subfigures: rendered speckle texture for stereo matching. 
+
+Fig. 7. Depth augmentation with random noise and missing regions. 
+
+farther than they are. Besides, an effective remedy for sim-to-real is contrastive learning [27], which forces the network to extract consistent features from images of different styles. In our method, however, a t-SNE comparison (Fig. 8) shows that the features our network extracts from ground-truth depth and from stereo depth are already very close: the gap stems from scene statistics and depth error rather than from the stereo modality. Furthermore, compared with no inpainting during training and testing, inpainting invalid depth values can reduce the sim-to-real gap. The sim-to-real generalization is important. However, the test results suggest that the network appears relatively robust to image style and noise, with the main issue arising from perception errors that increase with distance. Therefore, we do not overfit the error model of specific sensor: this is a perception problem, and the planner should avoid what is 
+
+perceived .IV. C ONCLUSION 
+
+We revisited the representation, the cost design and the training signal of one-stage reactive planners. We adopt a two-piece MINCO trajectory representation, which lets the intermediate waypoint take over the avoidance topology, and a LogSumExp safety cost, which drives that waypoint to the bot-tleneck. A curvature-dependent speed cap with detached ge-ometry then makes speed adapt to the environment, a geodesic cost-to-go field gives every homotopy class a correct descent direction, and a ranking loss makes selection robust. The neg-ative results are informative too: corridor prediction, explicit positional encoding and depth augmentation all brought little, suggesting that the dense differentiable supervision already yields geometrically correct features and that the remaining collisions are a perception rather than a planning problem. This report is intended primarily to document our open-source branch and attempts. A full experimental evaluation is left for future work. REFERENCES [1] J. Lu, X. Zhang, H. Shen, L. Xu, and B. Tian, “You only plan once: A learning-based one-stage planner with guidance learning,” IEEE Robotics and Automation Letters , vol. 9, no. 7, pp. 6083–6090, 2024. [2] B. Zhou, F. Gao, L. Wang, C. Liu, and S. Shen, “Robust and effi-cient quadrotor trajectory generation for fast autonomous flight,” IEEE Robotics and Automation Letters , vol. 4, no. 4, pp. 3529–3536, 2019. [3] A. Loquercio, E. Kaufmann, R. Ranftl, M. M¨ uller, V. Koltun, and D. Scaramuzza, “Learning high-speed flight in the wild,” Science Robotics , vol. 6, no. 59, p. eabg5810, 2021. 
+
+Fig. 8. t-SNE of features from simulated ground-truth depth / stereo depth and RealSense depth images. [4] J. Tordesillas and J. P. How, “Deep-panther: Learning-based perception-aware trajectory planner in dynamic environments,” IEEE Robotics and Automation Letters , vol. 8, no. 3, pp. 1399–1406, 2023. [5] Y. Zhang, Y. Hu, Y. Song, D. Zou, and W. Lin, “Learning vision-based agile flight via differentiable physics,” Nature Machine Intelligence ,vol. 7, no. 6, pp. 954–966, 2025. [6] Y. Song, A. Romero, M. M¨ uller, V. Koltun, and D. Scaramuzza, “Reach-ing the limit in autonomous racing: Optimal control versus reinforcement learning,” Science Robotics , vol. 8, no. 82, p. eadg1462, 2023. [7] F. Gao, W. Wu, Y. Lin, and S. Shen, “Online safe trajectory gener-ation for quadrotors using fast marching method and bernstein basis polynomial,” in 2018 IEEE international conference on robotics and automation (ICRA) . IEEE, 2018, pp. 344–351. [8] Z. Wang, X. Zhou, C. Xu, and F. Gao, “Geometrically constrained tra-jectory optimization for multicopters,” IEEE Transactions on Robotics ,vol. 38, no. 5, pp. 3259–3278, 2022. [9] Y. Ren, F. Zhu, W. Liu, Z. Wang, Y. Lin, F. Gao, and F. Zhang, “Bubble planner: Planning high-speed smooth quadrotor trajectories using receding corridors,” in 2022 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) . IEEE, 2022, pp. 6332–6339. [10] Y. Wu, X. Sun, I. Spasojevic, and V. Kumar, “Deep learning for opti-mization of trajectories for quadrotors,” IEEE Robotics and Automation Letters , vol. 9, no. 3, pp. 2479–2486, 2024. [11] P. Fiorini and Z. Shiller, “Motion planning in dynamic environments using velocity obstacles,” The international journal of robotics research ,vol. 17, no. 7, pp. 760–772, 1998. [12] D. Fox, W. Burgard, and S. Thrun, “The dynamic window approach to collision avoidance,” IEEE robotics & automation magazine , vol. 4, no. 1, pp. 23–33, 1997. [13] L. Quan, Z. Zhang, X. Zhong, C. Xu, and F. Gao, “Eva-planner: Environmental adaptive quadrotor planning,” in 2021 IEEE International Conference on Robotics and Automation (ICRA) . IEEE, 2021, pp. 398– 404. [14] J. Zhang, C. Lei, C. Dai, K. Hoi, L. Wang, Z. Han, and F. Gao, “High-speed vision-based flight in clutter with safety-shielded reinforcement learning,” IEEE Robotics and Automation Letters , 2026. [15] H. Pham and Q.-C. Pham, “A new approach to time-optimal path parameterization based on reachability analysis,” IEEE Transactions on Robotics , vol. 34, no. 3, pp. 645–659, 2018. [16] Z. Wang, J. Teng, C. Xiang, K. Chen, X. Pan, L. Deng, and W. Gu, “Cogad: Cognitive-hierarchy guided end-to-end autonomous driving,” in Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , 2026, pp. 967–977. [17] Z. Han, L. Xu, L. Pei, and F. Gao, “Dynamically feasible trajectory gen-eration with optimization-embedded networks for autonomous flight,” 
+
+IEEE Robotics and Automation Letters , 2025. [18] J. Ji, N. Pan, C. Xu, and F. Gao, “Elastic tracker: A spatio-temporal trajectory planner for flexible aerial tracking,” in 2022 International Conference on Robotics and Automation (ICRA) . IEEE, 2022, pp. 47–53. [19] Y. Ren, F. Zhu, G. Lu, Y. Cai, L. Yin, F. Kong, J. Lin, N. Chen, and F. Zhang, “Safety-assured high-speed navigation for mavs,” Science Robotics , vol. 10, no. 98, p. eado6187, 2025. [20] C. Richter, A. Bry, and N. Roy, “Polynomial trajectory planning for aggressive quadrotor flight in dense indoor environments,” in Robotics Research: The 16th International Symposium ISRR . Springer, 2016, pp. 649–666. [21] Z. Cao, T. Qin, T.-Y. Liu, M.-F. Tsai, and H. Li, “Learning to rank: 7
+
+from pairwise approach to listwise approach,” in Proceedings of the 24th international conference on Machine learning , 2007, pp. 129–136. [22] D. Dolgov, S. Thrun, M. Montemerlo, and J. Diebel, “Practical search techniques in path planning for autonomous driving,” ann arbor , vol. 1001, no. 48105, pp. 18–80, 2008. [23] J. A. Sethian, “A fast marching level set method for monotonically advancing fronts.” proceedings of the National Academy of Sciences ,vol. 93, no. 4, pp. 1591–1595, 1996. [24] M. Caron, H. Touvron, I. Misra, H. J´ egou, J. Mairal, P. Bojanowski, and A. Joulin, “Emerging properties in self-supervised vision transformers,” in 2021 IEEE/CVF international conference on computer vision (ICCV) .IEEE, 2021, pp. 9630–9640. [25] M. A. Islam, S. Jia, and N. D. Bruce, “How much position in-formation do convolutional neural networks encode?” arXiv preprint arXiv:2001.08248 , 2020. [26] L. Ang, “Simsense: A real-time depth sensor simulator,” 2026. [Online]. Available: https://github.com/angli66/simsense [27] H. Yu, C. De Wagter, and G. C. E. de Croon, “Depth transfer: Learning to see like a simulator for real-world drone navigation,” IEEE Robotics and Automation Letters , 2025.
