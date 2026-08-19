@@ -64,3 +64,20 @@ def test_pipeline_writes_only_specific_editorial_topics(tmp_path):
     assert payload["generator"] == "deepseek"
     assert len(payload["topics"]) == 4
     assert "autonomous driving" not in {item["phrase_en"] for item in payload["topics"]}
+
+
+def test_pipeline_accepts_three_topics_and_skips_an_unchanged_fingerprint(tmp_path):
+    for index in range(4):
+        _write_meta(tmp_path, f"202607{29 - index:02d}", f"Paper {index}", f"p{index}")
+    client = FakeClient({"topics": [
+        {"phrase_en": "future-frame supervision", "summary_zh": "用未来状态约束表征学习"},
+        {"phrase_en": "contact-rich tactile modeling", "summary_zh": "触觉与视觉的接触建模"},
+        {"phrase_en": "latent action pretraining", "summary_zh": "从视频中学习潜在动作"},
+    ]})
+    first = home_hot_words.refresh_hot_words(tmp_path / "docs", client)
+    assert first is not None
+    assert home_hot_words.refresh_hot_words(tmp_path / "docs", client) is None
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 2
+    assert payload["input_fingerprint"]
+    assert len(payload["topics"]) == 3

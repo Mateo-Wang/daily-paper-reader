@@ -8,6 +8,7 @@ is a generated runtime artifact (``docs/hot-words.json``), never source content.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -20,6 +21,7 @@ from llm import DeepSeekClient
 
 WINDOW_DAYS = 14
 MAX_TOPICS = 7
+MIN_TOPICS = 3
 OUTPUT_NAME = "hot-words.json"
 GENERIC_PHRASES = {
     "autonomous driving", "robot", "robotics", "action", "control", "experiment",
@@ -121,6 +123,13 @@ def build_prompt_records(records: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     ]
 
 
+def records_fingerprint(records: List[Dict[str, Any]]) -> str:
+    """Return a stable digest so repeated workflow runs do not spend tokens twice."""
+    payload = build_prompt_records(records)
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def topic_schema() -> Dict[str, Any]:
     return {
         "type": "object",
@@ -156,6 +165,23 @@ def _valid_topic(topic: Dict[str, Any]) -> Dict[str, str] | None:
     return {"phrase_en": phrase, "summary_zh": summary[:72]}
 
 
+def validate_topics(raw_topics: Any) -> List[Dict[str, str]]:
+    """Keep useful topics independently instead of rejecting a whole partial batch."""
+    topics: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw_topics if isinstance(raw_topics, list) else []:
+        topic = _valid_topic(item) if isinstance(item, dict) else None
+        if not topic or topic["phrase_en"].lower() in seen:
+            continue
+        seen.add(topic["phrase_en"].lower())
+        topics.append(topic)
+        if len(topics) >= MAX_TOPICS:
+            break
+    if len(topics) < MIN_TOPICS:
+        raise ValueError(f"DeepSeek returned fewer than {MIN_TOPICS} specific research topics")
+    return topics
+
+
 def curate_topics(records: List[Dict[str, Any]], client: DeepSeekClient) -> List[Dict[str, str]]:
     payload = build_prompt_records(records)
     prompt = (
@@ -180,26 +206,58 @@ def curate_topics(records: List[Dict[str, Any]], client: DeepSeekClient) -> List
     )
     parsed = response.get("parsed") if isinstance(response, dict) else None
     raw_topics = parsed.get("topics") if isinstance(parsed, dict) else []
-    topics: List[Dict[str, str]] = []
-    seen: set[str] = set()
-    for item in raw_topics if isinstance(raw_topics, list) else []:
-        topic = _valid_topic(item) if isinstance(item, dict) else None
-        if not topic or topic["phrase_en"].lower() in seen:
-            continue
-        seen.add(topic["phrase_en"].lower())
-        topics.append(topic)
-        if len(topics) >= MAX_TOPICS:
-            break
-    if len(topics) < 4:
-        raise ValueError("DeepSeek returned too few specific research topics")
-    return topics
+    return validate_topics(raw_topics)
 
 
 def output_path(docs_dir: str | os.PathLike[str]) -> Path:
     return Path(docs_dir) / OUTPUT_NAME
 
 
-def refresh_hot_words(docs_dir: str | os.PathLike[str], client: DeepSeekClient | None, window_days: int = WINDOW_DAYS) -> Path | None:
+def needs_refresh(docs_dir: str | os.PathLike[str], records: List[Dict[str, Any]]) -> bool:
+    """Only refresh when the rolling input set differs from the last good artifact."""
+    previous = _read_json(output_path(docs_dir), {})
+    return not (
+        isinstance(previous, dict)
+        and previous.get("input_fingerprint") == records_fingerprint(records)
+        and isinstance(previous.get("topics"), list)
+        and len(previous["topics"]) >= MIN_TOPICS
+    )
+
+
+def write_curated_topics(
+    docs_dir: str | os.PathLike[str],
+    records: List[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    topics: Any,
+    window_days: int = WINDOW_DAYS,
+) -> Path:
+    """Validate and atomically publish one DeepSeek-curated topic batch."""
+    validated = validate_topics(topics)
+    path = output_path(docs_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 2,
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "window": {"start": start.date().isoformat(), "end": end.date().isoformat(), "days": window_days},
+        "record_count": len(records),
+        "generator": "deepseek",
+        "input_fingerprint": records_fingerprint(records),
+        "topics": validated,
+    }
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
+def refresh_hot_words(
+    docs_dir: str | os.PathLike[str],
+    client: DeepSeekClient | None,
+    window_days: int = WINDOW_DAYS,
+    *,
+    force: bool = False,
+) -> Path | None:
     """Refresh only when the LLM produces a safe editorial result.
 
     If no API key/client is configured, or a provider is temporarily unavailable,
@@ -210,15 +268,7 @@ def refresh_hot_words(docs_dir: str | os.PathLike[str], client: DeepSeekClient |
     records, start, end = load_recent_records(docs_dir, window_days)
     if len(records) < 4 or not start or not end:
         return None
+    if not force and not needs_refresh(docs_dir, records):
+        return None
     topics = curate_topics(records, client)
-    path = output_path(docs_dir)
-    payload = {
-        "schema_version": 1,
-        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "window": {"start": start.date().isoformat(), "end": end.date().isoformat(), "days": window_days},
-        "record_count": len(records),
-        "generator": "deepseek",
-        "topics": topics,
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return path
+    return write_curated_topics(docs_dir, records, start, end, topics, window_days)

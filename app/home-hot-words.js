@@ -51,7 +51,7 @@
       seen[key] = true;
       return true;
     }).slice(0, MAX_TOPICS);
-    if (topics.length < 4) return null;
+    if (topics.length < 3) return null;
     var windowInfo = payload.window && typeof payload.window === 'object' ? payload.window : {};
     return {
       topics: topics,

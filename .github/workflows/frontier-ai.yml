@@ -1,9 +1,10 @@
-name: ai-frontier-daily-collector
+name: ai-frontier-collector-and-curator
 
 on:
   schedule:
-    # Daily 09:10 Beijing time (01:10 UTC): collect candidates every day.
-    # Monday's run additionally makes the sparse weekly selection.
+    # Daily 09:10 Beijing time (01:10 UTC): token-free collection every day.
+    # Wednesday reviews the first slot; Sunday reviews the second slot and
+    # refreshes the rolling two-week homepage topics in the same LLM call.
     - cron: "10 1 * * *"
   workflow_dispatch:
     inputs:
@@ -13,6 +14,11 @@ on:
         default: ""
       collect_only:
         description: "Only refresh the 30-day candidate pool; do not publish a weekly selection"
+        type: boolean
+        required: false
+        default: false
+      refresh_topics:
+        description: "Also refresh the rolling two-week homepage topics in the same review call"
         type: boolean
         required: false
         default: false
@@ -57,19 +63,27 @@ jobs:
           ARGS=(--window-days 30)
           if [ -n "${{ inputs.week }}" ]; then ARGS+=(--week "${{ inputs.week }}"); fi
           if [ "${{ inputs.collect_only }}" = "true" ]; then ARGS+=(--collect-only); fi
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%u)" != "1" ]; then
-            ARGS+=(--collect-only)
+          if [ "${{ inputs.refresh_topics }}" = "true" ]; then ARGS+=(--refresh-topics); fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            case "$(date -u +%u)" in
+              3) ARGS+=(--max-additions 1) ;;
+              7) ARGS+=(--max-additions 1 --refresh-topics) ;;
+              *) ARGS+=(--collect-only) ;;
+            esac
           fi
           python src/frontier.py "${ARGS[@]}"
 
       - name: Commit generated frontier archive
         run: |
-          if git diff --quiet -- docs/frontier docs/README.md docs/_sidebar.md archive/frontier; then
+          paths=(docs/frontier docs/README.md docs/_sidebar.md archive/frontier)
+          if [ -f docs/hot-words.json ]; then paths+=(docs/hot-words.json); fi
+          changes="$(git status --porcelain -- "${paths[@]}")"
+          if [ -z "$changes" ]; then
             echo "No frontier changes to commit."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/frontier docs/README.md docs/_sidebar.md archive/frontier
+          git add "${paths[@]}"
           git commit -m "chore: refresh weekly AI frontier"
           git push

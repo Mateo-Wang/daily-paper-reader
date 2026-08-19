@@ -27,10 +27,14 @@ function testCuratedPayloadKeepsOnlyConciseUniqueTopics() {
 function testPayloadRejectsNoisyOrInsufficientData() {
   assert.equal(hotWords.validTopic({ phrase_en: 'single', summary_zh: '词数不足' }), null);
   assert.equal(hotWords.validTopic({ phrase_en: 'one two three four five six seven eight', summary_zh: '过长' }), null);
-  assert.equal(hotWords.validPayload({ topics: [
+  assert.ok(hotWords.validPayload({ topics: [
     { phrase_en: 'future-frame supervision', summary_zh: 'a' },
     { phrase_en: 'contact-rich tactile modeling', summary_zh: 'b' },
     { phrase_en: 'world-model-guided planning', summary_zh: 'c' },
+  ] }));
+  assert.equal(hotWords.validPayload({ topics: [
+    { phrase_en: 'future-frame supervision', summary_zh: 'a' },
+    { phrase_en: 'contact-rich tactile modeling', summary_zh: 'b' },
   ] }), null);
 }
 

@@ -34,7 +34,6 @@ from daily_report_state import (
     save_daily_state,
 )
 from frontier_site import replace_frontier_home_module, upsert_frontier_sidebar
-from home_hot_words import refresh_hot_words
 
 try:
     from paper_figures import ensure_paper_media
@@ -3108,19 +3107,6 @@ def main() -> None:
     except Exception as e:
         log(f"[WARN] 生成元数据索引失败：{e}")
     log_substep("6.6", "生成可下载元数据索引（JSON）", "END")
-
-    log_substep("6.6.1", "DeepSeek 精炼首页研究主题", "START")
-    try:
-        hot_words_path = refresh_hot_words(docs_dir, LLM_CLIENT)
-        if hot_words_path:
-            log(f"[OK] DeepSeek hot topics saved: {hot_words_path}")
-        elif LLM_CLIENT is None:
-            log("[INFO] 未配置 DeepSeek，保留上一次首页研究主题。")
-        else:
-            log("[INFO] 可供精炼的近期论文不足，保留上一次首页研究主题。")
-    except Exception as e:
-        log(f"[WARN] DeepSeek 首页研究主题精炼失败，保留上一次结果：{e}")
-    log_substep("6.6.1", "DeepSeek 精炼首页研究主题", "END")
 
     log_substep("6.7", "写入运行日志（日报）", "START")
     run_log = write_run_daily_log(
