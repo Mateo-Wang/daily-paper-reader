@@ -1,0 +1,938 @@
+Title: Algorithm-Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification
+
+URL Source: https://arxiv.org/pdf/2608.15636v1
+
+Published Time: Tue, 18 Aug 2026 01:03:25 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification 
+
+## Chunyu Qi 1, Zhuoran Song 1, Jian Weng 2, Haozhe Jiang 1, Xueyuan Liu 1, Naifeng Jing 1,Guanghui He 1, Xiaoyao Liang 1, Haibing Guan 1
+
+> 1
+
+School of Computer Science, Shanghai Jiao Tong University Shanghai, China 
+
+> 2
+
+Computer Science, King Abdullah University of Science and Technology Thuwal, Mecca, Saudi Arabia 
+
+## Abstract 
+
+Vision-Language-Action (VLA) models have demonstrated remark-able capabilities in the field of embodied AI, but their high com-putational cost and limited predicted action length hinder real-time deployment. Although Dadu-Corki, a dedicated accelerator for efficient embodied AI, has been introduced, it does not exploit the inherent interaction patterns between the robot and its en-vironment, which results in a relatively short predicted action length. We observe that robotic environments naturally alternate between active states—where precise actions are crucial—and in-active states—where actions have limited impact on task success. This insight enables a new scheduling opportunity: long-action-length speculative prediction in inactive states, paired with selective verification in active states. We propose SpecVLA, an algorithm–system co-design frame-work that adaptively balances action length, inference latency, and task reliability. On the algorithm side, SpecVLA introduces a state-aware VLA inference execution paradigm and a hardware-friendly construction of a smaller verification model (sVLA) using differen-tial residuals and block-wise mixed-precision quantization. On the system side, we develop a heterogeneous architecture consisting of a GPU and a robotic-specific hardware module, along with a speculative dataflow that decouples VLA and sVLA through par-allel execution. The hardware module integrates preprocessing, state prediction, and low-precision compute units into a single tightly coupled pipeline, eliminating redundant data movement and enabling low-latency verification. Comprehensive evaluations on OpenVLA and RDT across LIBERO and ManiSkill benchmarks show that SpecVLA reduces end-to-end latency significantly while preserving task success rate. By enabling long-action-length specu-lative prediction with timely verification, SpecVLA achieves real-time robotic manipulation with both high efficiency and reliability. 
+
+## Keywords 
+
+Vision-Language-Action model, Robotic manipulation, Heteroge-neous system 
+
+## 1 Introduction 
+
+Vision-Language-Action (VLA) models have demonstrated strong comprehension and generalization capabilities in embodied AI tasks 
+
+> MICRO 2026, Athens, Greece
+> 2026. ACM ISBN 978-X-XXXX-XXXX-X/XX/XX https://doi.org/XXXXXXX.XXXXXXX
+
+by predicting action sequences based on visual images and lan-guage instructions. However, current VLAs suffer from inference latencies exceeding 600 ms, which is too long for real-time control systems. For instance, although autonomous robots can leverage VLAs to support construction automation [43], like transporting or installing building materials to designated locations, delayed action predictions lead to reduced productivity and increased costs. To realize efficient embodied AI tasks, Dadu-Corki [16] proposes a heterogeneous system, where computing-intensive VLA infer-ence is deployed on a GPU server while robot actions are executed on an FPGA platform. To hide the communication and inference latency, Dadu-Corki streams captured environmental frames to the GPU server when the robot is executing actions. Yet, Dadu-Corki overlooks the opportunities of leveraging the continuity of the cap-tured environmental frames, so it can only predict fewer than four actions per inference, leaving substantial unexploited performance. To take advantage of the continuity of the robotic environment, we have two key observations: 1. Not all actions contribute equally to task success. We characterize the action execution into active and inactive states . Active states occur when the robot is carefully manipulating an object (e.g., aligning, grasping, or placing), where precise, fine-grained control is required. Inactive states occur when the robot is merely moving the gripper toward a target pose, where the intermediate actions have a limited effect on the final outcome. This asymmetry offers an opportunity for self-adaptive prediction, aggressively predicting long action sequences during inactive states to amortize VLA inference latency, and predicting shorter sequences during active states for the task success rate. 2. The consecutive en-vironment frames exhibit high temporal redundancy. This suggests that a quantized smaller VLA (sVLA) variant to the original VLA can still produce high-quality action predictions with significantly lower computing cost and latency. Our evaluation shows that this quantized small model achieves comparable performance for short sequences, and degrades badly for long sequences. 
+
+Our Approach: To achieve the best of both worlds: amortized inference latency through long sequences and high task success rate, we present SpecVLA, an algorithm–system co-design frame-work for real-time action predictions with adaptive sequence length. In inactive states, SpecVLA invokes the full VLA to speculatively predict long action sequences (e.g., 5 actions per inference in the example of Fig. 1), amortizing the inference cost. In active states, SpecVLA leverages the compact sVLA to verify each action before execution. If verification fails, the system immediately rolls back and re-invokes VLA to regenerate the action sequence. As mani-fested in Fig. 1, this collaborative mechanism allows SpecVLA to 
+
+> 1arXiv:2608.15636v1 [cs.RO] 16 Aug 2026
+
+MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al. Task: Pick up the black ball (Require 10 actions) 
+
+Active Inactive Inactive State Active State 
+
+Saving GPU 
+
+> Robotic-Specific
+> Hardware
+> GPU
+
+(a) Task Example (b) Baseline (c) SpecVLA Time 
+
+Time   
+
+> VLA predict 2 actions VLA predict 2 actions VLA predict 5 actions VLA predict 5 actions sVLA verify 1 action sVLA verify 1 action
+
+VLA VLA VLA VLA VLA VLA VLA VLA VLA VLA VLA VLA VLA VLA A5     
+
+> sVLA sVLA
+> A6
+> sVLA sVLA
+> A7
+> sVLA sVLA
+> A8
+> sVLA sVLA
+> A9
+> sVLA sVLA
+> A0-1 A2-3 A4-5 A6-7 A8-9
+> A0-4 A5-9
+
+Figure 1: Overview of SpecVLA: (a) A task example of a robot; (b) Existing VLA algorithm; (c) SpecVLA paradigm. 
+
+issue long-action-length predictions with lightweight safety checks, achieving the efficiency of speculative execution while maintaining the correctness of reactive control. 
+
+System Design: Speculative Dataflow with Robotic-Specific Hardware. To translate the theoretical performance improvement of SpecVLA into real robotic system efficiency, we design a hetero-geneous system consisting of a GPU and a robotic-specific accelera-tor. The GPU is for full-precision VLA inference, and the dedicated robotic hardware is for sVLA. In particular, as illustrated in Figure 1, when the robot operates in the active state, the sVLA inference is performed at high frequencies for short-sequence verification, while the VLA inference is invoked at lower frequencies for long action prediction. To hide the latency of frequent sVLA calls, VLA and sVLA are executed on separate hardware as aforementioned. We introduce a speculative dataflow that decouples the algorithmic dependencies between VLA and sVLA. The key idea is to allow VLA inference to proceed speculatively , without waiting for the verification result produced by sVLA. The technical contributions of this paper are as follows: 
+
+• A algorithm-system co-designed framework for adaptive robotic action prediction by taking advantage of the conti-nuity of the environmental frames. 
+
+• SpecVLA proposes a runtime algorithm to systematically identify the active and inactive states so that the predicted action sequence length, as well as its verification, can be determined as needed. 
+
+• SpecVLA proposes a hardware-friendly VLA quantization method based on differential computation and block-wise mixed precision quantization. 
+
+• A novel dataflow is introduced to coordinate across the full-precision and the quantized model to hide the latency of each other, while verifying the correctness of the predicted actions effectively. Our evaluation shows that SpecVLA achieves a 2 .9× and 1 .9×
+
+end-to-end speedup over NVIDIA A100 GPU and the state-of-the-art VLA acceleration framework Dadu-Corki, while maintaining a comparable success rate. 
+
+## 2 Background and Motivation 2.1 Basics of VLA Model 
+
+The Vision-Language-Action (VLA) model has shown remarkable potential in embodied intelligence, demonstrating exceptional per-formance even in complex environments. This capability positions VLA as a promising research avenue toward achieving Artificial General Intelligence (AGI). In this section, we take OpenVLA [17], a state-of-the-art VLA model, as a representative example to illustrate its basic structure and execution process. 1
+
+> Tokenizer ViT Projector VLM
+> Llama2
+> 7B
+> Action Head
+> VLA Model
+> Tokenizer ViT Projector VLM
+> Llama2
+> 7B
+> Action Head
+> VLA Model
+> Prompt
+> Ftstatic
+> Ftgripper
+> Prompt t
+> Tokenizer ViT Projector VLM
+> Llama2
+> 7B
+> Action Head
+> VLA Model
+> Prompt
+> Ftstatic
+> Ftgripper
+> Prompt t
+> VLA Model
+> 2
+> Predict Actions Execute
+> Actions
+> 3
+> Execute
+> Actions
+> 3
+> At:t+n-1 At:t+n-1
+> …
+> Robotic Arm
+> Capture
+> Information
+> …
+> A1
+> Action List
+> A1
+> A2
+> A3
+> A2A3A4
+> 1
+> Tokenizer ViT Projector VLM
+> Llama2
+> 7B
+> Action Head
+> VLA Model
+> Prompt
+> Ftstatic
+> Ftgripper
+> Prompt t
+> VLA Model
+> 2
+> Predict Actions Execute
+> Actions
+> 3
+> At:t+n-1
+> …
+> Robotic Arm
+> Capture
+> Information
+> …
+> A1
+> Action List
+> A1
+> A2
+> A3
+> A2A3A4
+
+Figure 2: The execution process of the VLA model. 
+
+The VLA model is primarily designed to control a 6- or 7-degree-of-freedom (DoF) robotic arm equipped with a gripper. Given a fixed action length of 𝑛 , the execution process of the VLA model, illustrated in Fig. 2, consists of three stages. In the first stage, the sensors equipped in the robot arm capture the current environmen-tal information, including a global image, a local image, and the robot’s current state (e.g., joint angles, gripper coordinates, etc.). Next, the VLA model predicts 𝑛 future actions based on the acquired sensory data and a language prompt (denoted as 𝑃𝑟𝑜𝑚𝑝𝑡 ). Finally, the gripper sequentially executes the 𝑛 predicted actions. This exe-cution process is repeated iteratively until the task is successfully completed. Fig. 2 also shows the structure of the VLA model, which con-tains five modules: (1) a Vision Transformer (ViT) model, which is responsible for mapping the captured image to visual tokens; (2) a Projector, which consists of two linear layers and a GELU activation function to map the robot state to state tokens; (3) a tokenizer, de-signed to convert 𝑃𝑟𝑜𝑚𝑝𝑡 to text tokens; (4) a VLM Backbone (such as Llama 2 7B), which packages visual tokens, state tokens and text tokens as input and extracts feature information from them; (5) an action head, which consists of multiple MLP blocks and decodes the feature representations from the VLM backbone to generate the predicted action sequence 𝐴 𝑡 :𝑡 +𝑛 −1, where 𝑡 is the current timestep. 
+
+## 2.2 VLA Accelerator Design 
+
+To enhance the efficiency of embodied AI systems, Dadu-Corki [16] proposes a novel execution pipeline aimed at reducing end-to-end 
+
+2Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification MICRO 2026, October 31–November 04, 2026, Athens, Greece 
+
+latency. It offloads VLA inference to a cloud server, while leaving robot action execution to the robot itself. This allows VLA inference to leverage the computing power of a GPU server. Additionally, Dadu-Corki accelerates robot action execution by using a dedicated accelerator that quickly converts trajectories into control signals. The accelerator also maximizes intermediate data reuse through customized circuits and data pipelines. Although this execution flow introduces the overhead of transmitting newly captured frames to the server, Dadu-Corki streamlines this transmission by sending frames concurrently with the robot’s execution process. By combin-ing these techniques, Dadu-Corki effectively hides communication latency and reduces VLA inference latency, leading to a signifi-cant reduction in end-to-end latency. Consequently, we build our proposed SpecVLA upon Dadu-Corki, where both VLA and sVLA inference are performed on the cloud server. 
+
+Limitations of Dadu-Corki: While Dadu-Corki reduces the la-tency of VLA inference and robot control through a dedicated execution pipeline and specialized circuits, it fails to leverage the interaction between the robot and its environment, which results in a relatively short predicted action length ( < 4 actions per in-ference). In contrast, recognizing that the prediction capability of VLAs is closely tied to the current environment, we propose the Speculative-Verification execution (SpecVLA) paradigm. SpecVLA focuses on increasing the number of actions per VLA inference (8 actions per inference) in simpler environments, while utilizing an efficient VLA variant, sVLA, for action verification when the robot enters a more complex environment. By doing so, SpecVLA effectively balances action length and task success rate. 
+
+## 2.3 Motivation 
+
+To enable efficient robotic manipulation, we conduct a compre-hensive analysis of representative VLAs, including OpenVLA [17] and RDT [26]. Based on this analysis, we identify the performance bottlenecks and key observations. Raw Value Residual Value  
+
+> (a) (b)
+
+Figure 3: Data distribution of (a) raw features, and (b) residual features. Challenge 1: High Computational Cost Makes VLAs Too Slow for Real-Time Control. Full-precision VLA models require more than 3 TFLOPs, resulting in per-inference latencies far exceed-ing real-time requirements. Reducing computation via quantization is a natural direction, but naively applying quantization often de-stroys accuracy. 
+
+Observation 1: Strong Temporal Similarity Enables a Light-weight sVLA. Due to the limited displacement of the gripper between consecutive frames, the inputs to successive VLA infer-ences exhibit high temporal redundancy. After subtracting frame-to-frame features, the residuals have a significantly narrower dis-tribution (as shown in Fig. 3), making them well suited for mixed-precision differential-based quantization. This insight motivates constructing a lightweight VLA model (sVLA) using block-wise residual quantization. Although this reduces inference latency sub-stantially, sVLA alone cannot reliably predict long action sequences. 
+
+Challenge 2: sVLA Suffers From Accuracy Degradation at Longer Action Prediction Length. We evaluate the success rate of sVLA under varying action lengths in Fig. 4. The success rate is defined as the ratio of tasks that are successfully completed to the total number of tasks, and the action length denotes the number of low-level actions predicted by a single inference call. Compared with the original VLA, the success rate remains comparable when the predicted action length is fewer than two actions but drops by an average of 9% as the sequence length grows. Because the end-to-end latency of a robotic system depends on both inference speed and the number of predicted actions per inference, such limited action length still prevents timely and responsive robot control. 010 20 30              
+
+> 40 50
+> 60 70 80 90 100
+> 00.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09
+> Success Rate (%) Noise Inactive State Active State 65 70 75 80 85 90 95
+> 100
+> 246810
+> Success Rate (%) Action Length
+> VLA
+> sVLA
+> Large Success Rate Gap! Success Rate Loss > 1%
+
+Figure 4: Success rate of VLA and sVLA under different action length. Observation 2: Prediction Capability of VLAs Strongly Cor-relates with Environmental State. By analyzing the motion tra-jectories of the robot’s gripper, we categorize the environmental state into two levels: the active state and the inactive state . The active state corresponds to periods when the gripper interacts with or approaches the target object, during which the object’s posi-tion or orientation may change, critically affecting task success. In contrast, the inactive state refers to gripper movements between objects without direct interaction, where actions exert minimal influence on the task outcome. To validate this distinction, we in-troduce different noise levels into the actions of both states and evaluate the OpenVLA model on the LIBERO dataset. As shown in Fig. 5, the success rate in the inactive state (blue curve) consistently exceeds that in the active state (purple curve), confirming that the active state is more sensitive to perturbations. Accordingly, the system should identify the active state and employ sVLA to verify the reliability of each predicted action before physical execution. During the inactive state, the robot can instead use VLA to pre-dict longer action sequences and execute them directly without verification, thereby improving overall efficiency. 
+
+Challenge 3: Sequential VLA–sVLA Execution Causes Poor Hardware Utilization. When the robot operates in the active state, sVLA is always executed after VLA for action verification, introduc-ing a strong data dependency between the two models. Meanwhile, since sVLA is invoked more frequently than VLA, this sequential               
+
+> 3MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al. 010 20 30
+> 40 50
+> 60 70 80 90 100
+> 00.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09
+> Success Rate (%) Noise Inactive State Active State 65 70 75 80 85
+> 246810
+> Success Ra Action Length
+> VLA
+> sVLA
+> Large Success Rate Gap!
+
+Figure 5: Explore environmental state: success rate under different noise patterns. 
+
+execution pattern inevitably increases the overall latency. To quan-tify this effect, we implement sVLA and measure the runtime of both VLA and sVLA on an NVIDIA A100 GPU. As shown in Fig. 6, the combined latency of VLA and sVLA exceeds that of the baseline VLA model alone. This is primarily caused by the serialized execu-tion flow between the two models, which prevents the theoretical performance gains from translating into practical acceleration. 0.87 1.00 0.61 1.00 0.77 1.00 0.50 1.00 0.87 1.00 0.89   
+
+> 1.00 0.79
+> 1.00 0.43 0.43 0.55 0.45 0.63 0.43 0.46 00.3 0.6 0.9 1.2
+> 1.5
+> 1.8
+> Our Baseline Our Baseline Our Baseline
+> Our Baseline
+> Our Baseline Our Baseline Our Baseline OpenVLA-Spatial OpenVLA-Object OpenVLA-Goal OpenVLA-10 RDT-PickCube RDT-PushCube RDT-PlugCharger
+> Normalized Latency VLA Latency sVLA Latency
+> 0.36 1.00 0.41 1.00 0.37 1.00 0.35 1.00 0.37 1.00 0.39
+> 1.00 0.49
+> 1.00 0.62 0.77 0.85 0.52 0.83 0.83 0.86 00.3 0.6 0.9 1.2 1.5
+> Our Baseline Our Baseline Our Baseline
+> Our Baseline
+> Our Baseline Our Baseline Our Baseline OpenVLA-Spatial OpenVLA-Object OpenVLA-Goal OpenVLA-10 RDT-PickCube RDT-PushCube RDT-PlugCharger
+> Normalized Latency VLA Latency sVLA Latency
+
+Figure 6: The latency of SpecVLA and baseline VLA model on A100 GPU. Observation 3: Cloud Platforms Provide Natural Hetero-geneity for Parallelization. Modern cloud servers typically inte-grate GPUs and NPUs, enabling the potential to parallelize VLA and sVLA execution across heterogeneous devices. Motivated by this, we design a heterogeneous computing system in which the GPU performs VLA inference while the NPU handles sVLA inference. To exploit the hardware parallelism, we propose a speculative dataflow that decouples the inherent data dependency between VLA and sVLA, enabling simultaneous execution on both devices. 
+
+## 3 SpecVLA Algorithm 
+
+In this section, we will propose the Speculative VLA Inference and Action Verification (SpecVLA) algorithm and the sVLA construction method to reduce the end-to-end latency of the embodied AI system. 
+
+## 3.1 Overview of SpecVLA 
+
+The objective of the SpecVLA framework is to generate action sequences of maximal possible length while maintaining an ac-ceptable task success rate. To achieve this, SpecVLA first predicts the current environmental state of the robot and then adaptively adjusts the action length by coordinating the execution of VLA and sVLA: 1. Active State. In the active state, where upcoming actions are expected to have a significant impact on task success, SpecVLA first conducts the VLA inference to predict a long sequence of actions, referred to as Predicted Actions, with a predefined length 𝑁 . The parameter 𝑁 serves as a hyperparameter that jointly affects both inference efficiency and task success rate, and its optimal setting is explored in Section 5. Before each Predicted Action is executed, SpecVLA triggers the sVLA model to generate an Expected Action based on the latest sensor image. The Predicted Action is then com-pared with the Expected Action to assess its reliability. If the two actions are sufficiently similar, the Predicted Action is accepted and executed by the robot arm. Otherwise, the prediction is considered unreliable, and the VLA model is re-invoked to generate a new action sequence. 2. Inactive State. In contrast, during the inactive state, where actions have limited influence on task outcome, SpecVLA relies solely on VLA to produce a long sequence of Predicted Actions with-out performing action verification, thereby improving inference efficiency. By combining environmental state prediction, speculative VLA inference, and sVLA action verification, SpecVLA adaptively maxi-mizes the effective prediction length while maintaining a high task success rate. The execution process of SpecVLA is detailed in Fig. 7, where 𝐴 𝑖 
+
+denotes the 𝑖 -th Predicted Action. Initially, SpecVLA captures the environmental state and then invokes VLA to generate a prediction sequence consisting of five actions, denoted as 𝐴 0:4 . If the current environment is classified as inactive (see the top part of the figure), the robot controller directly treats 𝐴 0:4 as execution commands and executes them without additional verification. If the environ-ment is classified as active (the bottom part of the figure), SpecVLA activates the sVLA model to generate the Expected Action and com-pares it with 𝐴 0 to assess its reliability. Since 𝐴 0 closely matches the Expected Action, the Predicted Action is deemed acceptable and executed by the robot arm. This verification continues until 𝐴 4 sig-nificantly deviates from the Expected Action, prompting SpecVLA to re-invoke the VLA model to generate a new action sequence, 
+
+𝐴 4:8 . Meanwhile, the system re-evaluates the environmental state. 
+
+## 3.2 Technical Details of SpecVLA 
+
+To fully realize the potential of SpecVLA, two key challenges must be addressed. The first challenge involves determining the current environmental state to adaptively adjust the length of Predicted Actions. The second challenge is how to accurately assess whether a Predicted Action is sufficiently precise and safe for execution. 
+
+3.2.1 Environmental State Prediction. To address the first challenge, we predict the environmental state by analyzing both the distance between the robot arm and surrounding objects and the current state of the robot arm. The detailed procedure is outlined in Al-gorithm 1. First, the algorithm computes the Euclidean distance 
+
+𝐷 𝑖 = Í3 
+
+> 𝑘 =1
+
+(𝐺 𝑐 [𝑘 ] − 𝑂 𝑖 𝑐 [𝑘 ]) 2 between the robot arm and each object in the environment (Lines 2–3), where 𝐺 𝑐 and 𝑂 𝑐 are the three-dimensional coordinates of the robot arm and each object, respec-tively, as provided by the robotic system’s onboard perception sensors. These distances are then compared against a predefined threshold 𝑇 𝑑 to assess whether any objects are too close to the robot arm (Lines 4–5). Moreover, the environmental state is also related to the robot arm state 𝐺 𝑠 . If the robot arm is open and no nearby 
+
+> 4
+
+Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification MICRO 2026, October 31–November 04, 2026, Athens, Greece A0A0
+
+> A0
+> A1
+> A2
+> A3
+> A4
+> A0
+> A1
+> A2
+> A3
+> A4
+
+Inactive State 
+
+dist ≤ Td
+
+Environmental 
+
+State Prediction Active State VLA Re-invoke 32-bit Predict Actions 
+
+Input Image Capture Image 
+
+sVLA sVLA 
+
+Acceptable? 
+
+sVLA sVLA 
+
+Acceptable? 
+
+True False 4-bit 4-bit Verify Action Verify Action Object and 
+
+Robotic Arm 
+
+Information 
+
+Perception 
+
+Module 
+
+Figure 7: The execution process of SpecVLA. Algorithm 1: Environmental State Prediction. 
+
+Input: Robot arm state 𝐺 𝑠 ;Object coordinate set {𝑂 𝑐 };Robot arm coordinate 𝐺 𝑐 ;Distance threshold 𝑇 𝑑 ;
+
+Output: Environmental state 𝑆 𝑒𝑛𝑣 . 
+
+> 1
+
+𝑛 ← 0;  
+
+> 2
+
+for 𝑖 ← 0 to |{ 𝑂 𝑐 }| do  
+
+> 3
+
+𝐷 𝑖 ← 𝐷𝑖𝑠𝑡𝑎𝑛𝑐𝑒 (𝑂 𝑖 𝑐 , 𝐺 𝑐 ); 
+
+> 4
+
+if 𝐷 𝑖 ≤ 𝑇 𝑑 then  
+
+> 5
+
+𝑛 ← 𝑛 + 1;  
+
+> 6
+
+if 𝐺 𝑠 == −1 and 𝑛 < 1 then  
+
+> 7
+
+𝑆 𝑒𝑛𝑣 ← 𝐼𝑛𝑎𝑐𝑡𝑖𝑣𝑒𝑆𝑡𝑎𝑡𝑒 ; 
+
+> 8
+
+else  
+
+> 9
+
+𝑆 𝑒𝑛𝑣 ← 𝐴𝑐𝑡𝑖𝑣𝑒𝑆𝑡𝑎𝑡𝑒 ; 
+
+> 10
+
+return 𝑆 𝑒𝑛𝑣 ;objects are detected, it suggests that the robot arm is neither cur-rently interacting with an object nor about to do so. Hence, the task is classified as being in the inactive state (Lines 6–7). Conversely, if the robot arm is close to at least one object, it implies that the robot arm is either holding an object or is very likely to grasp one soon, and the task is categorized as being in the active state (Lines 8–9). 
+
+3.2.2 Action Verification. To address the second challenge, we be-gin by performing sVLA inference to get an Expected Action. Subse-quently, we calculate the L1 distance between the Predicted Action 
+
+𝐴 and the Expected Action 𝐴 ′
+
+. A lower distance value indicates that the two actions are functionally close, while a higher value suggests significant discrepancies, implying that the Predicted Action may be inaccurate. Specifically, we apply min–max normalization to each action prior to computing the L1 distance to ensure comparability across heterogeneous action space. Each action consists of seven di-mensions, corresponding to three-dimensional positional changes, three-dimensional rotational changes, and a one-dimensional grip-per state. For each action dimension 𝐴 [𝑘 ], we record its maximum and minimum values ( 𝐴 _ℎ𝑖𝑔ℎ [𝑘 ] and 𝐴 _𝑙𝑜𝑤 [𝑘 ]) according to the robot’s control interface. The action is then normalized as: ˜𝐴 [𝑘 ] = 𝐴 [𝑘 ] − 𝐴 _𝑙𝑜𝑤 [𝑘 ]
+
+𝐴 _ℎ𝑖𝑔ℎ [𝑘 ] − 𝐴 _𝑙𝑜𝑤 [𝑘 ]
+
+Considering that different action dimensions exhibit varying de-grees of sensitivity during complex manipulation, weighted L1 distance is then computed over the scaled action to modulate the verification sensitivity. By calculating the standard deviation 𝜎 [𝑘 ]
+
+for each normalized dimension, we assign a weight 𝑤 [𝑘 ] = 1
+
+𝜎 [𝑘 ] to balance their relative contributions: 
+
+𝐿 1 ( ˜𝐴, ˜𝐴 ′) =
+
+7∑︁ 
+
+𝑘 =1
+
+𝑤 [𝑘 ] × | ˜𝐴 [𝑘 ] − ˜𝐴 ′ [𝑘 ]| , 𝑤 [𝑘 ] = 1
+
+𝜎 [𝑘 ]
+
+This weighting strategy ensures that dimensions with high intrin-sic variance receive lower weights as they exhibit higher error tolerance, while priority is given to highly stable dimensions given their criticality for high-precision tasks. Such a scheme significantly enhances the accuracy and reliability of the action validation. Finally, the computed distance is compared against a predefined threshold 𝑇 𝑠 : if the distance is less than 𝑇 𝑠 , the two actions are considered similar and the Predicted Action is accepted; otherwise, they are regarded as dissimilar, and the Predicted Action is rejected. 
+
+𝑇 𝑠 will be explored in the experiment section. 
+
+## 3.3 Construction of sVLA 
+
+To enable efficient execution of the SpecVLA method, we construct sVLA using a differential-based, hardware-friendly quantization scheme, as illustrated in Fig. 8. At each time step 𝑇 𝑖 , we first com-pute the residual feature Δ𝑋 𝑖 by subtracting the current input fea-ture 𝑋 𝑖 from the previous input feature 𝑋 𝑖 −1: Δ𝑋 𝑖 = 𝑋 𝑖 − 𝑋 𝑖 −1. A straightforward approach to processing these residuals is to apply mixed-precision quantization according to their magnitudes. How-ever, this strategy introduces complex hardware control and leads to poor resource utilization when handling high- and low-precision residuals simultaneously. >T ? z>T ? z
+
+> >T ? h>T ? h
+
+ΔX Quant( ΔX) 
+
+## -
+
+> Compute Residuals Partition
+> Sum and Compare
+> Block-wise Quantization
+
+XiXi
+
+Xi-1 Xi-1 ΔX                                                                                          
+
+> 8-bit 8-bit
+> 5.6 3.1 7.6 0.8 1.2 8.2 0.8 1.2 8.2
+> 2.2 -1.6 3.4 2.2 -1.6 3.4
+> 16.3 8.4 -2.1 16.3 8.4 -2.1 4.3 11.5
+> 1.7
+> 0.9 5.6 3.1 7.6 0.8 1.2 8.2
+> 2.2 -1.6 3.4
+> 16.3 8.4 -2.1 4.3 11.5
+> 1.7
+> 0.9 0.5 -5.4 4.9 3.2 -1.5 7.9 3.2 -1.5 7.9 0.8 0.7 3.2 0.8 0.7 3.2 3.7 1.8 -0.8 3.7 1.8 -0.8 2.8
+> 9.6
+> 1.8 1.1 0.5 -5.4 4.9 3.2 -1.5 7.9 0.8 0.7 3.2 3.7 1.8 -0.8 2.8
+> 9.6
+> 1.8 1.1
+> 5.1 8.5 2.7
+> -2.4 2.7 0.3 -2.4 2.7 0.3 1.4 -2.3 0.2 1.4 -2.3 0.2 12.6 6.6 1.3 12.6 6.6 1.3 1.5 1.9 -0.1 -0.2
+> 5.1 8.5 2.7
+> -2.4 2.7 0.3 1.4 -2.3 0.2 12.6 6.6 1.3 1.5 1.9 -0.1 -0.2
+> 5.1 8.5 2.7
+> 0.3 -0.1 -2.4 0.3 -0.1 -2.4
+> 0.2 -0.2 1.4 0.2 -0.2 1.4
+> 12.6 6.6 1.3 12.6 6.6 1.3 1.5 1.9 2.7 -2.3
+> 5.1 8.5 2.7
+> 0.3 -0.1 -2.4
+> 0.2 -0.2 1.4
+> 12.6 6.6 1.3 1.5 1.9 2.7 -2.3 5.1 8.5 2.7 -2.4 2.7 0.3 -2.4 2.7 0.3 1.4 -2.3 0.2 1.4 -2.3 0.2 12.6 6.6 1.3 12.6 6.6 1.3 1.5
+> 1.9 -0.1 -0.2 593
+> 00-2 00-2 00100113 7113 7122
+> 3
+> -2
+> 593
+> 00-2 00113 7122
+> 3
+> -2
+> 593
+> 00-2 00113 7122
+> 3
+> -2
+> 593
+> -2 301-2 013 7122
+> 0
+> 0
+> 4-bit 4-bit 0-bit 0-bit
+
+Figure 8: The process of the differential-based, hardware-friendly quantization. 
+
+To overcome this issue, we propose a block-wise quantization scheme, which partitions the residual matrix into fixed-size blocks. For each residual block, we compute the sum of the absolute values for all elements and compare it with two thresholds, 𝑇 𝑧 and 𝑇 ℎ
+
+5MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al. Clock 
+
+……   
+
+> Cycle 2Cycle 11 Cycle 29 Cycle 38
+> GPU GPU
+
+…
+
+> 12
+> Clock
+
+…  
+
+> Cycle 2Cycle 11 Cycle 17
+
+…  
+
+> Cycle 26
+> Clock
+> VLA: Predict A 1:8
+> sVLA: Verify A 1
+> Terminate
+
+……      
+
+> VLA: Predict A 2:9
+> sVLA: Verify A 2
+> Execute A 1Execute A 2
+> Cycle 2Cycle 8Cycle 14 Cycle 26
+> Rollback
+
+… Rollback A 2           
+
+> sVLA: Verify A 2
+> Execute A 2
+> Cycle 32
+> Cycle 44 Cycle 53 Cycle 59
+> Execute A 1Execute A 2
+> sVLA: Verify A 1sVLA: Verify A 2sVLA: Verify A 2VLA: Predict A 2:9
+
+…      
+
+> Terminate
+> VLA: Predict A 2:9
+> Rollback
+> Rollback A 2Execute A 1Execute A 2Execute A 2
+> sVLA: Verify A 1
+> VLA: Predict A 1:8
+> sVLA: Verify A 2
+
+… 
+
+> sVLA: Verify A 2
+
+…
+
+> Cycle 20
+> Clock
+
+Speedup Speedup   
+
+> GPU Robotic-Specific Hardware Robotic Arm
+
+(a) Sequential Dataflow (b) Speculative Dataflow with Homogeneous GPU Support (c) Speculative Dataflow with Heterogeneous Architecture Support 
+
+Figure 9: Details of SpecVLA dataflow: (a) Sequential dataflow; (b) Speculative dataflow with homogeneous gpu support; (c) Speculative dataflow with heterogeneous architecture support. 
+
+(𝑇 𝑧 < 𝑇 ℎ ), to determine its quantization bitwidth: 1.if the sum is less than 𝑇 𝑧 , the block is considered insignificant and all values are set to zero; 2.if the sum exceeds 𝑇 ℎ , the block is regarded as important and quantized in high precision; 3.otherwise, the block is assigned low-precision quantization. After block-wise quantization, the residual matrix is compressed by removing zero blocks. The high- and low-precision residual blocks are then multiplied with the corresponding weights to obtain the residual output. The final output is computed by accumulating this residual output with that from the previous time step 𝑇 𝑖 −1. This quantization-and-accumulation process is applied layer-wise across sVLA, enabling fast and accurate inference with high hardware efficiency. 
+
+## 4 SpecVLA Heterogeneous Architecture 
+
+In this section, we will introduce the SpecVLA heterogeneous ar-chitecture to efficiently support the SpecVLA algorithm. 
+
+## 4.1 Speculative Dataflow 
+
+We use Fig. 9(a) to illustrate the sequential dataflow, where the SpecVLA algorithm is executed on a cloud GPU while the robot per-forms actions locally. In this sequential design, all stages—including VLA prediction, sVLA verification, and action execution—exhibit strict data dependencies and are therefore serialized. This is because prediction depends on newly observed images after execution, ver-ification depends on predicted actions, and execution depends on verification results. This fully sequential dataflow leads to high end-to-end latency and poor hardware utilization. 
+
+Necessity of a Speculative Dataflow. These limitations high-light the need for a speculative dataflow, which decouples the de-pendency between VLA and sVLA by executing VLA inference 
+
+speculatively , in advance of sVLA verification. To implement this design, a straightforward solution is to use two GPUs connected via NVLink for VLA prediction and sVLA verification, as shown in Fig. 9(b). GPU 2 performs sVLA inference to generate the Expected Action, while GPU 1 concurrently runs VLA inference to specu-latively predict the next action sequence. Once GPU 2 completes sVLA inference, it compares the prior Predicted Action with the newly generated Expected Action. If the prior Predicted Action is inaccurate—indicating that VLA inference is necessary—GPU 2
+
+signals GPU 1 to continue and complete the remaining VLA compu-tation. Otherwise, GPU 2 terminates the speculative VLA execution on GPU 1 early. As shown in Fig. 9(b), at cycle 2, GPU 2 executes sVLA to obtain the Expected Action 𝐴 ′
+
+> 1
+
+, while GPU 1 speculatively computes the predicted action sequence 𝐴 1:8 . At cycle 11, after verification confirms that 𝐴 1 is accurate, GPU 2 terminates the spec-ulative VLA execution on GPU 1 and allows GPU 1 to proceed to the next speculative round, predicting a new action sequence 𝐴 2:9 . At cycle 20, since 𝐴 2 is inaccurate, GPU 2 signals GPU 1 to continue the remaining VLA computation until cycle 29. In this example, GPU 1 saves the latency of VLA computation from cycle 11 to cycle 20 by overlapping it with GPU 2’s sVLA execution. Furthermore, since the robot arm’s movement latency is non-negligible, we fur-ther parallelize the robot arm’s movement with the computations performed by GPUs. To ensure correct physical state progression when sVLA verification rejects a predicted action, we incorporate  
+
+> 6Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification MICRO 2026, October 31–November 04, 2026, Athens, Greece
+
+a rollback mechanism. If verification fails, SpecVLA issues com-pensatory reverse motions to restore the robotic arm to its last committed state. Physically irreversible effects (e.g., full gripper closure) require multi-step execution, whereas SpecVLA performs verification after at most one motion primitive. This granularity remains well below the threshold for triggering irreversible state transitions, ensuring safe recovery. Off-chip Memory Off-chip Memory  Preprocessing Module                                                  
+
+> Sub Group Sub Group
+> Block Buffer  Quantizer Quantizer Label Generator
+> Preprocessing Module
+> Sub Group
+> Block Buffer  Quantizer Label Generator
+> State Predictor
+> Weight Buffer Input Buffer Block-Label
+> PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE
+> PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE
+> PE Array PE PE PE PE PE
+> PE PE PE PE PE PE PE PE PE PE PE PE PE PE PE
+> PE Array
+> Sub Group Sub Group  Adder Tree Task State Predictor
+> Value-Computation Unit Value-Computation Unit
+
+GPU 
+
+Robotic-specific Hardware Module 
+
+1122
+
+44
+
+33
+
+55 667788
+
+Figure 10: The overview of the SpecVLA heterogeneous ar-chitecture. 
+
+However, the speculative dataflow using only GPUs struggles to achieve peak performance. This inefficiency stems from two key factors. First, the block-wise quantization used in sVLA is difficult to map efficiently onto modern GPUs. The frequent precision switch-ing across blocks triggers repeated kernel launches, incurring an additional overhead. Second, the SIMT architecture of GPUs is fun-damentally ill-suited for the control-intensive operations required by the SpecVLA algorithm, such as environmental state prediction. These limitations motivate the need for a dedicated robotic-specific hardware module tailored to the SpecVLA algorithm, with special-ized support for fast sVLA verification and environmental state prediction. With this hardware support, the overall latency is fur-ther reduced, as illustrated in Fig. 9(c). 
+
+## 4.2 Robotic-Specific Hardware Design 
+
+Fig. 10 illustrates the SpecVLA heterogeneous architecture, which consists of a GPU and a robotic-specific hardware module. To handle sVLA inference, the robotic-specific hardware module applies a block-splitting strategy to unify the precision within each residual block and leverages a SIMD-based PE array to accelerate block-level matrix multiplications. In addition, the module integrates two key components: a state predictor and a preprocessing module. The state predictor identifies the current environmental state and computes the L1 distance between the Predicted Action and the Expected Action in a reconfigurable manner. And the preprocessing unit is responsible for generating residuals and performing block-level quantization. The dataflow of the SpecVLA heterogeneous architecture oper-ates as follows. The state predictor first realizes the environmental state prediction operator and identifies the current state (Step ❶ ). Following this, the GPU loads the input and weight data of the VLA model from DRAM (Step ❷ ), performs VLA inference (Step ❸ ), and writes the resulting Predicted Actions back to DRAM (Step 
+
+## ❹ ). In the meantime, the robotic-specific hardware module runs the sVLA inference (Step ❺ -❼ ) to generate the corresponding Expected Action. Once both Predicted Action and Expected Action are available, the state predictor realizes the action verification op-erator and compares the Predicted Action with the Expected Action to verify its correctness (Step ❽ ). 
+
+4.2.1 SIMD-based PE Array. To simplify the hardware control re-quired for handling multiple precisions, the preprocessing module (details in Section 4.2.3) decomposes each high-precision residual block into a high-bit block and a low-bit block, while zero blocks are removed via feature condensation. After decomposition and condensation, all components share the same bitwidth as native low-precision blocks, allowing the SIMD-based PE array to treat all blocks uniformly and operate using a single low-precision datapath. To support computation under this block-splitting scheme, the PE array is optimized for low-precision block-level operations. Each PE unit inside the array contains 𝐺 low-precision multipliers, a log 2 𝐺 -level adder tree, and an accumulator register, collectively implementing a vectorized inner product. A block-label is also gen-erated by the preprocessing module and attached to each block, which indicates whether the block is a native low-precision block, the low-bit component of a high-precision block, or the high-bit component of a high-precision block. Based on this label, the PE unit decides how to accumulate results: 
+
+• For low-precision blocks and low-bit components, the result is directly accumulated into the register; 
+
+• For high-bit components, the partial sum is left-shifted before accumulation to ensure numerical correctness. A remaining challenge for the PE array is the substantial on-chip buffer bandwidth required to feed all PEs in parallel. Since every PE would request data simultaneously, the buffer interface can easily become a bottleneck. To mitigate this issue, we group each row of PEs into a PE line, where residual blocks are shared across the PEs through hard-wired shift connections. 
+
+4.2.2 State Predictor. Our analysis of the SpecVLA algorithm re-veals two high-frequency operators—environmental state predic-tion and action verification—that critically impact end-to-end la-tency. To accelerate them, we examine their compute patterns and identify a key architectural opportunity: both operators share a common distance-computation data path. Exploiting this insight allows us to accelerate both operators while reducing hardware cost. Specifically, environmental state prediction computes the Eu-clidean distances between the robot arm and nearby objects, and then infers the environmental state based on these distances and the robot’s internal state. Similarly, action verification performs sVLA inference and subsequently evaluates the L1 distance between the Predicted Action and the Expected Action. Although the semantics of the two operators differ, their execution pipelines contain identi-cal stages for distance computation. Motivated by this observation, we design a reconfigurable state predictor that unifies these shared operations within a single hardware data path. 
+
+Reconfigurable State Predictor. Fig. 11 shows the microar-chitecture of the proposed reconfigurable state predictor. The de-sign highlights the core architectural insight: both environmental  
+
+> 7MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al. Value-Computation Unit N
+> …
+
+# --
+
+# ----
+
+# -- Adder Tree 
+
+## ++++++++
+
+> …
+
+## ++
+
+## ++++ 
+
+> …
+> TsTd
+> Environmental State Predictor Gripper State Inactive Active
+
+## >>
+
+## ꓦꓦ 
+
+> Predicted Action Verification Result
+
+(a) 
+
+> Value-Computation Unit 1
+> ABS MUL
+> Value-Computation Unit N
+> …
+
+# --
+
+# ----
+
+# -- Adder Tree 
+
+## ++
+
+## ++
+
+## ++
+
+## ++
+
+> …
+
+## ++
+
+## ++
+
+## ++  
+
+> …
+> TsTd
+> Environmental State Predictor Gripper State Inactive
+> Active
+
+## ꓦꓦ
+
+> Gripper Coordinate
+
+(b) Environmental State 
+
+## >>  
+
+> Expected Action Object Coordinate
+> Value-Computation Unit 1
+> ABS MUL
+> Value-Computation Unit 1
+> ABS MUL
+
+Figure 11: The structure of the state predictor. 
+
+state prediction and action verification share the same distance-computation pipeline. To exploit this, the predictor integrates a uni-fied datapath composed of a subtractor group, value-computation units, an adder tree, a comparator, an OR gate, and multiple multi-plexers. These components are orchestrated through lightweight control signals that dynamically reconfigure the module to support two distinct modes of operation: 
+
+Action Verification Mode. As shown in Fig. 11(a), when the Pre-dicted Action and Expected Action become available, the subtractor group computes their element-wise differences, which are then forwarded to the value-computation units (each applying absolute-then-multiply or squared operations depending on configuration). The adder tree aggregates these values into a single distance metric, which is compared against a threshold 𝑇 𝑠 . If the distance is below the threshold 𝑇 𝑠 , the predictor issues a termination signal to stop the speculative VLA execution on the GPU, ensuring correctness while minimizing wasted computation. 
+
+Environmental State Prediction Mode. Fig. 11(b) illustrates the second configuration. The module reads the gripper coordinates 
+
+𝐺 𝑐 and the 𝑖 -th object coordinates 𝑂 𝑖 𝑐 , computes their Euclidean distance through the same subtract–compute–reduce pipeline, and compares this distance against the threshold 𝑇 𝑑 . If any object re-sides within the proximity threshold or the gripper state indicates imminent interaction, the predictor classifies the environment as 
+
+active . Otherwise, the environment is classified as inactive . Based on the predicted environmental state, the state predictor determines whether to enter the Action Verification Mode to perform action verification in the next round. Through this dual-mode design, the reconfigurable state predic-tor unifies two logically distinct operators into a single hardware pipeline, substantially reducing area overhead while accelerating both computations. 
+
+4.2.3 Preprocessing Module. The preprocessing module tightly integrates all operators required in the SpecVLA preprocessing pipeline—including residual generation, block-wise quantization, --
+
+# --
+
+# --
+
+# -- 
+
+> Current Block Previous Block
+> Block Buffer
+> ……Adder Tree
+
+>>>>>> 
+
+> Encoder Encoder Tz
+> Th
+> ……Adder Tree
+
+>> 
+
+> Encoder Tz
+> Th
+> Clamper
+> 0Sl
+> Sh
+
+# ××× Clamper  
+
+> 0Sl
+> Sh
+
+# ×
+
+> Quantizer Label Generator
+
+# --
+
+> Subtractor Group Block-Label Quantized
+> Block
+> Residual  Block Residual
+
+# -
+
+# -
+
+# -
+
+# - 
+
+> Current Block Previous Block
+> Block Buffer
+> ……Adder Tree
+
+>> 
+
+> Encoder Tz
+> Th
+> Clamper
+> 0Sl
+> Sh
+
+# ×
+
+> Quantizer Label Generator
+
+# -
+
+> Subtractor Group Block-Label Quantized
+> Block
+> Residual  Block Residual
+
+Figure 12: The structure of the preprocessing module. 
+
+and block-label creation—within a single hardware unit. By co-locating these operators on a unified datapath, the module elim-inates unnecessary data movement between separate hardware modules, thereby significantly reducing latency and improving energy efficiency. As illustrated in Fig. 12, the module first fetches the current and previous feature blocks from DRAM and forwards them to the sub-tractor group, which computes the residual blocks. These residuals are streamed into an on-chip block buffer, enabling subsequent operators to process them without any off-chip traffic. Next, the label generator accumulates all values within each block through an adder tree and determines the block’s quantization level by compar-ing the sum against the thresholds 𝑇 𝑧 and 𝑇 ℎ . This comparison yields a block-label that captures the block type: 0 for low-precision block, 1 for low-bit component of a high-precision block, 2 for high-bit component of a high-precision block. The quantizer then performs the corresponding quantization for each block. For high-precision blocks, it automatically decomposes the block into low-bit and high-bit components, enabling all blocks to be processed using the same low-precision datapath in the PE array. Finally, the preprocessing module outputs both the quantized blocks and their block-labels directly to the PE array, allowing computation to proceed in a fully pipelined manner without stalling. 
+
+## 5 Evaluation 5.1 Workloads 
+
+To validate the effectiveness and deployability of SpecVLA, we eval-uate our system using OpenVLA [17] and RDT [26] as base models across diverse robotic manipulation environments. Specifically, we deploy OpenVLA on the Franka Emika Panda arm and evaluate its performance within the LIBERO benchmark [25], which inter-faces with real-time camera streams and robot proprioceptive states. We use four distinct task suites: LIBERO-Spatial, LIBERO-Object, LIBERO-Goal, and LIBERO-10, each providing 500 expert demon-strations across 10 tasks to stress-test SpecVLA’s generalization under varying spatial layouts, object distributions, and long-horizon planning. For the RDT model, we evaluate it on the ManiSkill plat-form [40], which supports a diverse fleet of physical robot embod-iments (humanoids, mobile manipulators, single-arm robots) as well as a wide range of tasks (table-top, drawing/cleaning, dextrous manipulation). We use three representative task suites: ManiSkill-PickCube, ManiSkill-PushCube, and ManiSkill-PlugCharger to eval-uate the performance of RDT.                                                                                        
+
+> 8Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification MICRO 2026, October 31–November 04, 2026, Athens, Greece
+> Benchmark OpenVLA-Spatial OpenVLA-Object OpenVLA-Goal OpenVLA-10 RDT-PickCube RDT-PushCube RDT-PlugCharger State Proportion (%) Active State 24.59 24.12 22.57 27.76 26.19 26.64 28.48 Inactive State 75.41 75.88 77.43 72.24 73.81 73.36 71.52 Rollback Frequency (%) All Task 8.43 7.33 8.21 9.45 8.78 9.44 15.23 Complex Task 12.57 12.27 13.17 14.16 11.82 12.58 16.41 Effective Action Length Spec-VLA [42] 2.94 2.38 2.14 2.10 ---HeiSD [56] 4.75 4.94 4.83 4.96 ---Dadu-Corki-ADAP [16] 4.16 4.03 4.17 3.98 3.87 3.91 3.27 SpecVLA 7.58 7.47 7.52 7.13 7.14 7.08 6.12 Path Length Non-Speculative Baseline 148 174 226 492 508 374 990 MoLe-VLA [54] 178 204 248 564 ---SpecVLA 153 173 230 507 524 361 1020
+
+Table 1: Quantitative Analysis of SpecVLA Algorithm across Different Benchmarks and Metrics. 010 20 30 40 50 60 70 80 90 100 Success Rate (%) Baseline SpecVLA  
+
+> 010 20 30 40 50 60 70 80 90 100 Success Rate (%) Baseline SpecVLA
+
+(a) (b)   
+
+> 43.1 38.2 41.1 37.1 31.5 30.4 29.7 52.3 57.1 53.4 58.1 63.8 65.2 64.6
+> 020 40 60 80 100 Proportion (%) Zero Block Low-precision Block High-precision Block
+
+Figure 13: Model success rate results: (a) Performance under noise-free environments; (b) Performance with incorporated sensor noise. 
+
+## 5.2 Algorithm Evaluation 
+
+Methodology. We employ open-source implementations for infer-ence and finetuning of the aforementioned VLAs, running on the PyTorch framework [33]. We implement the proposed Speculative VLA Inference and Action Verification algorithm (we will use the SpecVLA algorithm to represent it in the evaluation chapter) in Python and integrate it into the models’ implementations. In the experiment, we use 0-bit, 4-bit, and 8-bit for sVLA. 
+
+Success Rate. We use success rate to measure the accuracy of each workload. Success rate refers to the proportion of suc-cessful tasks in the total tasks, which can be used to measure the model’s ability to complete tasks. As illustrated in Fig. 13(a), SpecVLA achieves a negligible loss in success rate over the base-lines, confirming its reliability in noise-free environments. Further-more, to evaluate the system’s robustness, we model and integrate sensor noise into our system by mimicking adverse physical condi-tions such as low-illumination and foggy scenarios based on prior methodologies [4, 5]. All subsequent evaluations are conducted under these non-ideal conditions to prioritize real-world applica-bility over laboratory-standard settings. As illustrated in Fig. 13(b), compared to the baseline models, SpecVLA maintains a 0 .3% per-formance lead despite these perturbations, thereby validating its robustness in real-world environments with compromised sensor precision. It is worth noting that the baseline RDT model achieves only a 2% success rate on the PlugCharger task, which is due to its limited generalization capability in complex environments. In such a case, the success rate of SpecVLA is still 1% higher than the baseline RDT model, which fully demonstrates that SpecVLA is effective in difficult tasks. We also report the proportion of zero block (0-bit), low-precision block (4-bit), and high-precision block (8-bit) in sVLA models. Fig. 14 demonstrates that the differential-based hardware-friendly quan-tization scheme creates an average of 35 .8%, 59 .3%, and 4 .9% zero blocks, low-precision blocks, and high-precision blocks respectively. These results indicate that our proposed construction method can effectively reduce the computational complexity of the sVLA. 0   
+
+> 10 20 30 40 50 60 70 80 90 Accuracy (%) Baseline SpecVLA
+> 0% 20% 40% 60% 80% 100%
+> Proportion (%)
+> 43.1 38.2 41.1 37.1 31.5
+> 30.4
+> 29.7 52.3 57.1 53.4 58.1 63.8
+> 65.2
+> 64.6
+> 020 40 60 80 100 Proportion (%)
+> Zero Block Low-precision Block High-precision Block
+
+Figure 14: The proportion of zero block, low-precision block and high-precision block in the sVLA model. Analysis of Speculation Efficiency. To assess the effectiveness of the speculative paradigm in SpecVLA, we conduct a quantita-tive analysis focusing on key metrics including the ratio of ac-tive/inactive state, rollback frequency, effective action length and path length, as summarized in Table 1. First, we observe that the inactive states dominate the execution with an average ratio of 74 .2%. This implies that in the vast majority of cycles, the robotic environment is sufficiently stable and safe. Second, the average rollback frequency remains as low as 9 .5%. Moreover, to test the stability of SpecVLA, we select long-horizon tasks with complex layouts and diverse objects (called Complex Task in the table) from the benchmarks to measure its rollback frequency. The results show that SpecVLA stays well-bounded at 16 .4% even across the complex cases, which indicates that our speculative paradigm achieves a balance between minimal misprediction risk and high speculative gains. Third, with a speculative length of 8, SpecVLA achieves an av-erage accepted action length of 7 .1 per invocation. This represents a 3.5× reduction in expensive VLA invocations compared to the non-speculative baseline, effectively minimizing the end-to-end latency. Fourth, compared to the non-speculative baseline, the path length required for SpecVLA to complete tasks remains nearly unchanged (±2%), indicating that path deviations or re-execution overhead introduced by speculation are negligible. In contrast, MoLe-VLA expands the execution path length by 14 .8% for the same tasks. This efficiency loss occurs because such layer-skipping approaches  
+
+> 9MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al.
+
+inherently sacrifice the model’s expressive depth, frequently syn-thesizing suboptimal actions that prolong physical execution.                                                         
+
+> Method Setting Success Rate (%) FLOPs (%) Speedup Spatial Object Goal 10
+> OpenVLA FP16 (GPU) 98 98 97 93 100 1QVLA [45] W4A8 (GPU) 95 96 94 90 12.63 1.47 QuantVLA [52] W4A8 (GPU) 89 94 90 87 16.13 1.32 Eventful [7] Pruning (GPU) 93 92 94 89 56.38 2.54 MaskVD [36] Pruning (GPU) 94 95 93 89 69.98 1.76 SP-VLA [22] Pruning (GPU) 95 94 93 90 72.58 1.51 Our Method W8A3 (NPU) 98 97 97 93 10.22 8.78
+
+Table 2: Quantitative Comparison of Differential-based, Hardware-friendly Quantization with Existing Quantization Methods and Pruning Methods on LIBERO Benchmark. Analysis of the Differential-based, Hardware-friendly Quan-tization. To demonstrate the efficacy and necessity of our proposed differential-based, hardware-friendly quantization scheme, we con-duct a multi-dimensional analysis against state-of-the-art model compression methods using the OpenVLA model on the LIBERO benchmark. The baselines encompass representative quantization methods (QVLA [45] and QuantVLA [52]) and pruning approaches (Eventful Transformer [7], MaskVD [36], and SP-VLA [22]). The quantitative results are summarized in Table 2. Compared to SOTA quantization baselines, our scheme achieves superior task success rates and execution efficiency. Specifically, the average success rate of our method outperforms QVLA and QuantVLA by 2 .50% and 6 .25%, respectively. This performance gap stems from a fundamental limitation of prior methods: by stati-cally exploring quantization potential based solely on intra-model feature distributions, they neglect the temporal continuity inher-ent in embodied AI workflows, leading to degraded task fidelity under ultra-low bit-width constraints. In terms of computational efficiency, our method achieves a 1 .23 × and 1 .58 × reduction in theoretical FLOPs compared to QVLA and QuantVLA, respectively. Critically, our method delivers an 8 .78 × end-to-end speedup over the uncompressed OpenVLA baseline, and achieves 5 .97 × and 6 .62 ×
+
+acceleration over QVLA and QuantVLA. These results demonstrate that our custom Robotic-Specific Hardware effectively unleashes the acceleration potential of our quantization scheme. Table 2 also highlights the comparative advantages of our scheme over mainstream pruning strategies. Our method improves the average task success rate by 4 .25%, 3 .50%, and 3 .25% compared to the Eventful Transformer, MaskVD, and SP-VLA, respectively. This improvement of accuracy is primarily attributed to our design principle that avoids aggressively discarding critical spatial infor-mation. Besides, our method compresses the theoretical FLOPs to merely 10 .22% of the OpenVLA model, whereas Eventful Trans-former, MaskVD, and SP-VLA retain 56 .38%, 69 .98%, and 72 .58% of the baseline computations. Furthermore, the end-to-end execu-tion results reveal that our method running on the Robotic-Specific Hardware achieves 8 .78 ×, 3 .46 ×, 4 .97 ×, and 5 .84 × speedup com-pared to the OpenVLA model, Eventful Transformer, MaskVD, and SP-VLA deployed on the GPU. These comprehensive evaluations conclusively validate the hardware-software co-design advantages of our framework in real-time embodied manipulation scenarios. 0   
+
+> 2Ene
+> 32 64 128 256 512
+> 1024
+> Latency (ms) CPU GPU Dadu-Corki-ADAP SpecVLA
+
+Figure 15: Per-action latency results.                                                  
+
+> Method Setting Success Rate (%) Speedup Energy Efficiency Spatial Object Goal 10
+> OpenVLA FP16 (GPU) 98 98 97 93 11MoLe-VLA [54] Skipping Layer (GPU) 97 98 96 92 1.98 1.98 VLA-Cache [44] Token Reusing (GPU) 97 96 96 92 1.26 1.26 Spec-VLA [42] Speculation (GPU) 94 94 96 87 1.32 1.32 HeiSD [56] Speculation (GPU+CPU) 94 98 92 86 2.04 1.69 SpecVLA Speculation (GPU+NPU) 98 97 96 94 3.28 2.29
+
+Table 3: Quantitative Comparison of SpecVLA with Existing Algorithm-only Acceleration Works on LIBERO Benchmark. 
+
+## 5.3 Architecture Evaluation 
+
+Methodology. To evaluate the performance of the SpecVLA het-erogeneous architecture, we develop a cycle-level simulator to col-lect the latency statistics of robotic-specific hardware module for each workload. The simulator is integrated with Ramulator [18] for DRAM timing. We make every effort to ensure the accuracy of the simulator by following the widely adopted open-source simula-tor, Scale-Sim [35]. Moreover, we implement the proposed robotic-specific hardware module in Verilog and synthesize it by Synop-sys Design Compiler to get the chip area and total power under 28nm technology with a frequency of 500MHz. This synthesis pro-cess generates a comprehensive report containing the gate-level netlist, timing information, and area breakdown of various compo-nents within the robotic-specific hardware module. We also employ CACTI [2] to derive the energy and area of on-chip buffers based on parameters such as bus width, size, and the number of reads/writes. The technology nodes used in robotic-specific hardware module are calibrated using the ScaleTool [38]. For GPU, we use the CUDA event API to measure its actual latency and nvidia-smi to measure its power during runtime. We implement SpecVLA in our evaluation, which consists of a robotic-specific hardware module and a representative server GPU——NVIDIA A100 80GB PCIe. Then we compare it against sev-eral platforms, including Intel(R) Xeon(R) Gold 6226R CPU, NVIDIA A100 GPU, one related accelerator Dadu-Corki-ADAP [16] (with adaptive trajectory length). For Dadu-Corki-ADAP, we implement its waypoint extraction and identification mechanism and evaluate it on our benchmarks to enable adaptive trajectory lengths. In addi-tion to these hardware baselines, we evaluate SpecVLA against re-cent algorithm-only acceleration works, including MoLe-VLA [54], VLA-Cache [44], Spec-VLA [42] (denoted as prior work [42] to avoid confusion), and HeiSD [56], to validate the comprehensive advantages of our hardware-software co-design. 
+
+Latency. Fig. 15 showcases the performance of the SpecVLA, which includes the per-action latency of Intel CPU running the full-precision VLAs (marked as CPU), A100 GPU running the full-precision VLAs (marked as GPU), and Dadu-Corki-ADAP. On aver-age, the SpecVLA achieve 12 .1×, 2 .9×, and 1 .9× speedup over CPU,  
+
+> 10 Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification MICRO 2026, October 31–November 04, 2026, Athens, Greece
+
+GPU, and Dadu-Corki-ADAP, respectively. Furthermore, Table 3 presents a quantitative comparison between SpecVLA and state-of-the-art algorithmic acceleration methods. The results demon-strate that our framework delivers 1 .66 ×, 2 .59 ×, 2 .48 ×, and 1 .61 ×
+
+speedups over MoLe-VLA, VLA-Cache, prior work [42], and HeiSD, respectively. The performance improvement stems from two fac-tors. First, the SpecVLA algorithm reduces the number of VLA invocations by increasing the action length. As reported in Table 1, SpecVLA achieves an average action length of 7 .1, resulting in less model invocations. Second, the speculative dataflow enables system-level parallelization of the VLA, sVLA, and action execu-tion, thereby hiding part of the total latency. To verify whether the SpecVLA system meets the real-time requirement, we measure the average latency required for SpecVLA to generate an action. We find that SpecVLA generates one action at an average interval of about 61ms, which is sufficient to meet the real-time requirement (< 100ms) [27].              
+
+> Modules Components Area( 𝑚𝑚 2)Power( 𝑚𝑊 )
+> PE Array 8192 4-bit ×16-bit PE Units 1.58 495.06 680KB On-chip Buffer State Predictor 7 Subtractors 0.03 13.42 3-stage Adder Trees Preprocessing Module 8×32 Subtractors 0.32 59.26 8×32 Multipliers 5-stage Adder Trees 8KB Block Buffer Total 1.93 567.74
+
+Table 4: Area of the Robotic-specific Hardware Module. Hardware Overhead and Area. Table 4 provides a compre-hensive breakdown of design parameters, area, and power of the robotic-specific hardware module in the SpecVLA architecture. The PE array of the robotic-specific hardware module comprises 8 × 32 × 32 4-bit ×16-bit PE units. We also evaluate the costs of the preprocessing module and the environmental state predictor. All above modules together occupy 1 .93 𝑚𝑚 2 of the total area and 567 .74mW power consumption. 
+
+Energy Efficiency. The energy efficiency outcomes are depicted in Fig. 16 and Table 3. The SpecVLA delivers remarkable energy effi-ciency, which surpasses CPU, GPU, Dadu-Corki-ADAP, MoLe-VLA, VLA-Cache, prior work [42], HeiSD by 8 .0×, 2 .1×, 1 .5×, 1 .2×, 1 .8×,1.7×, 1 .4×, respectively. These substantial energy savings stem from two primary factors. First, our proposed framework significantly reduces both the total computations and the end-to-end latency. Second, the customized robotic-specific hardware inherently deliv-ers vastly superior energy efficiency compared to power-intensive general-purpose GPUs. 
+
+Ablation Study of Software and Hardware Contributions. 
+
+We add ablations with five configurations in Fig. 17. First, compar-ing v2 with v1 isolates the benefit of longer action length. Second, comparing v3 with v2 quantifies the impact of the verification scheme, which improves task success rate by approximately 7%, suggesting its necessity for maintaining correctness under specula-tive execution. Third, v5 and v4 comparison shows robotic-specific accelerator further reduces end-to-end latency by 20 .6%, quanti-fying the portion of speedup attributable to the custom hardware module. Finally, speculative dataflow (v4 vs. v3) contributes an ad-ditional 79 .8% latency reduction by overlapping VLA prediction and sVLA verification. 0      
+
+> 246810 Energy Efficiency  CPU GPU Dadu-Corki-ADAP SpecVLA
+> 128 256 512 1024 2048 4096 Latency (ms) CPU GPU Dadu-Corki-ADAP SpecVLA
+
+Figure 16: Energy efficiency results. 0510 15 20 25 GPU SpecVLA Algorithm SpecVLA Architecture SpecVLA Architecture with Dataflow Execution Latency (s)  Improved by SpecVLA algorithm Improved by robotic-specific hardware module Improved by speculative dataflow      
+
+> 1.4x 1.2x 1.8x
+> 0500 1,000 1,500 2,000 2,500 GPU Execution Latency (ms)
+> 80 84 88 92 96 0100 200 300 400 500 600 700 800 900
+> v1 v2 v3 v4 v5 Success Rate(%) Total Latency (ms)  Total Latency Success Rate
+
+Figure 17: Ablation study of software and hardware contri-butions. Configurations v1–v5 correspond to: (1) Traditional VLA on GPU; (2) sequential SpecVLA (speculative action length = 8) on GPU; (3) sequential SpecVLA (speculative ac-tion length = 8) with verification on GPU; (4) SpecVLA with speculative dataflow on GPU; (5) SpecVLA with speculative dataflow and the robotic-specific hardware module. 
+
+## 5.4 Design Exploration 
+
+In this section, we explore four thresholds 𝑇 𝑠 , 𝑇 𝑑 , 𝑇 𝑧 , and 𝑇 ℎ by mak-ing a tradeoff between the success rate and speedup. Our threshold selection prioritizes robustness over global optimality. Instead of jointly searching all 6 4 = 1296 combinations, we adopt a heuristic-based one-dimensional sweep strategy: when tuning one threshold, others are fixed to the highest-accuracy configuration, and we select the largest speedup before a success-rate cliff drop to ensure that performance improvements do not come at the cost of reliability. 
+
+Exploration of Threshold 𝑇 𝑠 . The key of the SpecVLA algo-rithm is to verify the acceptability of Predicted Actions, which is controlled by the threshold 𝑇 𝑠 . Therefore, 𝑇 𝑠 directly determines the acceptability of Predicted Actions, which in turn affects the success rate and speedup. Specifically, a larger 𝑇 𝑠 means that more Predicted Actions are verified as accurate, which results in higher speedup but lower success rate. To explore the impact of 𝑇 𝑠 , we vary 𝑇 𝑠 from 3 to 8 and measure the success rate and speedup of OpenVLA model on LIBERO dataset. As illustrated in Fig. 18(a), when 𝑇 𝑠 increases from 3 to 5, more Predicted Actions are identified as accurate, leading to higher speedup. But when we keep increas-ing 𝑇 𝑠 , the success rate drops severely. As a result, we set 𝑇 𝑠 as 5 to ensure both the success rate and performance. 
+
+Exploration of Threshold 𝑇 𝑑 . In environmental state predic-tion, the threshold 𝑇 𝑑 determines whether the robotic arm is close to the objects in the environment, thus affecting the prediction result. Specifically, a larger 𝑇 𝑑 means that more objects are considered to be close to the robotic arm, which results in the robotic arm being        
+
+> 11 MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al. 2.5
+> 4.5
+> 6.5
+> 8.5 10.5
+> 78
+> 83
+> 88
+> 93 98 0.05 0.1 0.15 0.2 0.25 0.3
+> Speedup Success Rate (%) Threshold ( Tz )
+> Success Rate Speedup
+> Baseline Success Rate
+
+(c) (a)       
+
+> 2.0
+> 2.5
+> 3.0 3.5 4.0 78
+> 83
+> 88 93 98 345678
+> Speedup Success Rate (%) Threshold ( Ts )
+> Success Rate Speedup
+> Baseline Success Rate
+
+(b)       
+
+> 2.0 2.5 3.0
+> 3.5
+> 4.0 78 83 88
+> 93
+> 98 0.05 0.1 0.15 0.2 0.3 0.4
+> Speedup Success Rate (%) Threshold ( Td )
+> Success Rate Speedup
+> Baseline Success Rate
+
+(d)       
+
+> 2.5 4.5 6.5 8.5 10.5 78 83 88 93 98
+> 012345
+> Speedup Success Rate (%) Threshold ( Th )
+> Success Rate Speedup
+> Baseline Success Rate
+
+Figure 18: Design space exploration. 
+
+in an active state more frequently. This is good for maintaining the success rate, but not friendly for improving speedup. To explore the impact of 𝑇 𝑑 , we vary 𝑇 𝑑 from 0 .05 to 0 .4 and observe the success rate and speedup of OpenVLA model on LIBERO dataset. As illus-trated in Fig. 18(b), when 𝑇 𝑑 decreases from 0 .4 to 0 .2, fewer states are identified as active states, leading to higher speedup. But when we keep decreasing 𝑇 𝑑 , the success rate drops severely. As a result, we set 𝑇 𝑑 as 0 .2 to ensure both the success rate and performance. 
+
+Exploration of Thresholds 𝑇 𝑧 and 𝑇 ℎ . In differential-based hardware-friendly quantization, 𝑇 𝑧 and 𝑇 ℎ determine the precision of each residual block, thus affecting the computational overhead and accuracy of the sVLA model. Specifically, a larger 𝑇 𝑧 /𝑇 ℎ means that more blocks are quantized to 0-bit/4-bit, which results in lower computational overhead for sVLA. This helps reduce the cost of action verification, but is not conducive to ensuring the accuracy of verification. To explore the impact of 𝑇 𝑧 , we vary 𝑇 𝑧 from 0 .05 to 0 .3 and observe the success rate and speedup of sVLA model constructed from OpenVLA on robotic-specific hardware module. As illustrated in Fig. 18(c), when 𝑇 𝑧 increases from 0 .05 to 0 .2, more blocks are quantized as 0-bit, leading to higher speedup. But when we keep increasing 𝑇 𝑧 , the success rate drops severely. As a result, we set 𝑇 𝑧 as 0 .2 to ensure both the success rate and performance. Similarly, we do the same exploration for 𝑇 ℎ and set 𝑇 ℎ to 2. 2.4 2.6 2.8 3.0 3.2 3.4 3.6 40 45 50 55 60 1 2 3 4 5 6Speedup Success Rate (%) Threshold ( Th )Success Rate Speedup Baseline Accuracy             
+
+> 2.4 2.6 2.8 3.0 3.2 3.4 40 45 50 55 60 123456Speedup Success Rate (%) Threshold ( Tz )Success Rate Speedup Baseline Accuracy
+> 1.0 1.5 2.0 2.5 3.0 3.5 4.0 78
+> 83
+> 88 93 98 46810 12 14 Speedup Success Rate (%) Prediction Length ( L)Success Rate Speedup Baseline Success Rate
+
+Figure 19: Exploration of prediction length. Exploration of prediction length. To study the effect of the number of actions generated by VLA model (prediction length, de-noted as 𝐿 ), we add a sensitivity analysis. Specifically, we vary 𝐿 
+
+from 4 to 14 and evaluate its impact on both speedup and success rate. As shown in Fig. 19, when 𝐿 increases from 4 to 8, the success rate remains stable. This is because the predicted action sequence is still within the reliable prediction horizon of the VLA model. Meanwhile, increasing 𝐿 better amortizes the expensive VLA in-ference cost across more actions, leading to an improvement in speedup. However, when 𝐿 further increases beyond 8, the success rate starts to decrease, while the speedup improvement becomes marginal. This is because a long predicted sequence is more likely to mismatch the latest physical environment, leading to more fre-quent verification failures, rollbacks, and VLA reinvocations, thus reducing the effective benefit of longer prediction. In addition, we observe that overly long action sequences also reduce the success rate. Based on this sensitivity analysis, we set 𝐿 to 8 in our all ex-periments, as it provides the best trade-off between maintaining success rate and improving speedup. 
+
+## 6 Related Works 
+
+Traditional robots typically depend on optimization-based algo-rithms for decision-making and task planning [11, 51]. In contrast, emerging robotic applications [8, 14, 21, 41] use Large Language Models (LLMs) to control robots for tasks such as object manipula-tion, task planning, and navigation, demonstrating capabilities far superior to traditional algorithms. As robots are increasingly treated as the next generation of computing platforms, many accelerators have been designed for motion planning [1, 12, 13, 15, 23, 30, 31], control [9, 24, 32, 34, 37, 48], and navigation [19, 20, 49]. However, these accelerators only focus on traditional optimization-based algo-rithms. In contrast, our work focuses on combining innovations in both algorithms and architecture to accelerate deep learning-based algorithms, distinguishing our work from previous research. Our work is related to broad themes of temporal redundancy pruning [3, 6, 7, 22, 28, 36, 44, 55], dynamic layer-skipping [50, 54], and speculative execution [10, 29, 39, 42, 46, 47, 53, 56]. While redundancy-based methods prune spatial information and layer-skipping approaches truncate model depth to reduce computations, they often compromise representation accuracy and yield subop-timal action that lengthen task execution. In contrast, SpecVLA focuses on extending the prediction length to amortize inference overhead without sacrificing expressive capacity of VLA models, thereby reducing computation while sustaining high task execution efficiency. Furthermore, distinct from existing speculative frame-works such as Spec-VLA [42] and HeiSD [56], SpecVLA introduces a novel parallel prediction and serial verification paradigm. Our framework sequentially validates each action against real-time en-vironmental feedback. This closed-loop responsiveness ensures ex-ecution accuracy during abrupt physical mutations (such as abrupt changes in direction), yielding a significant improvement in suc-cess rate over tranditional speculation works. Moreover, SpecVLA introduces a speculative dataflow on a heterogeneous architecture to enable hardware-level execution overlap between prediction and verification. This concurrent execution unlocks ultra-low latency and superior energy efficiency compared to conventional serial execution modes. 
+
+## 7 Conclusion 
+
+Current VLAs exhibit excessive end-to-end latency, which is insuffi-cient to meet the requirements of practical applications. This paper 
+
+> 12
+
+Algorithm–Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification MICRO 2026, October 31–November 04, 2026, Athens, Greece 
+
+introduces SpecVLA, an algorithm-architecture co-design frame-work poised to reduce the end-to-end latency of the VLA model. The key idea of SpecVLA is to adaptively verify the predicted ac-tions based on the environmental state. Experiments show that SpecVLA can reduce the end-to-end latency of the VLA models sig-nificantly while maintaining success rate, thus enabling real-time robotic manipulation in practical applications. 
+
+## References 
+
+[1] Mohammad Bakhshalipour, Seyed Borna Ehsani, Mohamad Qadri, Dominic Guri, Maxim Likhachev, and Phillip B Gibbons. Racod: algorithm/hardware co-design for mobile robot path planning. In Proceedings of the 49th Annual International Symposium on Computer Architecture , pages 597–609, 2022. [2] Rajeev Balasubramonian, Andrew B Kahng, Naveen Muralimanohar, Ali Shafiee, and Vaishnav Srinivas. Cacti 7: New tools for interconnect exploration in innova-tive off-chip memories. ACM Transactions on Architecture and Code Optimization (TACO) , 14(2):1–25, 2017. [3] Mark Buckler, Philip Bedoukian, Suren Jayasuriya, and Adrian Sampson. Eva 2:Exploiting temporal redundancy in live computer vision. In 2018 ACM/IEEE 45th Annual International Symposium on Computer Architecture (ISCA) , pages 533–546. IEEE, 2018. [4] Yue Cao, Ming Liu, Shuai Liu, Xiaotao Wang, Lei Lei, and Wangmeng Zuo. Physics-guided iso-dependent sensor noise modeling for extreme low-light pho-tography. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 5744–5753, 2023. [5] Tobias Dirndorfer, Michael Botsch, and Alois Knoll. Model-based analysis of sensor-noise in predictive passive safety algorithms. In Proceedings of the 22nd Enhanced Safety of Vehicles Conference , 2011. [6] Wenhong Duan, Zhenhua Liu, Chuanmin Jia, Shanshe Wang, Siwei Ma, and Wen Gao. Differential weight quantization for multi-model compression. IEEE Transactions on Multimedia , 25:6397–6410, 2022. [7] Matthew Dutson, Yin Li, and Mohit Gupta. Eventful transformers: Leveraging temporal redundancy in vision transformers. In Proceedings of the IEEE/CVF international conference on computer vision , pages 16911–16923, 2023. [8] Roya Firoozi, Johnathan Tucker, Stephen Tian, Anirudha Majumdar, Jiankai Sun, Weiyu Liu, Yuke Zhu, Shuran Song, Ashish Kapoor, Karol Hausman, et al. Foundation models in robotics: Applications, challenges, and the future. The International Journal of Robotics Research , page 02783649241281508, 2023. [9] Konrad Gac, Grzegorz Karpiel, and Maciej Petko. Fpga based hardware accelerator for calculations of the parallel robot inverse kinematics. In Proceedings of 2012 IEEE 17th International Conference on Emerging Technologies & Factory Automation (ETFA 2012) , pages 1–4. IEEE, 2012. [10] Mukul Gagrani, Raghavv Goel, Wonseok Jeon, Junyoung Park, Mingu Lee, and Christopher Lott. On speculative decoding for multimodal large language mod-els. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 8285–8289, 2024. [11] Yuhui Hao, Yiming Gan, Bo Yu, Qiang Liu, Yinhe Han, Zishen Wan, and Shaoshan Liu. Orianna: An accelerator generation framework for optimization-based robotic applications. In Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2, pages 813–829, 2024. [12] Yuhui Hao, Yiming Gan, Bo Yu, Qiang Liu, Shao-Shan Liu, and Yuhao Zhu. Blitzcrank: Factor graph accelerator for motion planning. In 2023 60th ACM/IEEE Design Automation Conference (DAC) , pages 1–6. IEEE, 2023. [13] Yu-Shun Hsiao, Siva Kumar Sastry Hari, Balakumar Sundaralingam, Jason Yik, Thierry Tambe, Charbel Sakr, Stephen W Keckler, and Vijay Janapa Reddi. Vapr: Variable-precision tensors to accelerate robot motion planning. In 2023 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pages 6304–6309. IEEE, 2023. [14] Yafei Hu, Quanting Xie, Vidhi Jain, Jonathan Francis, Jay Patrikar, Nikhil Keetha, Seungchan Kim, Yaqi Xie, Tianyi Zhang, Hao-Shu Fang, et al. Toward general-purpose robots via foundation models: A survey and meta-analysis. arXiv preprint arXiv:2312.08782 , 2023. [15] Lingyi Huang, Yu Gong, Yang Sui, Xiao Zang, and Bo Yuan. Moped: Efficient mo-tion planning engine with flexible dimension support. In 2024 IEEE International Symposium on High-Performance Computer Architecture (HPCA) , pages 483–497. IEEE, 2024. [16] Yiyang Huang, Yuhui Hao, Bo Yu, Feng Yan, Yuxin Yang, Feng Min, Yinhe Han, Lin Ma, Shaoshan Liu, Qiang Liu, and Yiming Gan. Dadu-corki: Algorithm-architecture co-design for embodied ai-powered robotic manipulation. In Pro-ceedings of the 52nd Annual International Symposium on Computer Architecture, ISCA 2025, Tokyo, Japan, June 21-25, 2025 , pages 327–343. ACM, 2025. [17] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakr-ishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam, Pannag Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv preprint arXiv:2406.09246 , 2024. [18] Yoongu Kim, Weikun Yang, and Onur Mutlu. Ramulator: A fast and extensible dram simulator. IEEE Computer architecture letters , 15(1):45–49, 2015. [19] Srivatsan Krishnan, Zishen Wan, Kshitij Bhardwaj, Paul Whatmough, Aleksandra Faust, Sabrina Neuman, Gu-Yeon Wei, David Brooks, and Vijay Janapa Reddi. Automatic domain-specific soc design for autonomous unmanned aerial vehicles. In 2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO) ,pages 300–317. IEEE, 2022. [20] Minjae Lee, Seongmin Park, Hyungmin Kim, Minyong Yoon, Janghwan Lee, Jun Won Choi, Nam Sung Kim, Mingu Kang, and Jungwook Choi. Spade: Sparse pillar-based 3d object detection accelerator for autonomous driving. In 2024 IEEE International Symposium on High-Performance Computer Architecture (HPCA) ,pages 454–467. IEEE, 2024. [21] Xinghang Li, Minghuan Liu, Hanbo Zhang, Cunjun Yu, Jie Xu, Hongtao Wu, Chilam Cheang, Ya Jing, Weinan Zhang, Huaping Liu, et al. Vision-language foundation models as effective robot imitators. arXiv preprint arXiv:2311.01378 ,2023. [22] Ye Li, Yuan Meng, Zewen Sun, Kangye Ji, Chen Tang, Jiajun Fan, Xinzhu Ma, Shutao Xia, Zhi Wang, and Wenwu Zhu. Sp-vla: A joint model scheduling and to-ken pruning approach for vla model acceleration. arXiv preprint arXiv:2506.12723 ,2025. [23] Shiqi Lian, Yinhe Han, Xiaoming Chen, Ying Wang, and Hang Xiao. Dadu-p: A scalable accelerator for robot motion planning in a dynamic environment. In 
+
+Proceedings of the 55th Annual Design Automation Conference , pages 1–6, 2018. [24] Shiqi Lian, Yinhe Han, Ying Wang, Yungang Bao, Hang Xiao, Xiaowei Li, and Ninghui Sun. Dadu: Accelerating inverse kinematics for high-dof robots. In 
+
+Proceedings of the 54th Annual Design Automation Conference 2017 , pages 1–6, 2017. [25] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning. 
+
+Advances in Neural Information Processing Systems , 36:44776–44791, 2023. [26] Songming Liu, Lingxuan Wu, Bangguo Li, Hengkai Tan, Huayu Chen, Zhengyi Wang, Ke Xu, Hang Su, and Jun Zhu. Rdt-1b: a diffusion foundation model for bimanual manipulation. arXiv preprint arXiv:2410.07864 , 2024. [27] Xingyu Liu, Jiawei Liang, Yipu Zhang, Linfeng Du, Chaofang Ma, Hui Yu, Jiang Xu, and Wei Zhang. Draco: A hardware-efficient robot rigid body dynamics accelerator with precision-aware quantization framework. In 2026 IEEE Inter-national Symposium on High Performance Computer Architecture (HPCA) , pages 1–13. IEEE, 2026. [28] Mostafa Mahmoud, Kevin Siu, and Andreas Moshovos. Diffy: a déjà vu-free differential deep neural network accelerator. In 2018 51st Annual IEEE/ACM International Symposium on Microarchitecture (MICRO) , pages 134–147, 2018. [29] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang, Xiaoxiang Shi, et al. Specinfer: Accelerating large language model serving with tree-based spec-ulative inference and verification. In Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3 , pages 932–949, 2024. [30] Sean Murray, Will Floyd-Jones, George Konidaris, and Daniel J Sorin. A pro-grammable architecture for robot motion planning acceleration. In 2019 IEEE 30th International Conference on Application-specific Systems, Architectures and Processors (ASAP) , volume 2160, pages 185–188. IEEE, 2019. [31] Sean Murray, William Floyd-Jones, Ying Qi, George Konidaris, and Daniel J Sorin. The microarchitecture of a real-time robot motion planning accelerator. In 2016 49th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO) ,pages 1–12. IEEE, 2016. [32] Sabrina M Neuman, Radhika Ghosal, Thomas Bourgeat, Brian Plancher, and Vijay Janapa Reddi. Roboshape: Using topology patterns to scalably and flexibly deploy accelerators across robots. In Proceedings of the 50th Annual International Symposium on Computer Architecture , pages 1–13, 2023. [33] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, et al. Pytorch: An imperative style, high-performance deep learning library. Advances in neural information processing systems , 32, 2019. [34] Jacob Sacks, Divya Mahajan, Richard C Lawson, Behnam Khaleghi, and Hadi Esmaeilzadeh. Robox: an end-to-end solution to accelerate autonomous control in robotics. In 2018 ACM/IEEE 45th Annual International Symposium on Computer Architecture (ISCA) , pages 479–490. IEEE, 2018. [35] Ananda Samajdar, Yuhao Zhu, Paul Whatmough, Matthew Mattina, and Tushar Krishna. Scale-sim: Systolic cnn accelerator simulator. arXiv preprint arXiv:1811.02883 , 2018. [36] Sreetama Sarkar, Gourav Datta, Souvik Kundu, Kai Zheng, Chirayata Bhat-tacharyya, and Peter A Beerel. Maskvd: Region masking for efficient video object detection. In 2025 IEEE/CVF Winter Conference on Applications of Computer Vision (WACV) , pages 1955–1964. IEEE, 2025. [37] Shengjia Shao, Jason Tsai, Michal Mysior, Wayne Luk, Thomas Chau, Alexander Warren, and Ben Jeppesen. Towards hardware accelerated reinforcement learning 13 MICRO 2026, October 31–November 04, 2026, Athens, Greece Chunyu Qi and Zhuoran Song, et al. 
+
+for application-specific robotic control. In 2018 IEEE 29th International Conference on Application-specific Systems, Architectures and Processors (ASAP) , pages 1–8. IEEE, 2018. [38] Aaron Stillmaker and Bevan Baas. Scaling equations for the accurate prediction of cmos device performance from 180 nm to 7 nm. Integration , 58:74–81, 2017. [39] Ziteng Sun, Ananda Theertha Suresh, Jae Hun Ro, Ahmad Beirami, Himanshu Jain, and Felix Yu. Spectr: Fast speculative decoding via optimal transport. 
+
+Advances in Neural Information Processing Systems , 36:30222–30242, 2023. [40] Stone Tao, Fanbo Xiang, Arth Shukla, Yuzhe Qin, Xander Hinrichsen, Xiaodi Yuan, Chen Bao, Xinsong Lin, Yulin Liu, Tse kai Chan, Yuan Gao, Xuanlin Li, Tongzhou Mu, Nan Xiao, Arnav Gurha, Zhiao Huang, Roberto Calandra, Rui Chen, Shan Luo, and Hao Su. Maniskill3: Gpu parallelized robotics simulation and rendering for generalizable embodied ai. arXiv preprint arXiv:2410.00425 ,2024. [41] Naoki Wake, Atsushi Kanehira, Kazuhiro Sasabuchi, Jun Takamatsu, and Katsushi Ikeuchi. Gpt-4v (ision) for robotics: Multimodal task planning from human demonstration. IEEE Robotics and Automation Letters , 2024. [42] Songsheng Wang, Rucheng Yu, Zhihang Yuan, Chao Yu, Feng Gao, Yu Wang, and Derek F Wong. Spec-vla: speculative decoding for vision-language-action models with relaxed acceptance. In Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing , pages 26916–26928, 2025. [43] Zhijie Wang, Zhehua Zhou, Jiayang Song, Yuheng Huang, Zhan Shu, and Lei Ma. Vlatest: Testing and evaluating vision-language-action models for robotic manipulation. Proceedings of the ACM on Software Engineering , 2(FSE):1615–1638, June 2025. [44] Siyu Xu, Yunke Wang, Chenghao Xia, Dihao Zhu, Tao Huang, and Chang Xu. Vla-cache: Efficient vision-language-action manipulation via adaptive token caching. 
+
+Advances in Neural Information Processing Systems , 38:164448–164473, 2026. [45] Yuhao Xu, Yantai Yang, Zhenyang Fan, Yufan Liu, Yuming Li, Bing Li, and Zhipeng Zhang. Qvla: Not all channels are equal in vision-language-action model’s quantization. arXiv preprint arXiv:2602.03782 , 2026. [46] Nan Yang, Tao Ge, Liang Wang, Binxing Jiao, Daxin Jiang, Linjun Yang, Rangan Majumder, and Furu Wei. Inference with reference: Lossless acceleration of large language models. arXiv preprint arXiv:2304.04487 , 2023. [47] Seongjun Yang, Gibbeum Lee, Jaewoong Cho, Dimitris Papailiopoulos, and Kang-wook Lee. Predictive pipelined decoding: A compute-latency trade-off for exact llm decoding. arXiv preprint arXiv:2307.05908 , 2023. [48] Yuxin Yang, Xiaoming Chen, and Yinhe Han. Dadu-rbd: Robot rigid body dynam-ics accelerator with multifunctional pipelines. In Proceedings of the 56th Annual IEEE/ACM International Symposium on Microarchitecture , pages 297–309, 2023. [49] Bo Yu, Wei Hu, Leimeng Xu, Jie Tang, Shaoshan Liu, and Yuhao Zhu. Building the computing system for autonomous micromobility vehicles: Design constraints and architectural optimizations. In 2020 53rd Annual IEEE/ACM International Symposium on Microarchitecture (MICRO) , pages 1067–1081. IEEE, 2020. [50] Yang Yue, Yulin Wang, Bingyi Kang, Yizeng Han, Shenzhi Wang, Shiji Song, Jiashi Feng, and Gao Huang. Deer-vla: Dynamic inference of multimodal large language models for efficient robot execution. Advances in Neural Information Processing Systems , 37:56619–56643, 2024. [51] Ji Zhang, Sanjiv Singh, et al. Loam: Lidar odometry and mapping in real-time. In 
+
+Robotics: Science and systems , volume 2, pages 1–9. Berkeley, CA, 2014. [52] Jingxuan Zhang, Yunta Hsieh, Zhongwei Wan, Haokun Lin, Xin Wang, Ziqi Wang, Yingtie Lei, and Mi Zhang. Quantvla: Scale-calibrated post-training quantization for vision-language-action models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 39539–39549, 2026. [53] Jun Zhang, Jue Wang, Huan Li, Lidan Shou, Ke Chen, Gang Chen, and Sharad Mehrotra. Draft& verify: Lossless large language model acceleration via self-speculative decoding. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pages 11263–11282, 2024. [54] Rongyu Zhang, Menghang Dong, Yuan Zhang, Liang Heng, Xiaowei Chi, Gaole Dai, Li Du, Dan Wang, Yuan Du, and Shanghang Zhang. Mole-vla: Dynamic layer-skipping vision language action model via mixture-of-layers for efficient robot manipulation. In Proceedings of the AAAI Conference on Artificial Intelligence ,volume 40, pages 18764–18772, 2026. [55] Zhaoyang Zhang, Wenqi Shao, Jinwei Gu, Xiaogang Wang, and Ping Luo. Differ-entiable dynamic quantization with mixed precision and adaptive resolution. In 
+
+International Conference on Machine Learning , pages 12546–12556. PMLR, 2021. [56] Zihao Zheng, Zhihao Mao, Sicheng Tian, Maoliang Li, Jiayu Chen, Xinhao Sun, Zhaobo Zhang, Xuanzhe Liu, Donggang Cao, Hong Mei, et al. Heisd: Hybrid speculative decoding for embodied vision-language-action models with kinematic awareness. arXiv preprint arXiv:2603.17573 , 2026. 14

@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-18</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-19</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 27 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-18 20:41:50 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-19 21:04:44 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,10 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共生成 27 篇推荐（精读 15 篇，速读 12 篇）</p>
-<p>精读：《NARRATE: A Multimodal Real-World Australian Driving Dataset for Human-Centred Explanations in Automated Driving》（10.0/10）, 《Imagining Recovery: Inference-Time Counterfactual Realignment for Vision-Language-Action Models》（9.0/10）</p>
-<p>速读：《GaussMemory: Task-Driven 3D Gaussian Scene Memory for Long-Horizon Robotic Manipulation》（8.0/10）, 《Risk-Adaptive Edge--Cloud Visual Reasoning for Communication-Efficient Autonomous Driving》（8.0/10）, 《ForceU-VLA: A Force-Aware Vision-Language-Action Model for Embodied Ultrasound Scanning》（8.0/10）</p>
-<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
+<p>今日聚焦20篇论文，精读2篇满分VLA工作，速读覆盖4D占用预测、触觉感知与推理加速。最值得看：PhaseLoRA以控制状态条件化低秩适配提升连续动作策略，SparkVLA通过停止感知与自适应动作分块攻克长时操作。建议普通读者优先关注VLA的高效微调与长时任务扩展方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -51,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">8 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="NARRATE: A Multimodal Real-World Australian Driving Dataset for Human-Centred Explanations in Automated Driving">NARRATE: A Multimodal Real-World Australian Driving Dataset for Human-Centred Explanations in Automated Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Imagining Recovery: Inference-Time Counterfactual Realignment for Vision-Language-Action Models">Imagining Recovery: Inference-Time Counterfactual Realignment for Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="StructRL: Structured Action-Space Exploration for Flow-Based VLAs">StructRL: Structured Action-Space Exploration for Flow-Based VLAs</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PhaseLoRA: Control-Regime-Conditioned Low-Rank Adaptation for Continuous-Action Vision-Language-Action Policies">PhaseLoRA: Control-Regime-Conditioned Low-Rank Adaptation for Continuous-Action Vision-Language-Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="SparkVLA: Stop-Aware Hierarchical VLA with Adaptive Action Chunking for Long-Horizon Manipulation">SparkVLA: Stop-Aware Hierarchical VLA with Adaptive Action Chunking for Long-Horizon Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Inference-Time Attention Steering for Vision-Language-Action Driving Models">Inference-Time Attention Steering for Vision-Language-Action Driving Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -67,9 +64,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GaussMemory: Task-Driven 3D Gaussian Scene Memory for Long-Horizon Robotic Manipulation">GaussMemory: Task-Driven 3D Gaussian Scene Memory for Long-Horizon Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Risk-Adaptive Edge--Cloud Visual Reasoning for Communication-Efficient Autonomous Driving">Risk-Adaptive Edge--Cloud Visual Reasoning for Communication-Efficient Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="ForceU-VLA: A Force-Aware Vision-Language-Action Model for Embodied Ultrasound Scanning">ForceU-VLA: A Force-Aware Vision-Language-Action Model for Embodied Ultrasound Scanning</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Geometry-Aware Spatio-Temporal Context Modeling for 4D Occupancy Forecasting">Geometry-Aware Spatio-Temporal Context Modeling for 4D Occupancy Forecasting</span></li><li><span class="dpr-home-dashboard-paper-title" title="Vision-Based Tactile Intelligence for Robotics: Sensing, Learning, and Embodied Manipulation">Vision-Based Tactile Intelligence for Robotics: Sensing, Learning, and Embodied Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Algorithm-Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification">Algorithm-Architecture Co-Design for Efficient VLA Inference via Speculative Inference and Verification</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
 </div>
 
