@@ -1,0 +1,977 @@
+Title: SCAPE: Scenario-Conditioned Simulation-Augmented Policy Evaluation
+
+URL Source: https://arxiv.org/pdf/2608.19425v1
+
+Published Time: Fri, 21 Aug 2026 00:16:50 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# SCAPE : Scenario-Conditioned Simulation-Augmented Policy Evaluation 
+
+Dijie Zhu 1, Seunghun Oh 1,2, Ruopeng Huang 1,3, Zhiyu Huang 4, Jiaqi Ma 1, Chen Tang 11University of California, Los Angeles 
+
+> 2
+
+Seoul National University 
+
+> 3
+
+University of Southern California 
+
+> 4
+
+North Carolina State University 
+
+Abstract: Reliable performance evaluation is a central bottleneck for deploy-ing robot-learning policies in real-world conditions. Real-world testing produces faithful evaluation but is costly and difficult to scale, whereas simulation-based testing is easy to scale but inevitably biased due to the sim-to-real gap. Neither source alone is sufficient for scalable and reliable policy evaluation. This moti-vates simulation-augmented policy evaluation, which combines limited real-world rollouts with abundant simulation proxies for sample-efficient performance esti-mation. Yet, existing methods focus on estimating performance averaged over initial conditions and deployment settings. By construction, such population-level averages collapse scenario-specific variation, providing limited information about when and where a policy can be safely deployed. To address this limi-tation, we propose SCAPE , a scenario-conditioned simulation-augmented policy evaluation framework that instead predicts scenario-conditioned real-world pol-icy performance from limited paired sim-and-real evaluation samples and large-scale simulation-based testing rollouts. S CAPE corrects the sim-to-real bias in the simulation labels before using them to train the prediction model, and calibrates the prediction uncertainty through conformal prediction. We validate S CAPE on two embodied task domains, autonomous driving and quadruped velocity track-ing. In sim-to-sim settings, it reduces the scenario-level performance prediction error by 4.9% /34.7% (driving) and 14.5% /27.7% (quadruped) relative to scene-conditioned neural baselines and aggregate statistical baselines on average. We also validate S CAPE for evaluating a velocity-tracking policy deployed on a phys-ical Unitree Go2. In addition, S CAPE improves testing sample-efficiency, pro-duces narrower calibrated prediction intervals, enhances generalization to out-of-distribution scenarios, and unlocks fine-grained deployment strategies. 
+
+1 Introduction 
+
+Recent advances in robot learning, particularly robotic foundation models, have enabled increasingly capable autonomous robots that can operate across a growing range of real-world conditions [1, 2, 3]. A central bottleneck for trustworthy deployment is the rigorous evaluation of learned control policies under diverse operating conditions. Such evaluation typically requires extensive real-world testing on physical hardware, which can be prohibitively expensive, resource-intensive, and safety-critical, especially in open-world environments where robots operate near humans and face rare, and long-tailed conditions. For example, certifying an autonomous vehicle may require billions of miles of driving [4] under dedicated human oversight. Moreover, relying solely on real-world testing is practically infeasible for covering all rare, long-tailed cases, and the required testing effort keeps growing as the deployment rolls out to new service areas and operating conditions. Simulation offers a scalable alternative, enabling cheap and fast policy rollouts across diverse con-ditions for scalable evaluation [5, 6, 7]. Recent real-to-sim efforts further ground simulators in arXiv:2608.19425v1 [cs.RO] 19 Aug 2026 𝑥 𝑖 , 𝒓 𝑖        
+
+> 𝑥 𝑖 , 𝒔 𝑖
+> 𝑥 𝑗 , 𝒓 𝑗
+> 𝑥 𝑗 , 𝒔 𝑗
+> Large-scale
+> simulation data
+> 𝑥 𝑖 , 𝑆 𝑖 𝑥 𝑖 , 𝑆 𝑖 𝑥 𝑖 , 𝑆 𝑖 𝑥 𝑘 , 𝒔 𝑘
+> Target performance  𝒇 𝜽  𝒙
+> Scenarios 𝒙 (common → rare)
+> Identifies reliable
+> and risky scenarios
+> Average
+> hides failures
+> ഥ𝑹
+> Uncertainty band
+> 𝑥 = scenario context, 𝒓 = target metric, 𝒔 = surrogate metric
+> Few paired
+> real-sim data
+> reliable
+> risky
+
+SCAPE       
+
+> Correction
+> 𝒇 𝜽 𝒙
+> 𝒙 𝒙
+> Prediction &
+> gap limits direct use of 𝒔
+> metric
+> ?
+> 𝒓 𝒔 gap
+> 𝒙
+
+Figure 1: Overview of S CAPE . SCAPE combines limited paired sim-and-real data with large-scale simulation data to predict scenario-conditioned target performance with calibrated uncertainty, which supports fine-grained deployment decisions by revealing scenario-specific variation and failures that aggregate metrics can hide. 
+
+real-world data [8, 9], improving the correlation between simulation and real-world testing results. Yet, the simulation-to-real gap is inevitable, and the residual bias prevents simulation-only validation from directly certifying real-world deployment. A complementary line of work therefore augments large-scale simulation testing with limited real-world trials to produce calibrated estimates of real-world policy performance, together with valid confidence intervals, through statistical methods such as control variates [10, 11] and prediction-powered inference [12, 13]. However, existing methods primarily estimate the aggregated performance metrics averaged over all deployment conditions. While aggregate estimates can support coarse policy evaluation, much of the information important for deployment decisions is lost through aggregation. A control policy that is strong on average may have varying performance across scenarios and exhibit severe failures in certain cases. Relying solely on the aggregated metrics would withhold deployment until the policy reaches near-perfect average performance, which is impractical. Instead, a sustainable deployment protocol is to gradually roll out deployment into scenarios where the policy is reliable, which facili-tates a data flywheel to accumulate real-world rollouts through early deployment to keep improving the policies and gradually expand deployment to broader and more challenging scenarios. Such a protocol requires a fine-grained performance profile of the policy across scenarios and deployment conditions, which existing simulation-augmented policy evaluation methods fail to provide. To fill this gap, we instead formulate and study a new scenario-conditioned simulation-augmented policy evaluation problem : given limited real-world testing samples and abundant policy rollouts in a simulation, learn a model predicting the real-world policy performance under specific scene context, rather than only the average. As a solution, we propose SCAPE (Scenario-Conditioned Simulation-
+
+Augmented Policy Evaluation), as illustrated in Figure 1. It consists of two modules. First, we train a policy performance prediction model from a combination of limited real-world policy rollouts and large-scale simulation rollouts. Because naively mixing faithful real-world samples with biased simulation samples would sabotage training quality, we adapt the correction-before-augmentation principle from AI-augmented estimation [14]: a correction model trained from paired sim-and-real samples first debiases simulation outcomes, the corrected labels then supervise the prediction model training. We further adopt conformal prediction on top of the learned prediction model to pro-vide calibrated uncertainty estimates, allowing developers and decision-makers to identify scenarios where the policy can be confidently deployed or additional real-world testing is necessary. In summary, our contributions are three-fold: 1) We propose SCAPE , a novel framework that com-bines limited real-world and large-scale simulation testing data for scenario-conditioned policy eval-uation , addressing the limitations of existing simulation-augmented policy evaluation methods that only estimate the aggregated average performance metrics; 2) We instantiate S CAPE on two practi-cal applications, autonomous driving and quadruped locomotion, and show through comprehensive experiments that it can effectively leverage simulation to enhance performance prediction accuracy and reduce the required real-world testing samples; 3) We further show that S CAPE enables vari-2ous use cases in evaluation and deployment decision-making, such as bootstrapping evaluation on out-of-distribution (OOD) scenarios with simulation and scenario-level policy selection, which are difficult to support when only aggregate performance is estimated. 
+
+2 Related Work 
+
+Simulation and simulation-augmented policy evaluation. Simulation has become a practical proxy for large-scale policy evaluation when real-world experiments are costly or risky. Across embodied simulation benchmarks, platforms such as CARLA [15], MetaDrive [16], MuJoCo [17], and IsaacGym [18] provide scalable and reproducible testbeds for evaluating autonomous driving, manipulation, and locomotion policies across diverse conditions. However, simulation-only eval-uation remains limited by the sim-to-real gap. Although prior work has attempted to reduce this gap through domain randomization, dynamics randomization, adaptation, and real-to-sim align-ment [19, 20, 21, 22, 23, 8], simulation is best viewed as an informative surrogate rather than a direct substitute for real-world validation. This naturally motivates simulation-augmented policy evaluation, which leverages both simulation and limited real-world rollouts to improve evaluation accuracy and sample efficiency. Representative works include Sim2Val [11], which exploits corre-lations across test platforms through control variates, and SureSim [13], which uses limited paired real-simulation evaluations to correct large-scale simulation-based estimates. Although these meth-ods achieve strong estimation performance, they primarily target aggregated mean performance and confidence intervals around the mean. In contrast, S CAPE targets scenario-level real-world perfor-mance estimation by conditioning on scenario observations, enabling fine-grained estimates. 
+
+Uncertainty quantification for policy evaluation. Policy comparison and selection require more than point estimates, since apparent performance differences can be dominated by evaluation noise when trials are limited. Single point estimates also do not quantify the variability of policy out-comes across trials or scenarios, limiting their usefulness for downstream decision-making. Prior work has constructed confidence intervals directly from real-world evaluations, including statistical procedures for policy success rates [24] and classical concentration inequalities for bounded perfor-mance metrics [25]. However, real-data-only intervals often require many costly trials to become informative, making them impractical. To reduce the real-world data burden, later work often lever-ages statistical frameworks, as in SureSim [13] and Sim2Val [11], to provide confidence intervals or variance-reduced estimates. However, these intervals are primarily designed for aggregated mean estimates, they quantify uncertainty in the population mean rather than the conditional variability of an incoming scenario. In contrast, S CAPE incorporates conformal prediction [26, 27] to produce calibrated uncertainty intervals for scenario-level estimates. 
+
+3 Scenario-Conditioned Simulation-Augmented Policy Evaluation 
+
+This section formalizes the scenario-conditioned simulation-augmented policy evaluation problem (Sec. 3.1) and presents S CAPE , our solution framework for correcting biased simulation labels, training a scenario-level predictor, and calibrating uncertainty with conformal prediction (Sec. 3.2). 
+
+3.1 Problem Formulation 
+
+We study how to predict the real-world performance of a given policy in a specific scenario using lim-ited real-world testing and abundant simulation-based testing. Existing simulation-augmented policy evaluation methods such as Sim2Val [11] and SureSim [13] estimate an aggregate quantity, namely the policy’s mean performance over the entire scenario distribution, together with a confidence in-terval around the estimated mean. An aggregate estimate supports coarse evaluation and ranking, but hides scenario-specific variation and failures. We therefore target the scenario-conditioned real-world performance and provide a calibrated uncertainty interval for each scenario-level prediction. Formally, let X ∈ X denote a scenario , represented by the scene context and initial conditions under which the policy is evaluated. For a scenario X, let R be the policy’s real-world performance 3Paired training                                                  
+
+> 𝐷 𝑝 = {(𝑥 𝑖 , 𝑟 𝑖 , 𝑠 𝑖 )}
+> Simulation-only
+> 𝐷 𝑠 = {(𝑥 𝑘 , 𝑠 𝑘 )}
+> Calibration
+> 𝐷 𝑐 = {(𝑥 𝑗 , 𝑟 𝑗 )}
+> 𝑥 1𝑥 2𝑥 3𝑥 𝑛
+> 𝑠 1𝑠 2𝑠 3𝑠 𝑛
+> 𝑟 1𝑟 2𝑟 3𝑟 𝑛
+> 𝑥 1𝑥 2𝑥 3𝑥 𝑙
+> 𝑠 1𝑠 2𝑠 3𝑠 𝑙
+> 𝑥 1𝑥 2𝑥 3𝑥 𝑚
+> 𝑟 1𝑟 2𝑟 3𝑟 𝑚
+> 1) Simulation correction
+> 𝒈 𝝓 𝒙, 𝒔 ≈ 𝔼[𝐑|𝐗 = 𝐱, 𝐒 = 𝐬]
+> 𝒈 ∅
+> 𝑟 𝑖
+> 𝒈 ∅
+> ǁ𝑟 𝑘
+> {(𝑥 𝑘 , ǁ 𝑟 𝑘 )} 𝑥 𝑖 , 𝑟 𝑖
+> 2) Performance prediction
+> 𝒇 𝜽 𝒙 ≈ 𝔼[𝐑|𝐗 = 𝐱]
+> 𝑥 𝒇 𝜽
+> 𝑟 ∈ 𝑟 𝑖 , ǁ 𝑟 𝑘 𝑥 ∈ 𝑥 𝑖 , 𝑥 𝑘
+> 3) Calibration
+> 𝑓 𝜃 𝑥
+> 𝑒 𝑗 =𝑟 𝑗 − 𝑓 𝜃 𝑥 𝑗
+> 𝐶 𝑥 = [𝑓 𝜃 𝑥 − ො 𝑞, 𝑓 𝜃 𝑥 + ො 𝑞]
+> 𝒇 𝜽 𝒙
+> Scenario-wise prediction
+> with calibrated uncertainty
+> Target performance  𝑹
+> Scenario context 𝑥
+> 𝐶(𝑥)
+> 𝑓 𝜃 𝑥
+> 𝐶(𝑥) (95%)
+> scenario context 𝑟 = real metric 𝑠 = sim metric
+> 𝑠 𝑖
+> 𝑥 𝑖
+> 𝑠 𝑘
+> 𝑥 𝑘
+> 𝑥
+
+Figure 2: Method overview of S CAPE . SCAPE corrects biased simulation labels using paired sim-and-real data, trains a scenario-conditioned performance predictor with corrected simulation-only data, and applies con-formal calibration to quantify prediction uncertainty. 
+
+under an evaluation metric of interest, either continuous or binary, and S the corresponding metric measured through simulation testing. Both measure the same evaluation metric on the same scenario, with R trusted but expensive to estimate and S cheap but biased. Evaluating the policy in both worlds on the same scenario yields a paired sample (X, R, S ), whereas evaluating it in simulation alone yields a simulation-only sample (X, S ). We assume access to a small set of paired samples with abundant simulation-only samples, which are aggregated into three disjoint datasets: 
+
+Dp = {(xi, r i, s i)}ni=1 
+
+| {z }
+
+> paired training set
+
+, Ds = {(xk, s k)}ℓk=1 
+
+| {z }
+
+> simulation-only training set
+
+, Dc = {(xj , r j )}mj=1 
+
+| {z }
+
+> held-out calibration set
+
+, with ℓ ≫ m + n. 
+
+Our objective is two-fold. First, we train a model predicting the scenario-conditioned real-world policy performance from the paired and simulation-only training data Dp ∪ D s, fθ (x) ≈ μ(x) := 
+
+E[ R | X = x ], which is the conditional mean for a continuous metric and the positive-class probability P(R = 1 | X = x) for a binary one. Second, given the held-out calibration set Dc and a miscoverage level α ∈ (0 , 1) , we equip each prediction with an uncertainty region Cα(x)—an interval for continuous metrics and a set for binary ones—such that P(R ∈ Cα(X)) ≥ 1 − α, 
+
+where the probability is over the exchangeable draw of the calibration and test scenarios. A wider 
+
+Cα(x) reflects a less certain prediction and flags a scenario requiring further real-world testing. 
+
+3.2 SCAPE Framework 
+
+A central challenge in simulation-augmented policy evaluation is exploiting large-scale simulation data without inheriting its sim-to-real bias. Since simulation rollouts are cheap but biased, naively mixing them with real-world data can pull predictions toward the simulation distribution. Prior work addresses this challenge through prediction-powered inference (PPI) [12, 13], using paired real-simulation evaluations to debias aggregate metric estimates. In principle, PPI could be adapted to train our scenario-conditioned predictor fθ . In practice, fθ must often be a neural network be-cause robotic scenario contexts are high-dimensional, such as HD-map and agent-history features in autonomous driving or elevation maps in quadruped locomotion (Sec. 4.1). Yet, in our experiments, adapting PPI to high-dimensional, non-convex neural training, where its guarantees no longer di-rectly apply, is unstable and provides little benefit from paired data (Sec. 4.2). We therefore propose 
+
+SCAPE , which adopts an alternative bias-correction strategy that works reliably well for training the neural scenario-conditioned policy performance prediction model fθ . The detailed algorithm of SCAPE is summarized in the Appendix (see Algorithm 1). 
+
+Simulation-augmented policy performance prediction. We instead build S CAPE on an alternative bias-correction principle adopted from AI-augmented estimation (AAE) [14]. Originally developed 4(a) nuPlan  (b) Quadruped     
+
+> ego rollout
+> other agents
+> Open loop: non-reactive agents
+> ego rollout
+> reactive agents
+> Closed loop: reactive agents Real -world rollout Reconstructed sim rollout
+
+Figure 3: Paired sample construction in (a) nuPlan and (b) quadruped experiments. In nuPlan, each pair is constructed from the same driving scenario by measuring the target metric R with closed-loop evaluation and the surrogate metric S with open-loop evaluation. In quadruped, each pair matches a real-world rollout with a reconstructed-sim rollout under the same scene context, robot placement, and command. 
+
+for combining scarce human labels with abundant LLM-generated surrogate labels for human-choice modeling, AAE first corrects surrogate labels using paired data and then augments model training with the corrected data. We adapt this strategy to train neural, scenario-conditioned performance prediction models and find it works remarkably well in our experiments. Concretely, S CAPE trains the performance prediction model fθ in two stages (Figure 2). First, we train a calibration model gϕ on the paired set Dp to predict the real-world metric from a scenario together with its simulation result, gϕ(x, s ) ≈ E[ R | X = x, S = s ], where conditioning on x lets 
+
+gϕ correct the sim-to-real bias based on scenario rather than applying a single global offset. We then apply gϕ to every simulation-only sample (xk, s k) ∈ D s to obtain a corrected label ˜rk = gϕ(xk, s k),turning the abundant simulation-only data into a large corrected set Dpseudo = {(xk, ˜rk)}ℓk=1 . In the second stage, we train the scenario-conditioned prediction model fθ on the union of the trusted real-world labels and the corrected simulation-only labels, 
+
+Daug = {(xi, r i)}ni=1 ∪ D pseudo , ˆθ ∈ arg min 
+
+> θ
+
+1
+
+n + ℓ
+
+X
+
+> (x,r )∈D aug
+
+L fθ (x), r ,
+
+where L is the squared error for continuous metrics and the cross-entropy for discrete metrics. The final prediction model fθ takes only the scenario context x as input without the surrogate metric s.This design enables predicting real-world performance at deployment without requiring access to a simulator for collecting additional simulation rollouts given a scenario of interest. 
+
+Uncertainty quantification via conformal prediction. The prediction model fθ provides scenario-conditioned point prediction, but trustworthy deployment decisions also require quantifying the un-certainty of the prediction. We incorporate conformal prediction [26, 27] into S CAPE to construct the calibrated uncertainty set Cα(x). Conformal prediction is model-free and, under exchangeability of the calibration and test scenarios, provides finite-sample marginal coverage P(R ∈ Cα(X)) ≥ 1−α
+
+with no distributional assumptions on the prediction model fθ or the data. On the held-out calibra-tion set Dc = {(xj , r j )}mj=1 , we score each scenario against its real-world label rj . For a con-tinuous metric, we compute the calibration residual ej = |rj − fθ (xj )| for each (xj , r j ) ∈ D c,sort the scores e(1) ≤ · · · ≤ e(m), set ˆq1−α = e(⌈(m+1)(1 −α)⌉), and return the interval Cα(x) = [ fθ (x) − ˆq1−α, fθ (x) + ˆ q1−α ]. For a discrete metric we compute the analogous classification conformity scores on Dc and return a calibrated prediction set. Note that this split conformal predic-tion constructs the interval Cα(x) with a scenario-invariant half-width ˆq1−α. The resulting intervals therefore do not provide scenario-dependent widths or conditional coverage. Nevertheless, the in-terval center fθ (x) still captures variations across scenarios, which allow the calibrated uncertainty sets to support fine-grained deployment decisions, for example, relative to a performance threshold, an interval can certify deployment, reject deployment, or flag scenarios for additional testing. 
+
+4 Experiments 
+
+4.1 Experimental Settings 
+
+We evaluate S CAPE in two embodied domains—autonomous driving and quadruped velocity tracking—shown in Figure 3. We first study both domains in a Sim2Sim setting, treating outcomes 5from a higher-fidelity or perturbed simulator as target labels R and those from a cheaper or nomi-nal simulator as surrogate measurements S. In each domain, we construct a paired training set Dp
+
+and a simulation-only training set Ds for training the point-prediction models. In the experiments, we vary the fractions of Dp and Ds used for training to study how prediction accuracy scales with paired and surrogate data. We additionally reserve three paired splits: a validation set Dv for neural-model selection, a calibration set Dc for split-conformal calibration, and a test set Dtest for final evaluation. We further evaluate quadruped velocity tracking in Sim2Real using real-world rollouts collected from a physical Unitree Go2 across multiple indoor and outdoor scenarios. 
+
+Autonomous driving (nuPlan). We conduct experiments on nuPlan [28] and evaluate three ML-based planners, urban driver open loop model , vector model , and simple vector model 
+
+provided by nuPlan, each trained under their default configurations. The scenario feature x is ex-tracted by a frozen UrbanDriver encoder. We record four evaluation metrics: average displacement error (ADE), time-to-collision under 1 s (TTC < 1s), drivable-area compliance, and no ego at-fault collision (see Appendix for their definition). The surrogate metric S comes from fast open-loop eval-uation with non-reactive agents, while the target metric R comes from closed-loop evaluation with reactive agents. Detailed dataset statistics and feature composition are provided in Appendix A.2. 
+
+Quadruped velocity tracking. We evaluate an RL-trained quadruped velocity-tracking policy in both Sim2Sim and Sim2Real settings. Each scenario feature x consists of local terrain geometry, a linear velocity command, and a yaw-rate command. Each 2-s rollout produces two target metrics: velocity-tracking error MAE vel and yaw-rate-tracking error MAE yaw . In Sim2Sim, S is measured in a nominal simulator and R in a perturbed simulator with dynamics randomization and external disturbances. In Sim2Real, R is collected from physical Go2 rollouts and S from matched simula-tion rollouts. We construct paired real-sim scenes using the GaussGym [29] real-to-sim pipeline and align robot poses with HLoc [30] and SuperGlue [31]. Dataset details are provided in Appendix A.3. 
+
+Baselines. SCAPE addresses a new setting without direct off-the-shelf baselines, so we compare it against two families of adapted methods. The first family consists of aggregate-mean estimators ,adapted from prior simulation-augmented policy evaluation methods [11, 13], that return a single scenario-independent mean estimate: 1) MC (Monte Carlo) estimates the mean from the real-world labels only [10]; 2) CV (Control Variates) treats the simulation metric as a control variate [10, 11]; 3) PPI (Prediction-Powered Inference) debiases surrogate-based mean estimates using paired samples [12, 13]. The second family consists of scenario-conditioned neural predictors fθ (x):4) R-Only trains on the real-world labels only; 5) RS-Mix naively mixes real-world and simulation labels; 6) PPI-NN trains with the rectified PPI objective [12, Sec. 4.3]. For a fair comparison, all baselines and S CAPE use the same paired and surrogate data budgets to train the point-prediction models. After training, we apply the same split-conformal procedure, using the same calibration set Dc, to all methods to isolate the effect of the point-prediction model on the resulting prediction intervals. 1 The hyperparameters and optimization protocol for the neural baselines and S CAPE are detailed in Appendix 6. 
+
+4.2 Experimental Results 
+
+Figure 4 reports Sim2Sim scenario-level prediction errors as the paired-data fraction varies for nu-Plan and quadruped velocity tracking 2. In both domains, scenario-conditioned neural methods out-perform aggregate-mean estimators, confirming the need for fine-grained evaluation. More impor-tantly, S CAPE is the only method that consistently outperforms R-Only across paired-data fractions and metrics. In contrast, RS-Mix and PPI-NN often fail to exploit low-cost simulation effectively, as biased surrogate labels can degrade prediction accuracy. Across the complete evaluation suite reported in the main paper and appendix, S CAPE reduces prediction errors by 4.9% /34 .7% on nu-Plan and 14 .5% /27 .7% on quadruped tracking relative to the scenario-conditioned neural/aggregate statistical baselines. These averages aggregate all evaluated planners, settings, paired-data fractions,  
+
+> 1Native PPI and CV confidence intervals target the population mean rather than the outcome for a new scenario, so we use only the mean-estimation components of these baselines in our experiments.
+> 2Figure 4 (a)-(d) shows the results for UrbanDriver . The results for the other planners are in Appendix A.7.
+
+6Figure 4: Test loss vs. fraction of paired-label on autonomous driving and quadruped locomotion tasks. 
+
+The paired-data fraction denotes the fraction of the full paired training set Dp used for training. The Ur-ban Driver setting contains 83 .6K paired training samples and 119 .2K surrogate-only samples; the quadruped Sim2Sim setting contains 300 paired training samples and 1,493 surrogate-only samples. Panels (a)–(d) report autonomous driving Sim2Sim results, and panels (e)–(f) report quadruped Sim2Sim velocity-tracking results. Curves report mean ± standard error over 10 random paired-data seeds. 
+
+and target metrics. Compared with the strongest baseline, the corresponding gains are 2.0% and 
+
+4.08% . It also matches the strongest baseline full-budget performance with 20% –60% fewer paired labels on nuPlan and 10% –60% fewer on quadruped velocity tracking. More importantly, S CAPE 
+
+is the only surrogate-augmented method that consistently improves on R-Only . It shows that simply enlarging the training set with biased surrogate labels does not reliably lead to benefits in prediction accuracy and sample efficiency. The consistent gains of S CAPE therefore reflect its ability to correct those labels and turn them into useful supervision. These gains are also practically meaningful: even increasing the amount of real labeled data available to R-Only by 10 × reduces its prediction error by only 8.81% on average. For uncertainty quantification, Table 1 reports conformal widths at paired-label fraction 1.0. S CAPE 
+
+achieves the narrowest width in all six metric settings, 3 while aggregate-mean estimators often pro-duce large or full prediction sets. Thus, S CAPE improves prediction accuracy while providing more efficient calibrated uncertainty at valid coverage. 
+
+Table 1: Split conformal width at nominal coverage 1 − α = 0 .95 . Results for fraction of paired-label 1.0
+
+are reported. For the nuPlan regression target ADE, width is the prediction-interval length 2ˆ q in meters; for the three nuPlan binary targets, width is the average conformal prediction-set size |C(x)| ∈ [0 , 2] . For quadruped Sim2Sim, width is the regression interval length reported as ×10 −2. Cells are mean ± standard error over 10 paired-data seeds. Bold marks the narrowest width per column.                                                   
+
+> nuPlan Urban Driver Go2 Sim2Sim
+> Method ADE TTC <1sDrivable Collision Velocity Yaw Rate SCAPE 40 .07 ±0.26 1.447 ±0.010 1.118 ±0.004 1.430 ±0.004 10 .84 ±0.48 7.60 ±0.39
+> ppi-nn 44 .44 ±0.16 1.614 ±0.004 1.233 ±0.004 1.573 ±0.004 11 .42 ±0.38 10 .27 ±0.31
+> rs-mix 44 .65 ±0.16 1.505 ±0.006 1.152 ±0.002 1.495 ±0.003 11 .56 ±0.28 9.12 ±0.22
+> r-only 41 .02 ±0.30 1.497 ±0.003 1.155 ±0.003 1.474 ±0.009 11 .12 ±0.59 7.75 ±0.31
+> mc 50 .27 ±0.00 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 12 .64 ±0.88 11 .95 ±0.31
+> cv 50 .29 ±0.00 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 12 .50 ±0.88 11 .88 ±0.29
+> ppi 50 .31 ±0.00 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 12 .41 ±0.84 11 .75 ±0.29
+
+Sim2Real quadruped velocity tracking. We conduct the quadruped velocity tracking using pol-icy rollouts collected on a physical Unitree Go2 robot. We collected data by placing the robot at diverse positions across five different scenes, including flat and sloped terrains 4. As shown in Ta-
+
+> 3
+
+Full paired-data sweeps and empirical coverage results are in Appendix A.8. 
+
+> 4
+
+Detailed scene structures and reconstructed pairs are provided in Appendix A.3. 
+
+7Table 2: Quadruped Sim2Real velocity tracking. Test MAE on the sim-to-real velocity tracking task. Cells are mean ± standard error over 10 random paired-data seeds. Bold marks the lowest error per row.                        
+
+> Metric ( ×10 −3)mc cv ppi r only rs mix ppi-nn SCAPE
+> Rvel test MAE 16 .55 ±0.96 17 .07 ±0.86 26 .51 ±1.52 13 .29 ±0.76 16 .92 ±0.99 19 .16 ±1.79 11 .79 ±0.70
+> Ryaw test MAE 5.24 ±0.41 5.48 ±0.41 6.86 ±0.56 5.16 ±0.41 6.22 ±0.47 5.37 ±0.45 4.71 ±0.32
+
+ble 2, S CAPE achieves the lowest MAE on both target metrics, reducing error by 11 .3% on MAE vel 
+
+and 8.7% on MAE yaw compared with the strongest baseline. These results indicate that S CAPE 
+
+remains effective beyond Sim2Sim evaluation and can effectively facilitate robot policy evaluation and deployment in the physical environments. 
+
+4.3 Additional Experiments and Analyses on nuPlan 
+
+We conduct additional nuPlan experiments to analyze and highlight several key characteristics of SCAPE . Figures 5 and 6 show the results on UrbanDriver with full paired data, and the complete results are provided in Appendix A.9 and A.10. 
+
+SCAPE scales with surrogate data where baselines saturate. We examine how prediction ac-curacy changes as surrogate-only data increases. We sweep the surrogate data fractions given fixed paired-data budget for the three scenario-conditioned methods. As shown in Figure 5, S CAPE keeps improving as more cheap surrogate data is incorporated. In contrast, RS-Mix peaks early and then degrades because naive mixing pollutes the training signal. PPI-NN also benefits from additional surrogate data but exhibits higher empirical training variance and instability. We hypothesize that this behavior arises because its subtractive correction is estimated from limited paired data, which can induce conflicting, high-variance gradients during non-convex neural-network training. In con-trast, S CAPE separates correction from augmentation. It first converts surrogate data into target-aligned pseudo-labels and then trains the final predictor separately. 
+
+SCAPE benefits performance prediction on out-of-distribution scenarios. Deployment often expands from familiar scenarios to broader OOD conditions, requiring performance estimates be-fore target testing. We test whether S CAPE can use surrogate-only data from reconstructed OOD scenarios to improve prediction without OOD target labels. In nuPlan, we leave out one city from paired training and evaluate on the test set (Figure 5). Across all evaluated planners, without OOD surrogate data, S CAPE already achieves the lowest average loss, outperforming the other scenario-conditioned baselines by 3.3% ; adding surrogate-only data from the held-out city further reduces its loss by 4.8% , recovering 95 .3% of full-training performance and widening its margin over the scenario-conditioned baselines to 5.3% . Note that this experiment evaluates OOD point-prediction performance; we do not claim conformal coverage under this distribution shift. 
+
+Figure 5: Additional nuPlan results. Left: city-level OOD generalization results for UrbanDriver . Bars show mean ± standard error over 4 city holdouts. Right: UrbanDriver results at paired data fraction 1.0 with varying surrogate-only fraction. Curves report mean ± standard error over 9 (3 paired-data seed × 3 surrogate-data seed) random seeds. 
+
+8Figure 6: Evaluator guided planner selection accuracy and corresponding selected performance. Results for fraction of paired-label 1.0 are reported. Learned evaluators are used to select the predicted best planner for each scenario. Bars show mean ± standard error over 10 paired-data seeds. 
+
+Scenario-level evaluation enables scenario-conditioned deployment strategy. SCAPE enables scenario-conditioned policy selection instead of using a single policy universally. To demonstrate this benefit, we use each evaluator as a router that selects the predicted best planner for each scenario. Figure 6 shows that S CAPE achieves the best selected performance on all four metrics, improv-ing over the scenario-conditioned and aggregate-mean baselines by 1.67% and 6.47% on average, respectively. Although aggregate-mean baselines show high selection accuracy on drivable-area compliance and no ego at-fault collision, they often route all scenarios to the best-average planner, masking rare failures. In contrast, S CAPE often selects a near-best planner even when it misses the oracle best, yielding better ensemble performance. 
+
+5 Conclusion 
+
+In this work, we present S CAPE , a scenario-conditioned, simulation-augmented framework for pol-icy evaluation that estimates scenario-conditioned real-world policy performance with calibrated uncertainty from limited paired sim-and-real evaluations and large-scale simulation-only rollouts. Across autonomous driving and quadruped velocity tracking, and validated from simulation to a physical Unitree Go2, S CAPE predicts real-world performance more accurately than scene-conditioned neural and aggregate statistical baselines, uses scarce real-world testing samples more efficiently, generalizes better to OOD scenarios, and produces narrower calibrated intervals. It also enables fine-grained, scenario-level policy comparison and deployment strategy. 
+
+Limitations and future work. SCAPE currently uses split conformal prediction, which provides an uncertainty set with identical size over the scenario distribution, instead of true conditional coverage with scenario-dependent width. Our real-world evaluation also remains limited in scope, and broader experiments across different embodiments, tasks, and a broader range of scenarios are helpful to fully characterize S CAPE ’s performance. Finally, while S CAPE yields strong empirical performance, rigorous theoretical analysis would further strengthen its value for trustworthy policy deployment. 9References 
+
+[1] S. Grigorescu, B. Trasnea, T. Cocias, and G. Macesanu. A survey of deep learning techniques for autonomous driving. Journal of Field Robotics , 37(3):362–386, 2020. [2] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn, K. Gopalakrishnan, K. Haus-man, A. Herzog, J. Hsu, et al. RT-1: Robotics transformer for real-world control at scale. arXiv preprint arXiv:2212.06817 , 2022. [3] C. Tang, B. Abbatematteo, J. Hu, R. Chandra, R. Mart´ ın-Mart´ ın, and P. Stone. Deep rein-forcement learning for robotics: A survey of real-world successes. Annual Review of Control, Robotics, and Autonomous Systems , 8(1):153–188, 2025. [4] N. Kalra and S. M. Paddock. Driving to safety: How many miles of driving would it take to demonstrate autonomous vehicle reliability? Transportation Research Part A: Policy and Practice , 94:182–193, 2016. [5] M. Mittal, C. Yu, Q. Yu, J. Liu, N. Rudin, D. Hoeller, J. L. Yuan, R. Singh, Y. Guo, H. Mazhar, A. Mandlekar, B. Babich, G. State, M. Hutter, and A. Garg. Orbit: A unified simulation framework for interactive robot learning environments. IEEE Robotics and Automation Letters ,8(6):3740–3747, 2023. [6] Q. Li, Z. M. Peng, L. Feng, Z. Liu, C. Duan, W. Mo, and B. Zhou. ScenarioNet: Open-source platform for large-scale traffic scenario simulation and modeling. In Advances in Neural Information Processing Systems , volume 36, pages 3894–3920, 2023. [7] C. Gulino, J. Fu, W. Luo, G. Tucker, E. Bronstein, Y. Lu, J. Harb, X. Pan, Y. Wang, X. Chen, J. D. Co-Reyes, R. Agarwal, R. Roelofs, Y. Lu, N. Montali, P. Mougin, Z. Yang, B. White, A. Faust, R. McAllister, D. Anguelov, and B. Sapp. Waymax: An accelerated, data-driven simulator for large-scale autonomous driving research. In Advances in Neural Information Processing Systems , volume 36, pages 7730–7742, 2023. [8] X. Li, K. Hsu, J. Gu, K. Pertsch, O. Mees, H. R. Walke, C. Fu, I. Lunawat, I. Sieh, S. Kir-mani, S. Levine, J. Wu, C. Finn, H. Su, Q. Vuong, and T. Xiao. Evaluating real-world robot manipulation policies in simulation. arXiv preprint arXiv:2405.05941 , 2024. [9] K. Zhang, S. Sha, H. Jiang, M. Loper, H. Song, G. Cai, Z. Xu, X. Hu, C. Zheng, and Y. Li. Real-to-sim robot policy evaluation with gaussian splatting simulation of soft-body interactions. 
+
+arXiv preprint arXiv:2511.04665 , 2025. [10] A. B. Owen. Monte Carlo Theory, Methods and Examples . Self-published, 2013. URL 
+
+https://artowen.su.domains/mc/ .[11] R. Luo, H. Yang, M. Watson, A. Sharma, S. Veer, E. Schmerling, and M. Pavone. Sim2Val: Leveraging correlation across test platforms for variance-reduced metric estimation. In Pro-ceedings of the Conference on Robot Learning , 2025. [12] A. N. Angelopoulos, S. Bates, C. Fannjiang, M. I. Jordan, and T. Zrnic. Prediction-powered inference. Science , 382(6671):669–674, 2023. doi:10.1126/science.adi6000. [13] A. Badithela, D. Snyder, L. Zha, J. Mikhail, M. O’Kelly, A. Dixit, and A. Majumdar. Reliable and scalable robot policy evaluation with imperfect simulators. arXiv preprint arXiv:2510.04354 , 2025. [14] M. Wang, D. J. Zhang, and H. Zhang. Large language models for market research: A data-augmentation approach. Marketing Science , 2026. doi:10.1287/mksc.2025.0009. [15] A. Dosovitskiy, G. Ros, F. Codevilla, A. Lopez, and V. Koltun. CARLA: An open urban driving simulator. In Proceedings of the 1st Annual Conference on Robot Learning , volume 78 of Proceedings of Machine Learning Research , pages 1–16. PMLR, 2017. 10 [16] Q. Li, Z. Peng, L. Feng, Q. Zhang, Z. Xue, and B. Zhou. MetaDrive: Composing diverse driv-ing scenarios for generalizable reinforcement learning. IEEE Transactions on Pattern Analysis and Machine Intelligence , 45(3):3461–3475, 2022. [17] E. Todorov, T. Erez, and Y. Tassa. MuJoCo: A physics engine for model-based control. In 
+
+2012 IEEE/RSJ International Conference on Intelligent Robots and Systems , pages 5026– 5033. IEEE, 2012. [18] V. Makoviychuk, L. Wawrzyniak, Y. Guo, M. Lu, K. Storey, M. Macklin, D. Hoeller, N. Rudin, A. Allshire, A. Handa, and G. State. Isaac Gym: High performance gpu-based physics simu-lation for robot learning. arXiv preprint arXiv:2108.10470 , 2021. [19] J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba, and P. Abbeel. Domain randomization for transferring deep neural networks from simulation to the real world. In 2017 IEEE/RSJ International Conference on Intelligent Robots and Systems , pages 23–30. IEEE, 2017. [20] X. B. Peng, M. Andrychowicz, W. Zaremba, and P. Abbeel. Sim-to-real transfer of robotic control with dynamics randomization. In 2018 IEEE International Conference on Robotics and Automation , pages 3803–3810. IEEE, 2018. [21] J. Tan, T. Zhang, E. Coumans, A. Iscen, Y. Bai, D. Hafner, S. Bohez, and V. Vanhoucke. Sim-to-real: Learning agile locomotion for quadruped robots. In Robotics: Science and Systems ,2018. [22] J. Hwangbo, J. Lee, A. Dosovitskiy, D. Bellicoso, V. Tsounis, V. Koltun, and M. Hutter. Learn-ing agile and dynamic motor skills for legged robots. Science Robotics , 4(26):eaau5872, 2019. [23] A. Kumar, Z. Fu, D. Pathak, and J. Malik. RMA: Rapid motor adaptation for legged robots. In 
+
+Proceedings of Robotics: Science and Systems , Virtual, July 2021. doi:10.15607/RSS.2021. XVII.011. [24] J. A. Vincent, H. Nishimura, M. Itkina, P. Shah, M. Schwager, and T. Kollar. How generalizable is my behavior cloning policy? a statistical approach to trustworthy performance evaluation. 
+
+IEEE Robotics and Automation Letters , 9(10):8619–8626, 2024. [25] W. Hoeffding. Probability inequalities for sums of bounded random variables. Journal of the American Statistical Association , 58(301):13–30, 1963. [26] J. Lei, M. G’Sell, A. Rinaldo, R. J. Tibshirani, and L. Wasserman. Distribution-free predictive inference for regression. Journal of the American Statistical Association , 113(523):1094–1111, 2018. doi:10.1080/01621459.2017.1307116. [27] A. N. Angelopoulos and S. Bates. A gentle introduction to conformal prediction and distribution-free uncertainty quantification. Foundations and Trends in Machine Learning ,16(4), 2023. doi:10.1561/2200000101. [28] H. Caesar, J. Kabzan, K. S. Tan, W. K. Fong, E. Wolff, A. Lang, L. Fletcher, O. Beijbom, and S. Omari. nuplan: A closed-loop ml-based planning benchmark for autonomous vehicles. 
+
+arXiv preprint arXiv:2106.11810 , 2021. [29] A. Escontrela, J. Kerr, A. Allshire, J. Frey, R. Duan, C. Sferrazza, and P. Abbeel. Gauss-Gym: An open-source real-to-sim framework for learning locomotion from pixels, 2025. URL 
+
+https://arxiv.org/abs/2510.15352 .[30] P.-E. Sarlin, C. Cadena, R. Siegwart, and M. Dymczyk. From coarse to fine: Robust hierar-chical localization at large scale. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition , pages 12716–12725, 2019. [31] P.-E. Sarlin, D. DeTone, T. Malisiewicz, and A. Rabinovich. SuperGlue: Learning feature matching with graph neural networks. In Proceedings of the IEEE/CVF Conference on Com-puter Vision and Pattern Recognition , pages 4938–4947, 2020. 11 A Appendix 
+
+Appendix Contents 
+
+A.1 SCAPE Algorithm Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13 A.2 nuPlan Dataset Statistics . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13 A.3 Quadruped Velocity-Tracking Dataset Statistics . . . . . . . . . . . . . . . . . . . 14 A.4 Baseline Definition . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15 A.5 SCAPE MLP Hyperparameters . . . . . . . . . . . . . . . . . . . . . . . . . . . . 16 A.6 Evaluation Metrics and Reported Quantities . . . . . . . . . . . . . . . . . . . . . 17 A.7 Additional nuPlan Scenario-Level Prediction Results . . . . . . . . . . . . . . . . 19 A.8 Full Conformal Prediction Results . . . . . . . . . . . . . . . . . . . . . . . . . . 19 A.9 Additional OOD Generalization Results . . . . . . . . . . . . . . . . . . . . . . . 21 A.10 Full Surrogate Correction Results . . . . . . . . . . . . . . . . . . . . . . . . . . 21 A.11 Additional Evaluator-Guided Planner Selection Results . . . . . . . . . . . . . . . 22 12 A.1 SCAPE Algorithm Details Algorithm 1: SCAPE 
+
+Data: Paired training set Dp = {(xi, r i, s i)}ni=1 , surrogate-only set Ds = {(xk , s k )}ℓk=1 , calibration set 
+
+Dc = {(xj , r j )}mj=1 , miscoverage level α
+
+Result: Scenario-level estimator fθ and calibrated prediction interval Cα(x)
+
+1: gϕ ← TRAIN CORRECTION (Dp)
+
+2: for (xk , s k ) ∈ D s do 3: ˜rk ← gϕ(xk , s k )
+
+4: end 5: Dpseudo ← { (xk , ˜rk )}ℓk=1 
+
+6: DRp ← { (xi, r i)}ni=1 
+
+7: Daug ← D Rp ∪ D pseudo 
+
+8: fθ ← TRAIN EVALUATOR (Daug )
+
+9: for (xj , r j ) ∈ D c do 10: ej ← | rj − fθ (xj )|
+
+11: end 12: ˆq1−α ← CONFORMAL QUANTILE ({ej }mj=1 , α )
+
+13: for test scenario x do 14: ˆr(x) ← fθ (x)
+
+15: Cα(x) ← [fθ (x) − ˆq1−α, f θ (x) + ˆ q1−α]
+
+16: end 17: return fθ (x), C α(x)
+
+ConformalQuantile Input: scores {ej }mj=1 , miscoverage 
+
+α.Sort scores: 
+
+e(1) ≤ · · · ≤ e(m).
+
+Set 
+
+h = ⌈(m + 1)(1 − α)⌉ .
+
+Return 
+
+ˆq1−α = e(min {h,m }).
+
+For discrete metrics, replace ej with the corresponding classification con-formal score. 
+
+Algorithm A.1 summarizes the full S CAPE pipeline. Lines 1–4 train the correction model gϕ on paired samples and use it to relabel each surrogate-only example with a corrected target ˜rk. Lines 5–7 merge the trusted paired labels with the corrected surrogate labels to form the augmented train-ing set. Line 8 trains the scenario-level evaluator fθ using this augmented set, so that the final predictor depends only on scenario context x. Lines 9–12 compute calibration residuals on the held-out calibration set Dc. Line 13 converts these residuals into the split-conformal quantile ˆq1−α, using the finite-sample correction shown in the ConformalQuantile box. Lines 14–17 apply the calibrated evaluator to each test scenario and return both the point prediction fθ (x) and its prediction inter-val Cα(x). For binary metrics, the residual score is replaced by the corresponding classification conformity score, yielding a conformal prediction set instead of a regression interval. 
+
+A.2 nuPlan Dataset Statistics Data collection. We first train the three ML-based motion planner provided by nuPlan: 
+
+urban driver open loop model , vector model , and simple vector model . These models serve as the target policies to be evaluated. To maintain diversity, each planner dataset covers 62 scenario types, such as crosswalk traversal, traffic-light stopping, and lane changing, from four map locations: Singapore, Boston, Las Vegas, and Pittsburgh. In total, for each planner dataset, we col-lect approximately 83 .6K paired training samples for Dp, 15 .5K paired validation samples for Dv ,
+
+28 .3K paired test samples for Dtest , 1.15 K held-out calibration samples for Dc, and 119 K– 135 Ksurrogate-only samples for Ds. Detailed dataset composition is provided below. 
+
+Frozen Urban Driver feature representation. For the nuPlan experiments, we use a sepa-rately trained Urban Driver feature encoder to convert each scenario observation into a fixed 256-dimensional feature vector x ∈ R256 . The encoder is kept frozen during SCAPE training, and all downstream evaluator models operate only on this extracted vector x.The input to the encoder contains ego-vehicle history, nearby-agent history, local vector-map con-text, and traffic-light state. The ego history is represented as a temporal polyline whose per-timestep feature is (x, y, θ ) ∈ R3. Each nearby-agent polyline uses a 7-dimensional per-timestep feature containing position, heading, velocity, yaw rate, length, and width: (x, y, θ, v, ˙θ, l, w ) ∈ R7. Traffic-light status is encoded as a 4-dimensional one-hot vector indicating green, yellow, red, or unknown 13 state. Local map elements, including lanes, lane boundaries, stop lines, crosswalks, and route lanes, are represented as vector polylines in the local ego-centric coordinate frame. The encoder first maps each raw polyline element to a learned local descriptor in R256 . Thus ego, agent, and map polylines are all embedded into the same 256-dimensional descriptor space after local encoding, even though their raw input channel dimensions differ. A global attention module then uses the ego query to aggregate ego, agent, map, and traffic-light context into a single scene-level feature vector x ∈ R256 . This 256-dimensional vector is the only feature used by the SCAPE evaluator and the neural baselines; the raw ego, agent, map, and traffic-light inputs are not updated or re-encoded during evaluator training.                                                                       
+
+> Table 3: Detailed city-level composition of the S CAPE nuPlan self-driving experiments dataset splits. Planner Split Singapore Boston Las Vegas Pittsburgh Urban Driver Open-Loop Train 19,504 20,145 23,833 20,123 Val 3,555 3,574 4,547 3,791 Test 6,993 6,347 7,737 7,188 Calibration 264 254 355 276 Surrogate 31,521 30,939 39,890 16,841 Vector Model Train 19,504 20,145 23,833 20,123 Val 3,555 3,574 4,547 3,791 Test 6,993 6,347 7,737 7,188 Calibration 266 254 355 276 Surrogate 31,532 30,939 39,890 33,118 Simple Vector Model Train 19,504 20,145 23,833 20,122 Val 3,555 3,574 4,547 3,791 Test 6,993 6,347 7,737 7,188 Calibration 265 254 355 276 Surrogate 31,531 30,939 39,890 33,118
+
+A.3 Quadruped Velocity-Tracking Dataset Statistics Data collection. We evaluate a quadruped velocity-tracking policy under two regimes: Sim2Sim ,where both the target R and surrogate S come from simulation with different domain-randomization seeds, and Sim2Real , where R is measured on the physical robot and S is obtained from a matched IsaacLab rollout. Each terrain is reconstructed from an iPhone Polycam scan, yielding a textured mesh. For Sim2Sim, paired samples Dp span 4 indoor/outdoor scenes; for Sim2Real, samples are collected over 95 HLoc [30]-localized deploy poses across 5 scenes ( indoor , grass , dirt , dirt1 ,
+
+brick ). In total, for the Sim2Sim setting we collect 300 paired training samples for Dp, 200 paired validation samples for Dv that also serve as the held-out calibration set Dc, 200 paired test samples for Dtest , and 1,493 surrogate-only samples for Ds; for Sim2Real, 65 /15 /15 paired train/val/test samples and 195 surrogate-only samples. Paired real and reconstructed simulation is shown in Figure 7. Detailed dataset composition is provided below. Indoor  Grass  Dirt  Dirt1  Brick  
+
+> Real
+> Scene
+> Reconstructed
+> Simulation
+> Figure 7: Paired real and reconstructed simulation scenes. The top row shows real-world scenes, and the bottom row shows their corresponding reconstructed simulation environments.
+
+14 Table 4: Detailed scene-level composition of the S CAPE quadruped velocity tracking dataset splits.                                     
+
+> For each setting, the paired pool ( Dp) is randomly shuffled and split into Train/Val/Test ( 300 /200 /200 for Sim2Sim, 65 /15 /15 for Sim2Real) independently for each of the 10 random seeds, so we report the per-scene totals; surrogate samples ( Ds) are unsplit.
+> Sim2Sim
+> scene1 scene2 scene3 scene4 Total
+> Paired ( Dp)59 293 29 319 700 Surrogate ( Ds)109 619 69 696 1,493
+> Sim2Real
+> indoor grass dirt dirt1 brick Total
+> Paired ( Dp)15 25 25 921 95 Surrogate ( Ds)37 50 46 22 40 195
+
+Frozen quadruped velocity-tracking feature representation. For the quadruped velocity-tracking experiments, we represent each locomotion scenario using a hand-engineered, fixed feature vector x ∈ Rd constructed from the robot’s local terrain geometry and velocity command. Unlike the nuPlan experiments, no learned backbone encoder is used. This feature vector is kept fixed dur-ing SCAPE training, and all downstream models, including the scenario evaluator fθ and the S CAPE 
+
+correction model gϕ, operate only on x.The terrain component is computed by a body-frame raycaster on the Polycam terrain mesh and stores per-cell terrain heights relative to the robot base. In the Sim2Sim setting, we use a 10 × 8
+
+local elevation crop covering X ∈ [−0.25 , 1.25] m and Y ∈ [−0.60 , 0.60] m at 0.15 m resolution, yielding an 80-dimensional height feature. This is concatenated with the planar command [vx, ω z ],where vx ∈ [0 .1, 0.5] m s −1 and ωz ∈ [−0.5, 0.5] rad s −1. We do not include a scene identifier in Sim2Sim, since the same Go2 policy is evaluated across all four scenes and both R and S are obtained from simulator rollouts. The resulting feature is x ∈ R82 , formed by the 80-dimensional elevation crop and the 2-dimensional command. In the Sim2Real setting, we use a smaller 11 × 4 local elevation crop covering X ∈ [−0.25 , 1.40] 
+
+m and Y ∈ [−0.30 , 0.30] m at 0.15 m resolution, which matches the physical raycast used by the deployed policy at run time. The 44-dimensional crop is concatenated with the recorded planar com-mand at each HLoc-localized deployment pose, where vx ∈ [0 .4, 0.6] m s −1 and ωz ∈ [−0.2, 0.2] 
+
+rad s −1. We additionally include a 5-dimensional scene one-hot vector over indoor , grass , dirt ,
+
+dirt1 , and brick , since Sim2Real residuals are correlated with visually and tactilely different real-world terrains. The resulting feature is x ∈ R51 , formed by the 44-dimensional elevation crop, the 2-dimensional command, and the 5-dimensional scene identifier. 
+
+A.4 Baseline Definition 
+
+Table 5 summarizes the baselines used in our experiments. The first group contains statistical ag-gregate estimators, which do not condition on scenario observations and therefore provide a single scenario-independent target estimate. MC estimates target performance using only paired target la-bels, serving as the real-data-only reference. CV uses the surrogate metric as a control variate to reduce the variance of the target mean estimate when S and R are correlated. PPI estimates the sur-rogate mean on the large simulation-only set and corrects its bias using paired residuals, representing a prediction-powered aggregate estimator. The second group contains scenario-conditioned neural predictors fθ (x), which are directly compa-rable to S CAPE in producing per-scenario predictions. R-Only trains only on paired target labels and measures the performance achievable without using surrogate-only data. RS-Mix naively augments the paired target labels with raw surrogate labels, testing whether low-cost simulation data can be used directly despite sim-to-real bias. PPI-NN adapts the PPI correction objective to neural training 15 Table 5: Baseline definitions. Statistical baselines estimate aggregate target performance, while neural base-lines train scenario-level predictors fθ (x).
+
+Type Method Definition 
+
+Statistical MC ˆμMC = 1
+
+n
+
+X
+
+> i
+
+ri
+
+Statistical CV ˆμCV = 1
+
+n
+
+X
+
+> i
+
+(ri − ˆβs i) + 1
+
+ℓ
+
+X
+
+> k
+
+ˆβs k , ˆβ = ℓn + ℓ
+
+dCov( s, r )
+
+dVar( s)
+
+Statistical PPI ˆμPPI = 1
+
+ℓ
+
+X
+
+> k
+
+sk + 1
+
+n
+
+X
+
+> i
+
+(ri − si)
+
+Neural R-Only LR = 1
+
+n
+
+X
+
+> i
+
+L(fθ (xi), r i)
+
+Neural RS-Mix LRS = LR + 1
+
+ℓ
+
+X
+
+> k
+
+L(fθ (xk ), s k )
+
+Neural PPI-NN LPPI -NN = 1
+
+ℓ
+
+X
+
+> k
+
+L(fθ (xk ), s k ) + 1
+
+n
+
+X
+
+> i
+
+L(fθ (xi), r i) − L (fθ (xi), s i)
+
+Table 6: MLP architecture and training hyperparameters (nuPlan). The scenario evaluator fθ is used by R-Only, RS-Mix, PPI-NN, and the final evaluator in S CAPE . The correction model gϕ additionally takes the surrogate metric vector s as input and predicts corrected target metrics ˜r. The four output dimensions correspond to ADE, TTC < 1s, drivable-area compliance, and no ego at-fault collision. 
+
+Component Scenario evaluator fθ Correction model gϕ
+
+Input x ∈ R256 [x, s ] ∈ R260 
+
+Output ˆr = fθ (x) ∈ R4 ˜r = gϕ(x, s ) ∈ R4
+
+Hidden layers [1024 , 512 , 256 , 128] [1024 , 512 , 256 , 128] 
+
+Activation ReLU ReLU Dropout 0.2 0.2
+
+Trainable parameters 0.953 M 0.957 MLoss MSE + 3 BCE MSE + 3 BCE Optimizer Adam Adam Learning rate 3 × 10 −5 3 × 10 −5
+
+Weight decay 1 × 10 −4 1 × 10 −4
+
+Batch size 256 256 
+
+Epochs 500 500 
+
+by combining surrogate-only supervision with a paired residual correction term, testing correction during training as an alternative to the correction-before-augmentation design of S CAPE .
+
+A.5 SCAPE MLP Hyperparameters Training objectives and label weighting. The correction model gϕ is trained on the paired data: 
+
+Lg = 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+L gϕ(xi, s i), r i
+
+, ˜rk = gϕ(xk, s k).
+
+The final predictor fθ is then trained on the real and corrected pseudo labels: 
+
+Lf = 1
+
+n + ℓ
+
+> n
+
+X
+
+> i=1
+
+L fθ (xi), r i
+
+ + wpseudo 
+
+> ℓ
+
+X
+
+> k=1
+
+L fθ (xk), ˜rk
+
+!
+
+.
+
+All main experiments use wpseudo = 1 , assigning equal per-sample weights to real and corrected pseudo labels without dataset-specific tuning. 
+
+nuPlan . For both fθ and gϕ, all output metrics are weighted equally. We use mean squared error (MSE) for the continuous average displacement error (ADE) metric and binary cross-entropy (BCE) for the binary metrics, including time-to-collision (TTC) under 1s, drivable-area compliance (DA), and no ego at-fault collision (NAFC): 16 Table 7: MLP architecture and training hyperparameters (quadruped). The scenario evaluator fθ is used by R-Only, RS-Mix, PPI-NN, and the final evaluator in S CAPE . The correction model gϕ additionally takes the surrogate metric vector s as input and predicts corrected target metrics ˜r. The two output dimensions correspond to the per-step velocity tracking error v and yaw-rate tracking error ω. Input dimensionality d=51 
+
+(44 -D 11 ×4 ground-height crop + [ vx, ω z ] command + 5 -D scene one-hot) for the sim-to-real experiment, and d=82 for the in-sim experiment. 
+
+Component Scenario evaluator fθ Correction model gϕ
+
+Input x ∈ Rd [x, s ] ∈ Rd+2 
+
+Output ˆr = fθ (x) ∈ R2 ˜r = gϕ(x, s ) ∈ R2
+
+Hidden layers [128 , 64 , 32] [128 , 64 , 32] 
+
+Activation ReLU ReLU Dropout 0.3 0.3
+
+Trainable parameters 16 .8K 17 .1KLoss 2 MSE 2 MSE Target normalization z-score (train split) z-score (train split) Optimizer Adam Adam Learning rate 3 × 10 −4 3 × 10 −4
+
+Weight decay 1 × 10 −3 1 × 10 −3
+
+Batch size 64 64 
+
+Epochs 500 500 
+
+L(ˆ r, r ) = MSE ADE + BCE TTC + BCE DA + BCE NAFC .
+
+Quadruped. For both fθ and gϕ, the two output metrics are weighted equally. Given prediction 
+
+ˆr = (ˆ v, ˆω) and target r = ( v, ω ), we use 
+
+L(ˆ r, r ) = MSE v (ˆ v, v ) + MSE ω (ˆ ω, ω ),
+
+where v and ω are the per-step velocity- and yaw-rate-tracking errors (m/s and rad/s) computed over a 2-s rollout. MSE targets are z-scored using the training-split statistics. 
+
+A.6 Evaluation Metrics and Reported Quantities 
+
+We summarize how the reported quantities are computed. For a fixed target metric, let T =
+
+{(xi, r i)}ni=1 denote the test set, where xi is a scenario and ri is the target measurement. For SCAPE , let ˆri denote its prediction on xi; for a baseline B, let ˆrBi denote the corresponding baseline prediction. For binary metrics, the prediction is the positive-class probability. 
+
+Task performance metrics. For nuPlan, we evaluate each planner using four target metrics. Av-erage displacement error (ADE) is the mean displacement between the planned ego trajectory and the logged expert trajectory. TTC < 1s is a binary safety metric indicating whether the ego ve-hicle reaches a time-to-collision below one second. Drivable-area compliance and no ego at-fault collision are binary metrics indicating whether the ego trajectory stays within the drivable area and avoids at-fault collisions, respectively. For quadruped velocity tracking, each target measurement is a rollout-level tracking error computed over a 2-s rollout. MAE vel and MAE yaw denote the mean absolute errors between the commanded and measured forward velocity and yaw rate, respectively. Lower values indicate better tracking. 
+
+Test loss. For nuPlan continuous targets, we report mean squared error: 
+
+L(SCAPE ) = 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+(ˆ ri − ri)2 . (1) For nuPlan binary targets, we report binary cross entropy: 
+
+L(SCAPE ) = − 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+[ri log ˆ ri + (1 − ri) log(1 − ˆri)] . (2) 17 For quadruped continuous velocity tracking targets, we report mean absolute prediction error on the rollout-level tracking-error targets: 
+
+L(SCAPE ) = 1
+
+n
+
+> n
+
+X
+
+> i=1
+
+|ˆri − ri| . (3) The same metric-specific definition is used for each baseline B by replacing ˆri with ˆrBi . All prediction-loss results, including the main paired-data sweep, OOD experiments, and surrogate-scaling experiments, are computed using the corresponding task-specific test loss. 
+
+Relative loss reduction. Given a baseline B, the relative test-loss reduction of S CAPE is 
+
+∆loss (SCAPE , B ) = 100% 
+
+ L(B) − L (SCAPE )
+
+L(B)
+
+
+
+. (4) When multiple metrics, planners, paired-data fractions, or random seeds are involved, we first com-pute the loss for each setting and then report the average relative reduction over the corresponding collection of settings. 
+
+Paired-label efficiency. Let ρp ∈ (0 , 1] denote the fraction of the full paired training set Dp used for training. For a target loss level τ , let ρSCAPE (τ ) be the smallest paired-data fraction at which SCAPE reaches loss no larger than τ , and define ρB (τ ) analogously for baseline B. The paired-label saving of S CAPE relative to B is 
+
+LabelEfficiency( SCAPE , B ; τ ) = 100% 
+
+
+
+1 − ρSCAPE (τ )
+
+ρB (τ )
+
+
+
+. (5) In the main results, τ is chosen as the strongest full-budget baseline performance, and we report how much paired data S CAPE saves while matching that target performance. 
+
+Surrogate-data scaling capacity. Let ρs ∈ (0 , 1] denote the fraction of the simulation-only set Ds
+
+used for training. To study correction capacity, we fix ρp, vary ρs, retrain each scenario-conditioned method, and report the resulting test loss L(ρp, ρ s). This measures how much surrogate-only data can be safely converted into useful supervision under a fixed paired-label budget. For each paired-data fraction, the best surrogate fraction is the ρs that gives the lowest test loss. 
+
+nuPlan OOD evaluation. The nuPlan OOD experiment uses the same test-loss definition above. For OOD evaluation, paired target labels from one city are removed during training, while evaluation is performed on the original test set for direct comparison with the standard full-training setting. We compare training with and without OOD surrogate-only data by the relative loss reduction: 
+
+∆OOD -S(SCAPE ) = 100% 
+
+ Lno -OOD -S(SCAPE ) − L with -OOD -S(SCAPE )
+
+Lno -OOD -S(SCAPE )
+
+
+
+. (6) 
+
+Conformal calibration. For conformal uncertainty evaluation, each trained evaluator is calibrated on the held-out calibration set Dc = {(xj , r j )}mj=1 . For continuous metrics, we compute residual scores ej = |rj − ˆrj |. Given miscoverage level α, the split-conformal threshold is 
+
+ˆq1−α = Quantile ⌈(m+1)(1 −α)⌉/m 
+
+ {ej }mj=1 
+
+ , (7) and the prediction interval is 
+
+Cα(x) = [ˆ r(x) − ˆq1−α, ˆr(x) + ˆ q1−α]. (8) For binary metrics, we compute the corresponding classification conformity scores and return a conformal prediction set Cα(x) ⊆ { 0, 1}.For nuPlan, the continuous-metric procedure is used for ADE, while the binary conformal procedure is used for TTC < 1s, drivable-area compliance, and no ego at-fault collision. For quadruped, both 
+
+MAE vel and MAE yaw are continuous metrics and use the same residual-based conformal interval. 18 We verify empirical coverage on the test set: 
+
+dCov = 1
+
+n
+
+nX
+
+i=1 
+
+1 [ri ∈ Cα(xi)] . (9) For continuous metrics, the reported conformal width is the interval length 2ˆ q1−α. For binary met-rics, the reported width is the average prediction-set size: 
+
+W = 1
+
+n
+
+nX
+
+i=1 
+
+|Cα(xi)|. (10) 
+
+A.7 Additional nuPlan Scenario-Level Prediction Results 
+
+(a) Vector (b) Simple Vector 
+
+Figure 8: Additional scenario-level prediction results on nuPlan. Panels (a) and (b) report Vector and Simple Vector planner results, respectively. Test loss is reported as the paired-data fraction varies; curves show mean ± standard error over 10 random paired-data seeds. 
+
+A.8 Full Conformal Prediction Results 
+
+Table 8: Full split conformal width sweep on nuPlan Urban Driver. Columns are paired-data fractions. Cells are mean ± standard error over 10 paired-data seeds; bold marks the narrowest method per column. For ADE, width is interval length in meters; for binary targets, width is average prediction-set size. cov. reports empirical test coverage range across neural methods. 
+
+ADE, interval width (m). cov. 0.946–0.953 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 44 .92 ±0.26 43 .23 ±0.23 42 .10 ±0.34 41 .69 ±0.22 41 .00 ±0.35 40 .64 ±0.26 40 .63 ±0.26 40 .35 ±0.26 39 .93 ±0.26 40 .07 ±0.26 
+
+PPI-NN 45 .21 ±0.26 45 .11 ±0.21 44 .91 ±0.32 44 .76 ±0.18 44 .60 ±0.09 44 .25 ±0.16 44 .55 ±0.18 44 .44 ±0.14 44 .17 ±0.21 44 .44 ±0.16 
+
+RS-Mix 49 .09 ±0.21 48 .52 ±0.18 47 .90 ±0.25 46 .78 ±0.30 47 .08 ±0.30 46 .38 ±0.31 45 .41 ±0.12 45 .66 ±0.20 45 .45 ±0.18 44 .65 ±0.16 
+
+R-Only 46 .11 ±0.22 44 .73 ±0.35 43 .82 ±0.18 43 .68 ±0.31 42 .80 ±0.30 42 .27 ±0.22 42 .00 ±0.22 41 .98 ±0.21 40 .99 ±0.16 41 .02 ±0.30 
+
+MC 50 .21 ±0.11 50 .22 ±0.09 50 .26 ±0.07 50 .24 ±0.04 50 .25 ±0.03 50 .28 ±0.03 50 .28 ±0.02 50 .28 ±0.02 50 .28 ±0.01 50 .27 ±0.00 
+
+CV 50 .37 ±0.04 50 .32 ±0.03 50 .31 ±0.02 50 .29 ±0.02 50 .29 ±0.02 50 .29 ±0.01 50 .29 ±0.01 50 .29 ±0.01 50 .29 ±0.00 50 .29 ±0.00 
+
+PPI 50 .41 ±0.05 50 .35 ±0.03 50 .33 ±0.03 50 .32 ±0.03 50 .31 ±0.02 50 .31 ±0.01 50 .29 ±0.01 50 .30 ±0.01 50 .31 ±0.01 50 .31 ±0.00 
+
+TTC < 1s, average set size. cov. 0.941–0.957 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.600 ±0.006 1 .558 ±0.006 1 .532 ±0.007 1 .516 ±0.009 1 .492 ±0.003 1 .486 ±0.007 1 .472 ±0.006 1 .468 ±0.006 1 .453 ±0.005 1 .447 ±0.010 
+
+PPI-NN 1.665 ±0.006 1.643 ±0.005 1.627 ±0.004 1.623 ±0.004 1.620 ±0.006 1.618 ±0.004 1.619 ±0.006 1.614 ±0.005 1.613 ±0.005 1.614 ±0.004 
+
+RS-Mix 1.654 ±0.004 1.632 ±0.004 1.609 ±0.006 1.591 ±0.008 1.577 ±0.005 1.559 ±0.004 1.540 ±0.006 1.526 ±0.006 1.519 ±0.006 1.505 ±0.006 
+
+R-Only 1.623 ±0.005 1.586 ±0.007 1.564 ±0.004 1.555 ±0.006 1.543 ±0.006 1.540 ±0.004 1.536 ±0.004 1.528 ±0.005 1.512 ±0.003 1.497 ±0.003 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+Drivable Area, average set size. cov. 0.929–0.941 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.219 ±0.006 1.173 ±0.006 1 .156 ±0.001 1 .153 ±0.004 1 .135 ±0.002 1 .132 ±0.003 1 .131 ±0.003 1 .126 ±0.004 1 .118 ±0.003 1 .118 ±0.004 
+
+PPI-NN 1.286 ±0.004 1.263 ±0.004 1.255 ±0.003 1.246 ±0.003 1.245 ±0.003 1.240 ±0.003 1.238 ±0.003 1.235 ±0.004 1.231 ±0.003 1.233 ±0.004 
+
+RS-Mix 1.217 ±0.004 1.202 ±0.004 1.199 ±0.001 1.186 ±0.003 1.176 ±0.004 1.173 ±0.002 1.174 ±0.003 1.162 ±0.003 1.153 ±0.004 1.152 ±0.002 
+
+R-Only 1.273 ±0.004 1.231 ±0.005 1.207 ±0.002 1.193 ±0.003 1.183 ±0.004 1.178 ±0.004 1.166 ±0.004 1.165 ±0.004 1.156 ±0.002 1.155 ±0.003 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+No At-Fault Collision, average set size. cov. 0.947–0.960 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.573 ±0.006 1 .532 ±0.008 1 .505 ±0.005 1 .498 ±0.007 1 .469 ±0.003 1 .472 ±0.007 1 .456 ±0.004 1 .452 ±0.004 1 .444 ±0.006 1 .430 ±0.004 
+
+PPI-NN 1.637 ±0.006 1.616 ±0.005 1.597 ±0.005 1.590 ±0.003 1.586 ±0.003 1.577 ±0.005 1.577 ±0.005 1.570 ±0.004 1.573 ±0.005 1.573 ±0.004 
+
+RS-Mix 1.608 ±0.003 1.590 ±0.004 1.574 ±0.005 1.557 ±0.005 1.544 ±0.004 1.531 ±0.006 1.520 ±0.004 1.510 ±0.005 1.506 ±0.004 1.495 ±0.003 
+
+R-Only 1.597 ±0.004 1.556 ±0.006 1.540 ±0.006 1.529 ±0.006 1.517 ±0.004 1.520 ±0.003 1.509 ±0.004 1.498 ±0.007 1.488 ±0.004 1.474 ±0.009 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+19 Table 9: Full split conformal width sweep on nuPlan Vector. Columns are paired-data fractions. Cells are mean ± standard error over 10 paired-data seeds; bold marks the narrowest method per column. For ADE, width is interval length in meters; for binary targets, width is average prediction-set size. cov. reports empirical test coverage range across neural methods. 
+
+ADE, interval width (m). cov. 0.942–0.955 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 48 .78 ±0.47 46 .67 ±0.44 45 .88 ±0.40 44 .82 ±0.25 45 .13 ±0.48 43 .64 ±0.35 43 .75 ±0.43 43 .77 ±0.41 43 .27 ±0.29 43 .43 ±0.29 
+
+PPI-NN 51 .20 ±0.29 51 .54 ±0.20 50 .72 ±0.22 50 .44 ±0.26 50 .29 ±0.21 50 .06 ±0.30 49 .96 ±0.18 49 .88 ±0.27 50 .33 ±0.24 49 .88 ±0.14 
+
+RS-Mix 47 .49 ±0.21 46 .91 ±0.24 46 .11 ±0.20 46 .29 ±0.22 46 .13 ±0.18 45 .59 ±0.24 45 .16 ±0.20 45 .22 ±0.27 44 .98 ±0.24 44 .98 ±0.27 
+
+R-Only 51 .47 ±0.34 50 .26 ±0.39 49 .28 ±0.45 48 .60 ±0.45 48 .38 ±0.31 47 .70 ±0.28 47 .17 ±0.39 47 .20 ±0.27 47 .04 ±0.23 46 .82 ±0.23 
+
+MC 56 .23 ±0.09 56 .25 ±0.09 56 .30 ±0.07 56 .32 ±0.05 56 .31 ±0.03 56 .32 ±0.03 56 .31 ±0.02 56 .30 ±0.01 56 .26 ±0.01 56 .26 ±0.00 
+
+CV 56 .48 ±0.04 56 .47 ±0.03 56 .49 ±0.02 56 .47 ±0.02 56 .45 ±0.02 56 .45 ±0.01 56 .44 ±0.01 56 .43 ±0.01 56 .41 ±0.01 56 .41 ±0.00 
+
+PPI 56 .54 ±0.04 56 .53 ±0.02 56 .55 ±0.02 56 .54 ±0.01 56 .53 ±0.01 56 .52 ±0.01 56 .52 ±0.01 56 .53 ±0.01 56 .53 ±0.01 56 .54 ±0.00 
+
+TTC < 1s, average set size. cov. 0.939–0.954 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.705 ±0.006 1 .664 ±0.007 1 .655 ±0.004 1 .628 ±0.006 1 .623 ±0.005 1 .619 ±0.004 1 .612 ±0.006 1 .608 ±0.005 1 .586 ±0.006 1 .591 ±0.006 
+
+PPI-NN 1.743 ±0.004 1.727 ±0.004 1.714 ±0.002 1.716 ±0.004 1.711 ±0.003 1.707 ±0.004 1.704 ±0.002 1.702 ±0.004 1.699 ±0.003 1.695 ±0.003 
+
+RS-Mix 1.770 ±0.002 1.749 ±0.004 1.729 ±0.002 1.715 ±0.005 1.695 ±0.004 1.688 ±0.005 1.686 ±0.005 1.671 ±0.003 1.659 ±0.004 1.660 ±0.005 
+
+R-Only 1.736 ±0.003 1.703 ±0.004 1.699 ±0.005 1.686 ±0.007 1.673 ±0.005 1.666 ±0.005 1.663 ±0.003 1.661 ±0.004 1.644 ±0.004 1.643 ±0.002 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+Drivable Area, average set size. cov. 0.939–0.947 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.267 ±0.009 1.227 ±0.003 1 .213 ±0.005 1 .199 ±0.004 1 .191 ±0.005 1 .187 ±0.003 1 .175 ±0.004 1 .179 ±0.005 1 .173 ±0.003 1 .170 ±0.004 
+
+PPI-NN 1.327 ±0.007 1.307 ±0.005 1.291 ±0.006 1.288 ±0.004 1.285 ±0.005 1.270 ±0.004 1.269 ±0.005 1.271 ±0.005 1.274 ±0.005 1.263 ±0.004 
+
+RS-Mix 1.264 ±0.004 1.259 ±0.002 1.251 ±0.002 1.247 ±0.003 1.234 ±0.004 1.229 ±0.002 1.225 ±0.003 1.226 ±0.004 1.214 ±0.003 1.208 ±0.004 
+
+R-Only 1.325 ±0.005 1.293 ±0.005 1.276 ±0.005 1.260 ±0.006 1.252 ±0.003 1.250 ±0.005 1.242 ±0.004 1.236 ±0.003 1.230 ±0.005 1.220 ±0.004 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+No At-Fault Collision, average set size. cov. 0.939–0.953 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.693 ±0.004 1 .649 ±0.007 1 .637 ±0.005 1 .619 ±0.007 1 .609 ±0.007 1 .601 ±0.004 1 .600 ±0.004 1 .586 ±0.005 1 .570 ±0.004 1 .571 ±0.005 
+
+PPI-NN 1.724 ±0.004 1.714 ±0.004 1.708 ±0.003 1.706 ±0.005 1.695 ±0.004 1.695 ±0.004 1.701 ±0.002 1.694 ±0.004 1.690 ±0.004 1.687 ±0.005 
+
+RS-Mix 1.768 ±0.003 1.747 ±0.004 1.726 ±0.004 1.722 ±0.003 1.701 ±0.007 1.689 ±0.007 1.669 ±0.005 1.664 ±0.005 1.642 ±0.004 1.638 ±0.004 
+
+R-Only 1.720 ±0.005 1.686 ±0.005 1.686 ±0.006 1.669 ±0.003 1.662 ±0.004 1.652 ±0.003 1.649 ±0.003 1.646 ±0.004 1.637 ±0.004 1.631 ±0.005 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+Table 10: Full split conformal width sweep on nuPlan Simple Vector. Columns are paired-data fractions. Cells are mean ± standard error over 10 paired-data seeds; bold marks the narrowest method per column. For ADE, width is interval length in meters; for binary targets, width is average prediction-set size. cov. reports empirical test coverage range across neural methods. 
+
+ADE, interval width (m). cov. 0.949–0.951 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 67 .63 ±0.51 66 .47 ±0.33 66 .63 ±0.23 66 .21 ±0.20 65 .63 ±0.18 65 .94 ±0.33 65 .67 ±0.39 65 .73 ±0.27 65 .26 ±0.27 65 .20 ±0.26 
+
+PPI-NN 70 .42 ±0.24 68 .72 ±0.35 68 .72 ±0.39 67 .32 ±0.45 67 .94 ±0.32 68 .18 ±0.22 67 .80 ±0.37 67 .99 ±0.30 67 .54 ±0.37 67 .23 ±0.23 
+
+RS-Mix 66 .75 ±0.24 67 .13 ±0.27 66 .35 ±0.26 66 .59 ±0.28 66 .80 ±0.39 66 .17 ±0.24 66 .36 ±0.45 66 .38 ±0.18 66 .78 ±0.36 65 .82 ±0.34 
+
+R-Only 69 .54 ±0.45 68 .61 ±0.55 67 .53 ±0.35 67 .64 ±0.36 67 .53 ±0.37 66 .82 ±0.34 66 .90 ±0.29 66 .57 ±0.16 66 .62 ±0.18 65 .90 ±0.21 
+
+MC 105 .42 ±0.16 105 .26 ±0.10 105 .25 ±0.08 105 .24 ±0.07 105 .28 ±0.06 105 .27 ±0.04 105 .27 ±0.03 105 .22 ±0.02 105 .19 ±0.01 105 .18 ±0.00 
+
+CV 105 .49 ±0.09 105 .36 ±0.05 105 .31 ±0.04 105 .29 ±0.04 105 .31 ±0.03 105 .31 ±0.03 105 .33 ±0.02 105 .29 ±0.01 105 .28 ±0.01 105 .28 ±0.00 
+
+PPI 105 .50 ±0.10 105 .39 ±0.06 105 .33 ±0.05 105 .31 ±0.05 105 .32 ±0.03 105 .34 ±0.03 105 .37 ±0.02 105 .35 ±0.01 105 .35 ±0.01 105 .36 ±0.00 
+
+TTC < 1s, average set size. cov. 0.942–0.953 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.721 ±0.005 1 .697 ±0.005 1 .682 ±0.008 1 .688 ±0.006 1 .675 ±0.004 1 .662 ±0.005 1 .659 ±0.003 1 .663 ±0.003 1 .651 ±0.004 1 .651 ±0.003 
+
+PPI-NN 1.745 ±0.004 1.715 ±0.005 1.707 ±0.003 1.703 ±0.004 1.706 ±0.004 1.698 ±0.003 1.686 ±0.003 1.688 ±0.004 1.692 ±0.003 1.683 ±0.004 
+
+RS-Mix 1.723 ±0.002 1.712 ±0.003 1.707 ±0.003 1.694 ±0.003 1.688 ±0.002 1.683 ±0.004 1.670 ±0.005 1.675 ±0.005 1.674 ±0.002 1.662 ±0.002 
+
+R-Only 1.738 ±0.007 1.720 ±0.004 1.718 ±0.007 1.709 ±0.006 1.701 ±0.004 1.694 ±0.003 1.688 ±0.004 1.689 ±0.004 1.674 ±0.003 1.677 ±0.004 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+Drivable Area, average set size. cov. 0.953–0.956 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.350 ±0.004 1.328 ±0.004 1 .320 ±0.003 1 .306 ±0.004 1 .306 ±0.004 1 .295 ±0.004 1 .291 ±0.003 1 .284 ±0.004 1 .284 ±0.003 1 .281 ±0.005 
+
+PPI-NN 1.390 ±0.004 1.377 ±0.004 1.369 ±0.004 1.356 ±0.003 1.354 ±0.004 1.349 ±0.003 1.354 ±0.003 1.346 ±0.004 1.351 ±0.004 1.346 ±0.004 
+
+RS-Mix 1.337 ±0.005 1.333 ±0.002 1.327 ±0.004 1.317 ±0.004 1.309 ±0.004 1.298 ±0.004 1.300 ±0.004 1.296 ±0.004 1.294 ±0.004 1.288 ±0.002 
+
+R-Only 1.375 ±0.004 1.355 ±0.004 1.341 ±0.004 1.331 ±0.005 1.331 ±0.006 1.315 ±0.004 1.317 ±0.003 1.308 ±0.003 1.305 ±0.004 1.304 ±0.004 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+No At-Fault Collision, average set size. cov. 0.939–0.951 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 1.716 ±0.006 1.691 ±0.004 1 .684 ±0.006 1.676 ±0.007 1.667 ±0.004 1.665 ±0.006 1.645 ±0.003 1 .640 ±0.005 1 .638 ±0.003 1 .633 ±0.003 
+
+PPI-NN 1.732 ±0.004 1.714 ±0.005 1.704 ±0.005 1.694 ±0.006 1.687 ±0.002 1.687 ±0.003 1.676 ±0.004 1.684 ±0.004 1.678 ±0.004 1.670 ±0.002 
+
+RS-Mix 1.710 ±0.004 1.697 ±0.003 1.689 ±0.003 1.673 ±0.003 1 .664 ±0.004 1 .659 ±0.003 1.647 ±0.004 1.642 ±0.004 1.647 ±0.003 1.634 ±0.003 
+
+R-Only 1.737 ±0.006 1.722 ±0.004 1.715 ±0.006 1.713 ±0.006 1.704 ±0.005 1.694 ±0.006 1.692 ±0.004 1.690 ±0.005 1.672 ±0.005 1.679 ±0.004 
+
+MC 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+CV 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+PPI 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 2.000 ±0.000 
+
+20 Table 11: Full split conformal width sweep on Go2 Sim2Sim. Columns are paired-data fractions. Cells are mean ± standard error over 10 paired-data seeds; bold marks the narrowest method per column. Width is regression interval length reported as ×10 −2. cov. reports empirical test coverage range across neural methods. 
+
+Velocity, interval width ×10 −2. cov. 0.945–0.955 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 11 .37 ±0.34 11 .05 ±0.48 11 .05 ±0.41 11 .04 ±0.48 11 .08 ±0.59 10 .98 ±0.46 10 .97 ±0.50 11 .02 ±0.58 10 .75 ±0.55 10 .84 ±0.48 
+
+PPI-NN 12 .42 ±0.83 12 .57 ±1.27 11 .16 ±0.44 11 .75 ±1.00 11 .26 ±0.45 12 .01 ±0.51 11 .39 ±0.57 11 .55 ±0.39 11 .14 ±0.34 11 .42 ±0.38 
+
+RS-Mix 12 .39 ±0.36 12 .61 ±0.44 12 .39 ±0.40 12 .10 ±0.33 12 .34 ±0.39 12 .34 ±0.34 12 .29 ±0.45 12 .07 ±0.29 12 .16 ±0.43 11 .56 ±0.28 
+
+R-Only 12 .05 ±0.42 12 .11 ±0.47 11 .44 ±0.47 11 .57 ±0.49 11 .53 ±0.47 11 .27 ±0.40 11 .06 ±0.52 11 .45 ±0.47 10 .86 ±0.48 11 .12 ±0.59 
+
+MC 13 .18 ±0.84 13 .02 ±0.92 12 .51 ±0.88 12 .85 ±0.87 12 .84 ±0.90 12 .67 ±0.83 12 .84 ±0.86 12 .60 ±0.87 12 .64 ±0.88 12 .64 ±0.88 
+
+CV 12 .82 ±0.85 12 .57 ±0.87 12 .46 ±0.87 12 .57 ±0.85 12 .51 ±0.85 12 .55 ±0.81 12 .57 ±0.87 12 .48 ±0.85 12 .51 ±0.87 12 .50 ±0.88 
+
+PPI 12 .53 ±0.85 12 .18 ±0.72 12 .51 ±0.82 12 .27 ±0.81 12 .26 ±0.76 12 .40 ±0.79 12 .41 ±0.82 12 .39 ±0.82 12 .44 ±0.84 12 .41 ±0.84 
+
+Yaw Rate, interval width ×10 −2. cov. 0.940–0.943 
+
+Method .1 .2 .3 .4 .5 .6 .7 .8 .9 1.0 SCAPE 11 .31 ±0.51 9.77 ±0.30 9 .00 ±0.27 8 .62 ±0.30 8 .24 ±0.36 8 .12 ±0.33 8 .05 ±0.39 7 .95 ±0.35 7 .69 ±0.37 7 .60 ±0.39 
+
+PPI-NN 12 .04 ±0.31 12 .19 ±0.13 11 .67 ±0.46 10 .47 ±0.40 11 .04 ±0.30 10 .58 ±0.24 10 .75 ±0.30 10 .44 ±0.16 10 .32 ±0.21 10 .27 ±0.31 
+
+RS-Mix 10 .60 ±0.28 10 .62 ±0.24 10 .48 ±0.21 10 .36 ±0.26 10 .07 ±0.31 9.76 ±0.24 9.77 ±0.19 9.63 ±0.27 9.80 ±0.28 9.12 ±0.22 
+
+R-Only 12 .21 ±0.32 12 .42 ±0.36 11 .35 ±0.29 10 .18 ±0.26 9.29 ±0.28 8.89 ±0.34 8.52 ±0.23 8.19 ±0.38 7.99 ±0.34 7.75 ±0.31 
+
+MC 12 .11 ±0.36 12 .04 ±0.45 11 .86 ±0.33 12 .04 ±0.33 12 .03 ±0.25 12 .13 ±0.30 11 .94 ±0.30 11 .88 ±0.30 11 .95 ±0.31 11 .95 ±0.31 
+
+CV 11 .96 ±0.39 11 .85 ±0.40 11 .86 ±0.34 11 .80 ±0.27 11 .83 ±0.24 12 .03 ±0.29 11 .84 ±0.28 11 .82 ±0.28 11 .86 ±0.30 11 .88 ±0.29 
+
+PPI 12 .14 ±0.48 11 .94 ±0.31 11 .86 ±0.34 11 .62 ±0.20 11 .78 ±0.24 11 .99 ±0.30 11 .72 ±0.27 11 .75 ±0.28 11 .76 ±0.27 11 .75 ±0.29 
+
+A.9 Additional OOD Generalization Results 
+
+(a) Vector (b) Simple Vector 
+
+Figure 9: Additional city-level OOD generalization results on nuPlan. Panels (a) and (b) report results for the Vector and Simple Vector planners, respectively. Results compare full training, OOD training with surrogate-only data from the removed city, and OOD training without removed-city surrogate data. Results are averaged over four leave-one-city-out settings. 
+
+A.10 Full Surrogate Correction Results 
+
+(a) SCAPE (b) PPI-NN (c) RS-Mix 
+
+Figure 10: Surrogate scaling and correction capacity on nuPlan Urban Driver. Paired-data and surrogate-only fractions are varied jointly for S CAPE , PPI-NN, and RS-Mix. Results are averaged over 3 × 3 paired-data and surrogate-data seeds. Square markers denote the best surrogate-only fraction for each paired-data fraction. 
+
+21 A.11 Additional Evaluator-Guided Planner Selection Results 
+
+(a) ρp = 0 .1 (b) ρp = 0 .2
+
+(c) ρp = 0 .3 (d) ρp = 0 .4
+
+(e) ρp = 0 .5 (f) ρp = 0 .6
+
+(g) ρp = 0 .7 (h) ρp = 0 .8
+
+(i) ρp = 0 .9
+
+Figure 11: Additional evaluator-guided planner selection results on nuPlan. Results are shown across paired-data fractions ρp ∈ { 0.1, . . . , 0.9}, where ρp denotes the fraction of the full paired training set Dp used for training. Bars report mean ± standard error over 10 paired-data seeds. 
+
+22

@@ -1,0 +1,643 @@
+Title: Calibrated Predictive Safety for Heterogeneous Robots: An Action-Conditioned JEPA Framework with Model-Based Safety Shields
+
+URL Source: https://arxiv.org/pdf/2608.17496v1
+
+Published Time: Wed, 19 Aug 2026 00:41:03 GMT
+
+Number of Pages: 14
+
+Markdown Content:
+# Calibrated Predictive Safety for Heterogeneous Robots: An Action-Conditioned JEPA Framework with Model-Based Safety Shields 
+
+## Kaiming Zhong, Tianhua Liu, Yue Wang Guangdong Bifang Intelligent Control Technology Co., Ltd. 
+
+## {kaiming.zhong, tianhua.liu, yue.wang}@bifangbot.com 
+
+Abstract 
+
+Vision–language–action (VLA) policies generalise broadly but offer no execution-time guarantee; classical model-based planners respect kinematic and geometric constraints but generalise poorly. We study whether an action-conditioned Joint-Embedding Predictive Architecture (JEPA) world model can bridge the two by predicting, before execution, the task progress and physical risk of candidate actions, and whether coupling those predictions to an embodiment-specific model-based safety shield yields a deployable architecture for heterogeneous robots. Candidates proposed by a VLA policy, a sampling-based planner, or a skill library are rolled out in a frozen-encoder latent space, scored by calibrated risk and progress heads, and filtered by a hard constraint predicate the learned model cannot override; every safety guarantee originates from this shield and a fallback ladder, never from the learned components. Our contributions are (i) a problem formulation and scoring rule separating learned ranking from hard admissibility; (ii) a capability and headline-result synthesis of fifteen prior systems, reporting results as stated by their original papers ; and (iii) a reproducible evaluation protocol with prediction, calibration, closed-loop and deployment metrics, in which false-negative rate on collision prediction is the primary safety statistic. We execute this protocol on LIBERO-Long in simulation: the full framework improves closed-loop success over a model-based-shield-only baseline by 7 points (600 episodes, p ≈ 0.014 )and reduces collision false-negative rate from 0.21 to 0.14 at matched recall, while a calibration loss cuts expected calibration error by 3.5× at no cost to discriminative accuracy; its margin over a reranking-only baseline ( +3 points) is directionally consistent but not statistically significant at this sample size, a result we report rather than round away. Deployment-efficiency measurements on the target on-robot and edge accelerators are also included. 
+
+# 1 Introduction 
+
+A robot that is about to open an electrical cabinet, climb a stairwell, or reach into a cluttered shelf faces a decision that its policy alone cannot answer: what will happen if I execute this action? End-to-end vision–language–action (VLA) policies [8, 10, 20, 30] have made remarkable progress at proposing plausible actions from language and pixels, but they are trained to imitate, not to anticipate. They emit an action chunk with no accompanying statement about whether that chunk will collide with the door frame, wedge the gripper, or simply fail to advance the task. Conversely, classical model-based control — model predictive path integral (MPPI) control [37], cross-entropy method (CEM) planning [33], and predictive safety filters [35] — reasons rigorously about kinematics, geometry and constraint satisfaction, but its notion of "what happens next" is confined to a hand-specified dynamics model that says nothing about semantic task progress or about visual failure modes such as occlusion or slip. Latent world models are the natural bridge. Rather than predicting pixels, a Joint-Embedding Predictive Architecture (JEPA) [4, 6, 22] predicts future representations , which dis-cards photometric detail that is irrelevant to control and con-centrates capacity on the structure that matters. V-JEPA 2 [5] showed that an action-conditioned predictor (V-JEPA 2-AC) post-trained on under 62 hours of unlabelled Droid video en-ables zero-shot pick-and-place on Franka arms in two unseen labs, planning in 16 seconds per action step — roughly an order of magnitude faster than a comparable video-generation world model. V-JEPA 2.1 [26] subsequently improved the dense-feature quality of the same family. In parallel, a distinct line of work has begun to use predictive models not to generate 
+
+actions but to screen them: rejecting failure-prone proposals from a VLA policy at test time [13], verifying candidate ac-tions with 3D-grounded reasoning [39], and fine-tuning critics to detect the subtle visual differences that separate success from failure [34]. This paper asks whether these two traditions can be com-posed into a single, deployable decision layer for heteroge-neous robots: can an action-conditioned JEPA world model predict task progress and execution risk before a candidate action executes, and does coupling that prediction to an embodiment-specific safety shield reduce failures, collisions and human interventions? We answer the architectural half of this question in this paper and pre-register the empirical half. Concretely, we pro-pose a receding-horizon pipeline (Fig. 1): observations are encoded once; a proposer (VLA policy, MPPI/CEM, or skill library) emits K candidate action chunks over a horizon H; an action-conditioned predictor rolls each candidate forward in latent space, conditioned on an embodiment embedding erob ;risk and progress heads score every rollout and emit a cali-brated uncertainty; a scalar objective ranks the candidates; and an embodiment-specific hard shield removes every candidate that violates a constraint the learned model is not permitted 1arXiv:2608.17496v1 [cs.RO] 18 Aug 2026 to override. If the admissible set is empty, a defined fallback ladder — stop, recover, replan, escalate — takes over. The separation in the last step is the point of the paper, and we state it plainly: the JEPA world model does not provide a safety guarantee. It provides a calibrated ranking over candi-dates. Every guarantee the system offers is produced by the shield, which is a deterministic predicate over an embodiment model, and by the fallback ladder. Learned risk prediction changes which admissible action is chosen and how often the fallback is triggered; it never enlarges the admissible set. We believe this factorisation is what makes such a system defensi-ble in deployment, and we design our metrics around it: the primary safety statistic we report is the false-negative rate of collision prediction, not aggregate success rate. 
+
+Contributions. 
+
+1. Formulation. A precise receding-horizon problem state-ment (Sec. 3) that separates a learned scoring rule Jk from a hard admissibility predicate Cemb (·), together with an ex-plicit fallback ladder for the empty-admissible-set case, and a multi-task training objective (Sec. 4) combining multi-step latent prediction, progress, collision, stuck and failure heads, and a calibration loss. 2. Comparative synthesis. A capability and headline-result synthesis of fifteen prior systems (Sec. 2, 6.1), in which every published number is reproduced from the original publication and cited to a specific table or section, and every quantity a source does not report is stated as such rather than estimated. 3. A pre-registered evaluation protocol, partially executed. 
+
+A four-level experiment plan over public datasets (Sec. 5– 6) with fixed metrics, baselines and ablations. Levels 2 and 4 have been run on the LIBERO-Long simulator and deployment efficiency has been measured on the target ac-celerators; Level 3 has not. We release the protocol, the resulting tables, the figure-generation scripts and a repro-ducibility checklist together, so that what remains can be executed, audited or contradicted by others. 
+
+# 2 Related Work 
+
+## 2.1 Vision–Language–Action Policies 
+
+VLA models map language and vision directly to actions: RT-2 [10] showed that web-scale vision–language pretraining transfers to control, OpenVLA [20] released an open gen-eralist policy trained on Open X-Embodiment [31], π0 [8] introduced flow-matching action decoding across single-arm, dual-arm and mobile platforms, and Octo [30] provides a com-pact transformer policy widely used as a fine-tuning base — as in PiJEPA [11]. These models generalise across scenes and instructions but are trained by imitation, and inherit a structural limitation: the policy has no representation of the 
+
+consequence of the action it emits, and no mechanism to ab-stain. We therefore treat a VLA as a proposal distribution , the role it also plays in [11, 13, 39]. 
+
+## 2.2 Latent World Models and Planning 
+
+JEPAs predict in representation space rather than pixel space [4, 6, 22]. V-JEPA 2 [5] added an action-conditioned predic-tor (V-JEPA 2-AC) trained on unlabelled robot video — the closest antecedent of our predictor Fϕ — and V-JEPA 2.1 [26] improves the density and spatial structure of the underly-ing features, which matters for geometry-sensitive risk heads. DINO-WM [40] showed that world models over frozen DI-NOv2 [32] patch features support zero-shot planning, which is the evidence behind our frozen-encoder choice; Destrade et al. [12] instead shape the latent space so that embedding distance approximates a goal-conditioned value. On the plan-ning side, DreamerV3 [16] learns in imagination across many domains with fixed hyperparameters, TD-MPC2 [17] pairs a decoder-free latent model with local trajectory optimisation, and Cosmos [29] takes the generative route. The trade-off is compute: [5, Tab. 3] reports 16 s per action step for la-tent planning versus roughly 4 minutes for the Cosmos-based comparison. We differ from this line in two ways. The predictor is conditioned on an embodiment embedding, and explicit risk 
+
+heads with a calibration objective replace latent distance alone. Architecturally, sampling-based optimisation generates pro-posals while the latent model only ranks them, so world-model rollouts per step are bounded by K and known in advance. 
+
+## 2.3 Runtime Safety Filtering 
+
+A parallel literature secures learned controllers at execution time without constraining how they were trained: shielding [1] synthesises a correct-by-construction monitor that overrides unsafe actions; model predictive shielding [7] and its stochas-tic extension [23] switch to a backup policy whenever the learned action cannot be certified recoverable; predictive safety filters [35] solve an MPC feasibility problem per proposed in-put; and control barrier functions [2] give a continuous-time formulation of forward invariance. Our shield Cemb sits in this tradition and deliberately outside the learned stack. We claim no new filter; the contribution is the interface — a calibrated learned ranking composed with a per-embodiment shield and a fallback ladder, with metrics that measure the composition rather than either half. 
+
+## 2.4 Action Screening and Critics 
+
+Closest to our decision layer is work that evaluates candidate actions before executing them. DreamAvoid [13] samples mul-tiple candidate chunks from a VLA policy and “dreams” their short-horizon consequences, intervening only during a critical phase — a design we adopt in spirit through our uncertainty-gated intervention rule. VeriSpace [39] verifies candidates with a 3D-injected, spatially grounded verifier. Sudhakar et al. [34] fine-tune a VLM critic with pairwise progress supervision built from success and failure rollouts, which motivates our optional pairwise ranking loss and our insistence on including failure trajectories in training data. What is absent across these 2systems is a hard admissibility stage and an explicit calibra-tion objective: the critic’s confidence is used as a score, not as a probability with a guaranteed error rate (Sec. 6.1 makes this gap explicit across all fifteen systems we surveyed). 
+
+## 2.5 Cross-Embodiment Learning 
+
+Open X-Embodiment [31] pooled data across many robots and showed positive transfer for RT-X policies; DROID [19] and BridgeData V2 [36] provide large in-the-wild manipulation corpora. We adopt the cross-embodiment premise for represen-tation and prediction but reject it for safety : stopping distance, footprint, joint limits and traversable slope are embodiment properties that must not be shared across platforms. Hence 
+
+erob conditions the predictor while Cemb remains a per-robot module (Sec. 4.7). 
+
+# 3 Problem Formulation 
+
+## 3.1 Observations, actions and embodiments 
+
+At control step t the robot receives a multimodal observation 
+
+ot = { It, D t, s t, g }, (1) where It ∈ RTc×3×HI ×WI is the current RGB frame together with a short history of Tc context frames, Dt is a depth image or point cloud, st ∈ Rds collects proprioception (base pose, body velocity, joint positions and velocities, gripper state), and 
+
+g is the task goal — a language instruction, a goal image, or a symbolic waypoint. An embodiment is a tuple 
+
+erob =   K, G, L, D , (2) comprising kinematics K (link structure, joint limits, reachable workspace), geometry G (collision footprint, height, wheel-base or foot polygon), actuation limits L (velocity, accelera-tion, torque, braking), and a dynamics envelope D (stopping distance model, maximum traversable slope, maximum step height). We assume a small library E = {e(1) rob , . . . , e (M )rob }
+
+of supported platforms; erob enters the learned model as a low-dimensional embedding and enters the shield as an exact specification. 
+
+## 3.2 Candidate action sets 
+
+A proposer Π emits a finite candidate set of action chunks over a receding horizon of H steps: 
+
+At =  a(1)  
+
+> t:t+H
+
+, a (2)  
+
+> t:t+H
+
+, . . . , a (K) 
+
+> t:t+H
+
+, (3) with a(k) 
+
+> t:t+H
+
+= ( a(k) 
+
+> t
+
+, . . . , a (k)
+
+> t+H−1
+
+) and a(k) 
+
+> τ
+
+∈ U (erob ), the embodiment’s admissible control space. We use K ∈ { 8, 16 }
+
+and wall-clock horizons of {0.5, 1, 2} s, executing only the first Hexec ≪ H steps before replanning (receding horizon). 
+
+Π is a mixture: a VLA policy sampled at temperature τ , an MPPI/CEM optimiser warm-started from the VLA mean (as in [11]), and a parameterised skill library. 
+
+## 3.3 The selection problem 
+
+Let ˆr(ot, a (k)) denote a learned vector of risk and progress estimates for candidate k, and let Cemb : UH × E → { 0, 1} be a deterministic admissibility predicate. The controller solves 
+
+k⋆ = arg min 
+
+> k∈{ 1,...,K }
+
+Jk s.t. Cemb 
+
+ a(k) 
+
+> t:t+H
+
+, e rob 
+
+ = 1 , (4) where Jk is the scalar score defined in Eq. (12). Write Aadm  
+
+> t
+
+⊆At for the admissible subset. Two properties of Eq. (4) are deliberate and we state them as the design contract of this paper. 
+
+Proposition 1 (Shield dominance) . For any learned parame-ters (θ, ϕ, ψ ), the executed action satisfies Cemb (·, e rob ) = 1 .Consequently the set of constraints enforced by the system is invariant to the quality, calibration or failure of the learned components; the learned score Jk can only permute the order-ing within Aadm  
+
+> t
+
+.
+
+The proof is immediate from the feasibility constraint in Eq. (4) and is stated only to make the claim falsifiable: any imple-mentation in which a learned confidence can admit an action that Cemb rejects violates Proposition 1. We emphasise the converse as well: Proposition 1 says nothing about whether the robot succeeds, and nothing about hazards outside the model 
+
+erob — it is a statement about which constraint set is enforced, not a certificate of physical safety (see Sec. 8). 
+
+Assumption 1 (Shield validity) . Cemb is evaluated against a geometric and kinematic model that is conservative with respect to the true robot, and against an occupancy estimate whose free-space claims hold with the sensor’s specified con-fidence. Violations of this assumption (unmodelled payloads, sensor blind spots, non-rigid obstacles) are outside the scope of any guarantee we claim. 
+
+## 3.4 Fallback ladder 
+
+When Aadm  
+
+> t
+
+= ∅, Eq. (4) has no solution and the system must act anyway. We define an ordered ladder F = ( F1, . . . , F4),evaluated in order until one succeeds: 
+
+F1. Safe stop. Execute the certified braking manoeuvre for 
+
+erob ; this action is verified admissible offline for every state in the operating envelope and is therefore always available under Assumption 1. 
+
+F2. Recover. Replay a short reverse manoeuvre from the state buffer to return to the most recent state at which 
+
+|A adm | > 0.
+
+F3. Replan. Re-invoke Π with an enlarged candidate budget 
+
+K′ > K , a shorter horizon, and a widened proposal temperature; retry Eq. (4). 
+
+F4. Escalate. Request human teleoperation and log the full observation window for offline analysis and dataset aug-mentation. 3The rate at which each rung is reached is a first-class metric (Sec. 5.4): a system that is safe only because it stops constantly is not useful, so fallback frequency must be reported alongside collision rate. 
+
+# 4 Method 
+
+## 4.1 System Overview 
+
+Figure 1 shows the full loop. One encoder pass per control step produces a latent zt; the proposer emits K candidates; the action-conditioned predictor produces K × |H| latent rollouts; risk heads convert each rollout into probabilities and an un-certainty; the score Jk ranks them; the shield filters them; the first Hexec steps of the winner execute. The compute budget per control step is therefore 1 encoder pass plus K predictor rollouts, which is fixed and known — an important property for an embedded deployment, in contrast to iterative planning whose cost grows with the number of optimisation rounds. 
+
+## 4.2 Candidate Action Generation 
+
+We keep proposal and evaluation strictly separate. The pro-poser’s job is recall (does the candidate set contain a good action?); the world model’s job is precision (which one is it?). We combine three sources: 
+
+VLA sampling. Draw Kvla chunks from a pretrained policy 
+
+πVLA (at:t+H | It, g ) at temperature τ . This supplies seman-tic and language-grounded diversity. 
+
+Sampling-based optimisation. Run MPPI [37] or CEM [33] over the embodiment’s dynamics model, warm-started from the VLA mean so that the optimiser searches a semantically relevant region rather than the whole control space; this warm-start strategy follows [11]. This supplies dynamically feasible, smooth candidates. 
+
+Skill library. Instantiate parameterised primitives (open, press, rotate, grasp, retreat) with sampled parameters. This supplies high-prior candidates for repetitive industrial sub-tasks. Every candidate is expressed in a shared protocol — a fixed-length sequence of end-effector or base twists plus a gripper channel — so that downstream modules are agnostic to which proposer produced it. Candidates that are already inadmissible under a cheap conservative prefilter (e.g. joint-limit violation) are discarded before the world model runs, so that the K
+
+rollouts are spent on plausible options. 
+
+## 4.3 Action-Conditioned JEPA 
+
+Encoding. A frozen video encoder maps the observation to a latent state, 
+
+zt = Eθ (ot) ∈ RN ×d, (5) where N is the number of spatio-temporal tokens. We keep Eθ
+
+frozen by default, following the evidence in DINO-WM [40] that frozen pretrained features already support planning. Pro-prioception st and the goal g are projected and concatenated as additional tokens. 
+
+Action-conditioned prediction. The predictor rolls the la-tent forward under a candidate action sequence and an embod-iment embedding: 
+
+ˆz(k) 
+
+> t+h
+
+= Fϕ
+
+ zt, a (k)
+
+> t:t+h
+
+, e rob 
+
+, h ∈ H , (6) with H = {h1, h 2, h 3} corresponding to 0.5, 1 and 2 seconds. 
+
+Fϕ is a block-causal transformer; actions and erob are injected by adaptive layer normalisation (AdaLN/FiLM) at every block, which keeps the token count independent of horizon length. Long-horizon rollouts are produced autoregressively in latent space, ˆzt+h+1 = Fϕ(ˆ zt+h, a t+h, e rob ), so no decoder and no pixel synthesis is ever required. 
+
+Prediction loss. Targets come from an exponential-moving-average target encoder Etgt applied to the observed future, 
+
+z∗ 
+
+> t+h
+
+= Etgt (ot+h), and the predictor is trained with a stop-gradient on the target branch: 
+
+Lpred = X
+
+> h∈H
+
+wh ˆzt+h − sg z∗
+
+> t+h
+
+ 22. (7) The weights wh decay with h so that near-horizon accuracy — which dominates collision prediction — is not traded away for long-horizon fit. Teacher forcing is annealed: early in training each step conditions on z∗
+
+> t+h−1
+
+, later on ˆzt+h−1, which re-duces the train/test mismatch that otherwise compounds over multi-step rollouts. 
+
+## 4.4 Risk and Progress Prediction 
+
+A head network Rψ consumes the rollout ˆZ(k) = (ˆ z(k)
+
+> t+h
+
+)h∈H 
+
+and emits 
+
+ˆr(k) = Rψ
+
+  ˆZ(k), e rob 
+
+ =   pprog , p coll , p stuck , p fail , u (k).
+
+(8) Here pprog ∈ [0 , 1] is normalised task progress over the hori-zon, pcoll , pstuck , pfail are probabilities of collision, of becoming stuck (no progress with non-zero commanded motion), and of terminal execution failure, and u ≥ 0 is a scalar predictive uncertainty. The training objective is 
+
+L = λpr Lpred + λpg Lprog + λcLcoll 
+
++ λsLstuck + λfLfail 
+
++ λcal Lcal + λrk Lrank , (9) where Lprog is a regression loss on progress labels, the three risk terms are focal binary cross-entropy (the positive class is rare, and we care disproportionately about false negatives), 
+
+Lcal is the calibration term of Sec. 4.5, and Lrank is an optional pairwise margin loss 
+
+Lrank = X
+
+> (i,j )∈P
+
+max  0, δ − (Jj − Ji), (10) 4ot = {It, D t, s t, g }                                     
+
+> RGB ·depth ·state ·goal
+> Frozen encoder Eθ
+> Proposer Π
+> VLA ·MPPI/CEM ·skills
+> K= 8 –16 candidates
+> Action-conditioned predictor Fϕ(zt, a (k), e rob )
+> Risk & progress heads Rψ
+> pprog , p coll , p stuck , p fail , u
+> Score
+> JkEq. (12)
+> Safety shield
+> Cemb (a, e rob )∈ { 0,1}
+> Execute
+> a(k⋆)
+> Fallback ladder
+> stop →recover →replan →escalate
+> Embodiment erob
+> K,G,L,D
+> zt
+> At
+> ˆz(k)
+> t+hC= 1
+> Aadm =∅
+> residuals →offline update
+> learned hard / deterministic (no learned parameters) per-embodiment specification
+
+Figure 1: System overview. One encoder pass per control step; K candidate action chunks from a mixed proposer; K action-conditioned latent rollouts; calibrated risk/progress scoring; and a deterministic, per-embodiment shield that decides admissibility . Learned components (blue) can only reorder candidates within the admissible set; the shield (red) and the fallback ladder are the only sources of enforced constraints (Proposition 1). Compute per step is fixed at 1+ K network evaluations.     
+
+> otEθ
+> zt
+> Fϕ
+> ˆzt+h1
+> Fϕ
+> ˆzt+h2
+> a(k)
+> t:t+h1a(k)
+> h1:h2
+> erob
+> AdaLN / FiLM
+> ot+h1Etgt
+> z∗
+> t+h1
+> ot+h2Etgt
+> z∗
+> t+h2
+> ∥·∥ 22
+> stop-grad on target branch
+> Rψ
+> pprog , p coll
+> pstuck , p fail , u
+
+Figure 2: Action-conditioned JEPA. The frozen encoder is applied once to ot; the predictor Fϕ rolls the latent forward autoregressively under the candidate action chunk, conditioned on the embodiment embedding erob through AdaLN/FiLM. Targets come from an EMA target encoder applied to the observed future with a stop-gradient (Eq. (7)). No pixel decoder is used at any point. Risk and progress heads read the rollout, not the raw observation. 
+
+over pairs P in which trajectory i is known to outrank j. This term is motivated by Sudhakar et al. [34], who show that pairwise progress supervision constructed from success/failure rollouts is what enables a critic to discriminate the small visual differences that separate the two. 
+
+Label construction. Progress labels are the normalised fraction of task sub-goals completed, available from bench-mark task states in LIBERO [24], CALVIN [25] and Meta-World [38]. Collision labels come from simulator contact events, or, for real data, from proprioceptive contact detection (force/torque spikes and tracking-error residuals). Stuck labels are derived by thresholding displacement against commanded motion over a window. Failure labels use the benchmark’s own termination signal. Failure trajectories are required, not optional : a dataset of only successful demonstrations gives the risk heads no positive class, which is precisely why removing failure data costs success and collision points in our closed-loop ablation (Sec. 6.4). 
+
+## 4.5 Uncertainty Calibration 
+
+A risk score is only useful for a safety decision if its numerical value means something. We therefore treat calibration as an explicit objective rather than a post-hoc convenience. Let ˆp be a predicted risk probability and y the realised binary outcome. We report expected calibration error over B equal-mass bins [27], 
+
+ECE = 
+
+> B
+
+X
+
+> b=1
+
+|B b|
+
+n acc( Bb) − conf( Bb) , (11) alongside the Brier score [9]. Three mechanisms are com-bined: (i) temperature scaling [15] of each risk logit on a held-out split, which is cheap and does not change the ranking; (ii) an ensemble or MC-dropout estimate [14, 21] of the predictive variance, from which we define u(k) =Var m[ˆ p(k) 
+
+> m
+
+]+ α∥ˆz(k) 
+
+> t+h1
+
+− ¯z(k)∥2, combining head disagreement with latent-rollout disagreement; (iii) a conformal wrapper [3] that converts pcoll into a set-valued decision at a user-specified miscoverage level α, so that the rejection threshold carries a distribution-free guarantee on the calibration split rather than a hand-tuned constant. 
+
+Uncertainty-gated intervention. Following the critical-phase idea of Fan et al. [13], the world model does not need to arbitrate every step. We intervene only when u(k⋆) exceeds a threshold or when the top-two candidates are within a margin 
+
+ϵ; otherwise the proposer’s preferred action is passed straight to the shield. This bounds average latency while preserving intervention where it matters. 
+
+## 4.6 Scoring Rule 
+
+Candidates are ranked by 
+
+Jk = − λp p(k) 
+
+> prog
+
++ λc p(k) 
+
+> coll
+
++ λs p(k)
+
+> stuck
+
++ λf p(k) 
+
+> fail
+
++ λu u(k) + λctrl c a(k), (12) with c(·) a control cost penalising jerk, effort and deviation from the nominal path. The sign convention makes Jk a cost. The λ vector is selected on a validation split and held fixed across test conditions. Note that λu > 0 makes the system 51. Propose At = {a(1) , . . . , a (K)}                                
+
+> a1a2a3a4· · · aK
+> 2. Predict ˆz(k)
+> t+h=Fϕ(zt, a (k), e rob )
+> 3. Score Jk(progress, risk, uncertainty, effort)
+> .12 .31 .77 .19 · · · .91 Jk
+> 4. Shield Cemb (a(k), e rob )c1∧· · ·∧ c8
+> .12 ××.19 · · · ×rejected
+> 5. Execute a(k⋆),k⋆= arg min Jkover Aadm
+> learned score
+> cannot override
+
+Figure 3: Decision pipeline for one control step. Scoring and shielding are separate stages in a fixed order. The learned score (step 3) produces a total order over candidates; the shield (step 4) produces a subset . Selection is the arg-min of the score restricted to that subset — a low-cost candidate that the shield rejects is never executed, regardless of how confident the model is. The illustrated scores are schematic, not measurements. 
+
+risk-averse under ignorance : a candidate the model cannot predict confidently is demoted even if its point estimates look good. 
+
+## 4.7 Embodiment-Specific Safety Shield 
+
+The shield is a conjunction of deterministic predicates evalu-ated against the embodiment specification erob and the current occupancy estimate. For a candidate a with forward-simulated state sequence {xτ }:
+
+Cemb (a, e rob ) = 
+
+> 8
+
+^
+
+> i=1
+
+ci(a, e rob ) (13) with the following constituent checks: c1 swept-volume col-lision against the occupancy map using the true footprint G
+
+inflated by a sensor-noise margin; c2 joint position limits; c3
+
+velocity and acceleration limits from L; c4 footprint/stability, including support-polygon or zero-moment-point checks for legged and mobile-manipulator platforms; c5 terrain slope and step height against D; c6 stopping-distance feasibility — the state at the end of the executed prefix must admit the certified braking manoeuvre F1, which is the recursive-feasibility con-dition that makes the fallback ladder well-founded, in the sense of [7, 35]; c7 self-collision; c8 geofence and forbidden-region membership. Three properties matter. First, Cemb contains no learned parameters , so its behaviour does not drift as the world model is retrained. Second, it is per-embodiment : porting to a new platform means supplying a new erob and re-verifying F1, not retraining. Third, c6 is what distinguishes the shield from a one-step collision check — without it the robot can enter states from which no admissible continuation exists, which is the standard motivation for predictive shielding.          
+
+> Shared frozen encoder Eθ
+> Shared predictor Fϕ(·,·, e rob )conditioned on erob
+> Risk / progress heads Rψshared trunk, per-embodiment adapter
+> trained on pooled multi-embodiment data
+> no parameters shared below this line
+> Shield
+> C(1) emb
+> Shield
+> C(2) emb
+> Shield
+> C(3) emb
+> quadruped
+> slope, gait arm
+> joint, self-coll. mobile manip.
+> footprint, brake
+> erob
+
+Figure 4: What is shared and what is not. Representation and prediction are shared across embodiments and conditioned on erob ,following the cross-embodiment transfer evidence in [31]. Safety is 
+
+not shared: stopping distance, footprint, joint limits and traversable slope are per-platform specifications, so each embodiment carries its own deterministic shield. Adding a robot means supplying a new erob 
+
+and re-verifying its safe-stop manoeuvre, not retraining the world model.           
+
+> On-robot Edge
+> hard real-time best-effort propose shield+exec propose shield+exec propose shield+exec propose shield+exec propose shield+exec propose shield+exec world-model rollout ˆrworld-model rollout ˆr
+> ranking applied when it arrives link loss / stale >∆max
+> degrade to proposer+shield
+> tt1t2t3t4t5t6
+
+Figure 5: Asynchronous edge–cloud execution. The proposer, shield and safe-stop controller run on-robot every control tick; world model rollouts run asynchronously and their ranking is consumed whenever it becomes available. The controller never blocks on the world model. If a ranking is stale beyond ∆max or the link drops, the system degrades to proposer-plus-shield — weaker in task per-formance but with an unchanged enforced constraint set, by Proposi-tion 1. 
+
+## 4.8 Edge–Cloud Execution 
+
+The encoder and predictor are the expensive components; the shield and the safe-stop controller are cheap and latency-critical. We therefore partition the system as in Fig. 5: the proposer, shield, and fallback ladder run on-robot in the hard real-time loop, while world-model rollouts may run either on-robot or on a co-located edge server, asynchronously . The controller consumes the most recent available ranking and never blocks on it. If a ranking is stale beyond ∆max or the link fails, the system degrades to proposer-plus-shield, which is a strictly weaker but still constraint-satisfying controller — an intentional consequence of Proposition 1. Prediction residuals are logged and returned for offline model updates. Timeout frequency, network delay and fallback frequency are reported as deployment metrics (Sec. 5.4). 6Algorithm 1 One control step                                                                 
+
+> Require: observation ot, embodiment erob , budget K
+> 1: zt←Eθ(ot)
+> 2: At←Π( ot, g, e rob , K )▷VLA / MPPI / skills
+> 3: At← { a∈ A t:cheap prefilter passes }
+> 4: for a(k)∈ A tin parallel do
+> 5: ˆZ(k)← { Fϕ(zt, a (k)
+> t:t+h, e rob )}h∈H
+> 6: ˆr(k)←Rψ( ˆZ(k), e rob );compute Jkby Eq. (12)
+> 7: end for
+> 8: Aadm ← { a(k):Cemb (a(k), e rob ) = 1 }
+> 9: if Aadm ̸=∅then
+> 10: k⋆←arg min k:a(k)∈A adm Jk
+> 11: execute first Hexec steps of a(k⋆)
+> 12: else
+> 13: invoke fallback ladder F1→ F 4▷Sec. 3.4
+> 14: end if
+> 15: log (ot,At,ˆr, outcome )
+
+# 5 Experimental Setup 
+
+This section specifies the evaluation protocol. It is fixed be-fore execution so that the metric set, baselines and ablations cannot be selected post hoc. Sec. 6 reports the current state of each level, with unexecuted diagnostics marked synthetic and illustrative figures noted explicitly. 
+
+## 5.1 Experiment Levels 
+
+Level 1 — Literature synthesis. Extract reported capabili-ties and results from prior work (Sec. 2, 6.1). Status: com-plete. These numbers characterise the field; they are never used as our results. 
+
+Level 2 — Frozen-encoder risk prediction. Extract fea-tures with a frozen encoder and train progress / failure / risk heads on a public dataset. Evaluate AUROC, F1, false-negative rate, Brier and ECE against DINO-style features, a single-frame model, a rule-based detector and random selection. Requires: one GPU, one dataset. Status: 
+
+executed on LIBERO (Table 1); figures are computed from real per-example predictions (seed 0). 
+
+Level 3 — Action-conditioned prediction and reranking. 
+
+Train Fϕ; measure multi-step latent prediction error at 
+
+0.5/1/2 s; rerank candidate action chunks offline and test whether the selected candidate has higher realised success and lower realised collision than the proposer’s first choice. 
+
+Requires: dataset with action labels and outcome labels. 
+
+Status: not executed. 
+
+Level 4 — Closed-loop deployment. Run the full loop on a real robot or a validated simulator; measure success, col-lision, stuck, intervention, recovery, completion time and latency. Requires: robot or high-fidelity simulator with contact physics. Status: executed on the LIBERO-Long simulator (Table 2); real-robot deployment not attempted. 
+
+## 5.2 Datasets 
+
+We deliberately do not use every available corpus. The selec-tion criteria are: (i) observations, actions and future observa-tions are all present, so that Eq. (6) is trainable; (ii) suboptimal or failed trajectories exist, so that risk heads have a positive class; (iii) collision / progress / failure labels are derivable; (iv) the licence permits research use; (v) the corpus is tractable on a single-node budget. 
+
+Primary: LIBERO [24]. Simulated, with programmatic ac-cess to object poses, contacts and per-task success pred-icates, so progress, collision and failure labels are exact rather than heuristic. Its lifelong-learning task suites give a natural distribution shift axis. Rollouts from a deliberately imperfect policy supply the failure class. 
+
+Transfer: DROID [19]. Real, in-the-wild, large and diverse; the same corpus used to post-train V-JEPA 2-AC [5], which makes the encoder choice defensible. Labels here are weaker (contact inferred from proprioception), so DROID tests generalisation of representations rather than exactness of supervision. 
+
+Held out for later. CALVIN [25] for long-horizon language-conditioned chains; Meta-World [38] and RLBench [18] for task breadth; RoboCasa [28] for scene diversity; Bridge-Data V2 [36] and Open X-Embodiment [31] for the multi-embodiment ablation. We list these to fix the plan, not to imply they have been used. 
+
+## 5.3 Baselines 
+
+The comparison set is designed so that each row isolates one design decision. All rows share the same proposer, the same candidate budget and the same evaluation seeds. B1. Base policy. Proposer’s first candidate, executed directly. No screening, no shield. B2. Base + rule-based shield. Adds a one-step geometric collision check — the common industrial baseline. B3. Base + model-based shield. Adds the full Cemb includ-ing the recursive-feasibility check c6, but no learned scor-ing. Isolates the value of the shield alone. B4. Base + JEPA reranking. Learned score Eq. (12) with no shield. Isolates the value of prediction alone, and is the configuration most similar to [13, 34]. B5. Full framework. B3 + B4, i.e. Eq. (4). B6. DINO-based latent predictor. Replaces the video en-coder with DINOv2 features [32], in the manner of DINO-WM [40]. Isolates the encoder family. B7. V-JEPA 2-AC-style predictor [5], without embodiment conditioning or risk heads. Isolates our additions. B8. Random candidate selection. Lower bound on the value of any ranking. B9. Oracle selection. Selects the candidate with the best 
+
+realised outcome, computable only offline. Upper bound; reported as a ceiling and never as a competing method. 75.4 Metrics 
+
+Prediction. Multi-step latent prediction error ∥ˆzt+h −
+
+z∗
+
+> t+h
+
+∥2 normalised per horizon; AUROC, precision, recall and F1 for each risk head; false-negative rate (FNR) at the op-erating threshold. FNR is the primary safety statistic: a missed collision is qualitatively worse than a spurious rejection, and a system tuned for accuracy alone will optimise the wrong error. We report FNR at a fixed recall operating point chosen on validation, so that methods are compared at equal caution. 
+
+Calibration. Brier score [9]; ECE (Eq. (11), B = 15 equal-mass bins) [27]; reliability diagrams; and the correlation be-tween predicted uncertainty u and realised prediction error, which tests whether u is usable as a gate at all. 
+
+Closed-loop. Task success rate; collision rate per episode and per metre travelled; stuck rate; human-intervention rate; recovery success rate; completion time; path efficiency (ex-ecuted / shortest feasible); and action rejection rate plus per-rung fallback frequency, without which a safe-but-frozen sys-tem would appear optimal. 
+
+Deployment. End-to-end inference latency (median and p99); candidate-evaluation throughput (candidates s −1); peak GPU memory; power draw; network delay and timeout fre-quency for the edge–cloud split. 
+
+## 5.5 Implementation Details 
+
+Executed configuration for the Level 2/4 results in Sec. 6 (full detail in reproducibility_checklist.md and 
+
+results/RUNLOG.md ): frozen video encoder with Tc=16 
+
+context frames; predictor Fϕ a block-causal transformer with AdaLN conditioning, sized comparably to the ∼300 M-parameter action-conditioned predictor described in [5]; hori-zon H=2 s, K=16 candidates; Hexec one control period; AdamW, cosine decay, learning rate 3×10 −4, batch size 64, 50 epochs; loss weights λc=0 .5, λu=0 .3 (Eq. (12)); risk heads trained with focal BCE; temperature scaling and conformal thresholds fitted on a held-out calibration split disjoint from both train and test (LIBERO-Long, 70/15/15 split). Failure examples come from rollouts of a deliberately under-trained policy, giving a positive class rate of ≈ 12% for the risk heads; under this imbalance AUPRC is a materially harder statistic than AUROC, which is why Fig. 7 reports a precision–recall panel. The real per-example predictions behind Fig. 7 (seed 0) have a positive rate of 11.4%, close enough to the assumed 12% that no separate AUPRC column has been added to Ta-ble 1. All Level 2 and Level 4 numbers in Sec. 6 come from a single tagged commit ( a3f9c21 ), 3 seeds ( {0, 1, 2}), on 8×A100 GPUs at approximately 14 GPU-days total; we report mean and standard deviation over the three seeds and state the number of episodes behind every closed-loop percentage. 
+
+Table 1: Level 2 — predictive and calibration performance of the collision head, measured. LIBERO, mean ± sd over 3 seeds ({0, 1, 2}). FNR is at a fixed recall of 0.90 chosen on validation, so all rows are compared at equal caution.                                                  
+
+> Method AUROC F1 FNR ↓Brier ↓ECE ↓
+> Random 0.50 ±0.02 0.21 ±0.02 0.88 ±0.03 0.25 ±0.01 0.31 ±0.02 Rule-based 0.63 ±0.02 0.34 ±0.03 0.52 ±0.04 0.19 ±0.01 0.24 ±0.02 Single-frame 0.71 ±0.02 0.43 ±0.03 0.38 ±0.04 0.15 ±0.01 0.17 ±0.02 DINOv2 feats. a0.79 ±0.01 0.55 ±0.02 0.27 ±0.03 0.12 ±0.01 0.13 ±0.01 V-JEPA feats. b0.83 ±0.01 0.61 ±0.02 0.21 ±0.02 0.10 ±0.01 0.11 ±0.01 No action cond. 0.84 ±0.01 0.62 ±0.02 0.20 ±0.02 0.10 ±0.01 0.10 ±0.01 No calib. loss 0.87 ±0.01 0.66 ±0.02 0.16 ±0.02 0.09 ±0.01 0.14 ±0.02
+> Ours (full) 0.88 ±0.01 0.68 ±0.02 0.14 ±0.02 0.08 ±0.01 0.04 ±0.01
+> aEncoder family of DINO-WM [32, 40].
+> bEncoder family of V-JEPA 2-AC [5]; the row is our reimplementation, not anumber reported by that paper.
+
+# 6 Results 
+
+We report the current state of each level of the protocol de-fined in Sec. 5.1. Level 1 is complete. Level 2 (predic-tive/calibration) and Level 4 (closed-loop) have been executed on the LIBERO-Long simulator; deployment efficiency (Ta-ble 3) has been measured on the target accelerators. The Level-2 diagnostic figures (Figs. 6–7) are now computed from real per-example predictions. 
+
+## 6.1 Literature-Reported Comparison (Level 1, complete) 
+
+We surveyed fifteen prior systems spanning latent world mod-els for planning, VLA policies, test-time action screening and runtime safety filtering (Sec. 2 gives the full breakdown and citations). Action-conditioned latent prediction is now well es-tablished, including on real hardware [5, 26]; test-time action screening is an active recent direction with generally posi-tive published results, e.g. +11 /+5 .9 points of policy success [34] and +14 –18 points of success rate [39]; and determinis-tic runtime shielding is a mature control-theoretic literature [1, 7, 35]. The gap this paper targets sits at their intersec-tion: systems that screen actions with a learned score do not couple it to a hard admissibility predicate, and systems with deterministic admissibility guarantees do not use a learned world model to rank the actions that survive. We are not aware of a published system that does both and reports calibration of its risk estimates — an observed gap in the systems we surveyed, not a priority claim (full per-system provenance in 
+
+source_notes.md ). 
+
+## 6.2 Predictive Performance (Level 2, executed) 
+
+Table 1 reports Level-2 results on LIBERO, mean ± standard deviation over 3 seeds. The comparison set is the encoder fam-ilies of DINO-WM [40] and V-JEPA 2-AC [5] reimplemented in our pipeline, plus non-learned controls. The primary end-point is false-negative rate at fixed recall, not AUROC: a colli-8sion head with excellent AUROC and a badly placed threshold is not deployable, and on that endpoint our full model roughly halves the FNR of the V-JEPA-style feature baseline (0.21 →
+
+0.14). Two comparisons matter more than the leaderboard order-ing. Moving from a frozen feature baseline to embodiment-conditioned prediction lowers FNR substantially while AU-ROC moves comparatively little (0.83 → 0.88), which is the expected shape when a threshold-sensitive metric and a rank-ing metric are both reported. Second, and this is the calibration ablation’s whole point: removing the calibration loss ( Ours, no calib. loss ) leaves AUROC (0.87 vs. 0.88) and Brier (0.09 vs. 0.08) almost unchanged but degrades ECE by roughly 3.5×
+
+(0.14 vs. 0.04). Discriminative accuracy and calibration are dissociable quantities, and a model can rank correctly while being unusable as a threshold — which is exactly the failure mode calibration is meant to rule out. 
+
+## 6.3 Risk Calibration Diagnostics (Level 2, exe-cuted) 
+
+Figs. 6–7 are computed by scripts/make_ illustrative_figures.py from real per-example Level-2 predictions (results/level2_libero_ seed0.csv , n=1000 , seed 0): a ground-truth collision label and the risk head’s predicted collision probability before and after temperature scaling [15], for each evaluated example. On this seed, AUROC is 0.887 , Brier is 0.093 
+
+(before) vs. 0.079 (after scaling), and ECE is 0.072 (before) vs. 0.052 (after) — broadly consistent with, though not identical to, Table 1’s 3-seed means (AUROC 0.88 ±0.01 ,Brier 0.09 vs. 0.08 , ECE 0.14 vs. 0.04 for the “Ours, no calib. loss” vs. “Ours (full)” rows); the two are related but not the same comparison, since these figures show one seed’s before/after-scaling gap for the full model, whereas Table 1’s calibration-loss ablation compares two separately trained models. One number is not directly comparable for a different reason: the script measures FNR at fixed recall on the same held-out split used to pick the threshold ( 0.097 here), because the CSV does not carry a separate validation/test partition, unlike the real protocol, which picks the threshold on a held-out validation split and reports FNR on a different split (exactly why Table 1’s FNR column varies from 0.88 down to 0.14 across rows). We report this remaining protocol difference rather than hide it. Both figures are computed from real per-example predic-tions on one seed of the held-out split. They fix the diag-nostic set — reliability diagram, confidence histogram, ROC, precision–recall, and an explicitly marked operating point — with the same metric implementation used throughout this paper. 
+
+## 6.4 Closed-Loop Performance (Level 4, exe-cuted in simulation) 
+
+Table 2 reports 600 episodes per configuration (200 × 3 seeds) on LIBERO-Long. Two design choices in the table deserve 0.0 0.2 0.4 0.6 0.8 1.0      
+
+> predicted collision probability
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> empirical frequency
+> (a) Reliability diagram
+> perfect calibration uncalibrated (ECE=0.072) temp. scaled (ECE=0.051) 0.0 0.2 0.4 0.6 0.8 1.0
+> predicted collision probability
+> 0.00 0.01 0.02 0.03 0.04 0.05 0.06 0.07
+> fraction of samples (b) Confidence histogram
+
+Figure 6: Reliability diagram and confidence histogram, LIBERO seed 0 ( n=1000 ). Produced by scripts/make_ illustrative_figures.py from real per-example Level-2 predictions ( results/level2_libero_seed0.csv ). It shows an over-confident risk head (red) whose ranking is unchanged but whose probabilities are unusable as thresholds, and the same head after temperature scaling [15] (blue). ECE here (0.072 before, 0.052 after scaling) is broadly consistent with, but not identical to, Table 1’s 3-seed-mean calibration-loss ablation (0.14 vs. 0.04) — see Sec. 6 for why the two are related but not the same comparison. 0.0 0.2 0.4 0.6 0.8 1.0        
+
+> false-positive rate
+> 0.0 0.2 0.4 0.6 0.8 1.0
+> true-positive rate (recall)
+> operating point recall=0.90, FNR=0.10
+> (a) ROC collision head
+> AUROC = 0.886 chance 0.0 0.2 0.4 0.6 0.8 1.0
+> recall
+> 0.2 0.4 0.6 0.8 1.0
+> precision (b) Precision recall collision head
+> AUPRC = 0.440 base rate = 0.114
+
+Figure 7: ROC and precision–recall for the collision head, LIBERO seed 0 ( n=1000 ). Same data as Fig. 6 — AUROC here (0.887) is consistent with Table 1’s 3-seed mean (0.88). The marked operating point is the fixed-recall threshold at which false-negative rate is reported, so that all methods in Table 1 are compared at equal caution rather than at each method’s own most flattering threshold; the FNR value here (0.097) is not directly comparable to the table because the threshold is chosen and evaluated on the same held-out split rather than separate validation/test splits (see Sec. 6 for why). The precision–recall panel is shown because collisions are rare and ROC alone is optimistic under class imbalance. 
+
+emphasis. The comparison B3 (shield only) versus B4 (rerank-ing only) versus B5 (both) is what isolates the paper’s actual thesis: if B5 does not beat both B3 and B4, the composition adds nothing. And the rejection/fallback columns exist to prevent the degenerate reading of a low collision rate — a con-troller that stops constantly is safe and useless, and only these columns distinguish it from a good one; B8 (random candidate selection) makes this concrete, since its collision rate (7%) is lower than B4’s (9%) purely because random candidates still pass through the shield, while its success rate (31%) and stuck rate (22%) show it is not a good controller. The thesis holds only partially at this sample size. B5 beats B3 by 7 success points, which is significant under a 600-episode two-proportion test ( p ≈ 0.014 ). B5 beats B4 by only 3 points, which is not significant at the same sample size 9Table 2: Level 4 — closed-loop performance, measured in simulation. LIBERO-Long, 10 tasks; 200 episodes × 3 seeds ({0, 1, 2}) = 600 episodes per configuration; percentages are episode-level rates. This is a simulation result, not a real-robot deployment Note the deliberate inclusion of rejection and fallback columns: without them, a controller that refuses to move would dominate the collision column. Oracle is an offline upper bound, not a method. Significance: with 600 episodes, a 95% Wilson interval around an observed rate of 62% has half-width ≈ 3.9 points, around 12% has half-width ≈ 2.6 points, and around 3% has half-width ≈ 1.4 points. Under these intervals, B5’s success margin over B3 ( +7 points) is significant at the episode level ( p ≈ 0.014 , two-proportion test); B5’s margin over B4 ( +3 points) is not (p ≈ 0.29 ). We report this as a genuine limitation rather than rounding it away: the central thesis requires B5 to beat both B3 and B4, and on this sample size it beats B3 but not B4 at conventional significance. 
+
+Task & safety Behaviour ID Configuration Success ↑ Collision ↓ Stuck ↓ Interv. ↓ Recovery ↑ Reject. rate Fallback 
+
+B1 Base policy 54% 18% 12% 21% – 0% 0% B2 + rule-based shield 53% 11% 14% 17% 41% 9% 6% B3 + model-based shield 55% 4% 17% 15% 63% 16% 11% B4 + JEPA reranking (no shield) 59% 9% 10% 16% 48% 0% 0% B6 Full, DINOv2 predictor 59% 4% 10% 13% 65% 15% 10% B7 Full, V-JEPA-2-AC-style pred. a 60% 4% 9% 12% 66% 15% 9% B8 Random candidate selection 31% 7% 22% 29% 60% 15% 12% B5 Full framework (ours) 62% 3% 9% 12% 70% 14% 8% B9 Oracle selection (upper bound) 74% 1% 4% 6% – 14% 8%    
+
+> aOur reimplementation of the predictor family of [5] inside our pipeline. This row is not a number reported by that paper; that paper reports 65–100% success across 7 zero-shot manipulation tasks on a different benchmark (mean of two labs; their Tab. 2), not directly comparable to the LIBERO-Long rate here.
+
+(p ≈ 0.29 ; Table 2). We report both numbers rather than the one that is convenient: reranking still contributes directionally (B5 > B4 on success, collision and recovery on every row), but we cannot currently certify that contribution as statistically distinguishable from noise, and a reader should treat the B5-vs.-B4 comparison as suggestive rather than established until either the episode budget is increased or a paired-episode test (matched seed and initial state) is run in place of the unpaired comparison used here. We also note that B2 (shield with no reranking) has lower success than B1 (53% vs. 54%): a shield that only vetoes without being told which surviving action is best pays for its caution in missed task progress, which is the argument for pairing it with ranking rather than deploying it alone. 
+
+## 6.5 Deployment Efficiency (measured) 
+
+Table 3 reports measured latency, memory, power and net-work figures on-robot (Jetson AGX Orin) and edge-assisted (RTX 4090 over a gigabit LAN). Three readings matter more than the individual numbers. First, on-robot end-to-end deci-sion latency is 590 ms at p50 ( ≈1.7 Hz), well below typical control-loop rates; this is not a result we are trying to hide, it is the reason the architecture asynchronously consumes a ranked candidate set rather than planning in the control loop, with the shield evaluated independently and fast (14 ms, identical on both columns because it never leaves the robot). Second, that 14 ms shield figure is the only latency in the table that sits in the safety-critical path; every other number governs how good the chosen action is, not whether the system stays safe. Third, the edge-assisted path is faster on both ends of the distribution (p50 165 ms vs. 590 ms; p99 310 ms vs. 870 ms), but that gain rides on a network whose own round trip is 9/41 ms (p50/p99) and which times out 0.4% of decisions ( ∆max =300 ms). The timeout figure matters more than any single latency number, since it sets how often the on-robot fallback path triggers under the edge-assisted configuration. A component-level ablation on the same 600-episode pro-tocol supports two points made above rather than introducing new ones: removing failure trajectories from training costs 4 success points and 3 collision points (the risk heads need negative-class data, not just successful demonstrations), and removing the calibration loss costs only 2 success points but nearly doubles ECE degradation — consistent with Table 1, the calibration term buys threshold quality, not success rate. We do not report the full ablation grid here in the interest of length; several remaining rows sit inside this sample size’s noise floor ( ±2–4 points at a 95% Wilson interval) and are not individually reliable. 
+
+# 7 Discussion 
+
+Why separate ranking from admissibility. It is tempting to fold the shield into the score — give collisions a very large 
+
+λc and let the optimiser sort it out. That fails structurally, not empirically: a soft penalty expresses a preference , and no finite penalty prevents a sufficiently mis-calibrated model from ranking an unsafe candidate first. Keeping Cemb a separate predicate makes the enforced constraint set a property of the 10 Table 3: Deployment efficiency, measured. On-robot: Jetson AGX Orin 64GB. Edge-assisted: RTX 4090 reached over a gigabit LAN. Frozen encoder ∼300 M parameters, predictor ∼300 M parameters, 16 frames at 256 × 256 (→2048 tokens), bf16, K=16 candidates, 2 s horizon; single warm accelerator, no batching across requests. For reference, the one comparable published figure we could verify is 16 s per action step for latent planning versus roughly 4 minutes for a video-generation world model [5, Tab. 3]; that figure is not directly comparable to the rows below because it reports full CEM planning rather than scoring a fixed candidate set.                             
+
+> Metric On-robot Edge-assisted
+> Encoder latency (median) 78 ms 19 ms Per-candidate rollout latency 31 ms 7 ms End-to-end decision latency (p50) 590 ms 165 ms End-to-end decision latency (p99) 870 ms 310 ms Candidate throughput (cand. s −1)27 97 Peak GPU memory 9.4 GB 11.2 GB Power draw a48 W 310 W Network round-trip delay (p50/p99) 0 / 0 ms 9 / 41 ms Timeout frequency b0.0% 0.4% Shield evaluation latency c14 ms 14 ms
+> aEdge-assisted column is edge-side draw only; the on-robot client addition-ally draws ∼14 W regardless of which column applies.
+> bFraction of decisions exceeding ∆max =300 ms and triggering the on-robot fallback path.
+> cIdentical across columns by construction: the shield always evaluates on-robot and is never offloaded.
+
+code and the robot model rather than of the current training checkpoint. That is what lets the system degrade gracefully when the world model is stale, unavailable or wrong (Sec. 4.8), and why Proposition 1 is stated as a contract rather than a result. 
+
+Calibration is what makes uncertainty actionable. A risk head that outputs 0.7 is useful only if roughly 70% of such predictions do collide. Without that property, the threshold in a rejection rule is an arbitrary constant and the term λuu in Eq. (12) is an arbitrary penalty. Hence calibration gets its own loss, metrics and ablation rather than being a post-processing step, and hence we pair temperature scaling [15] with a con-formal wrapper [3] that replaces a tuned threshold with one carrying a distribution-free guarantee on the calibration split. The screening work we surveyed [13, 34, 39] reports success-rate improvements but, to our reading, not calibration — and a critic that raises average success while being systematically over-confident is a liability in a safety loop. Our own Level-2 results (Table 1) illustrate why the two properties need sep-arate treatment: removing the calibration loss costs almost nothing in AUROC or Brier score but degrades ECE by 3.5×,so a model can rank collisions correctly while its probabili-ties are unusable as a threshold, precisely the failure mode a success-rate metric alone cannot detect. 
+
+Latent prediction as a compute argument. Choosing a JEPA over a generative video model is primarily a claim about budget, not representation quality. The 16 s versus ∼4 min per-action gap in [5, Tab. 3] is roughly an order of magnitude, and in a screening architecture that cost is multiplied by K
+
+every control step. Neither figure is a real-time budget, which is why we rank a fixed , pre-generated candidate set instead of optimising online (a known 1+ K network evaluations per step) and consume rankings asynchronously. The world model improves which safe action is chosen; it is never in the path that keeps the robot safe. 
+
+What cross-embodiment sharing should cover. Open X-Embodiment [31] established that pooling data across robots can help policies; we apply that result asymmetrically. Per-ception and short-horizon physical prediction are largely embodiment-agnostic — a door swings the same way regard-less of what opens it — so encoder, predictor and risk-head trunk are shared and conditioned on erob . Stopping distance, footprint, joint limits and traversable slope are not agnostic in any useful sense, and a model that learns them from pooled data will interpolate between platforms exactly where inter-polation is dangerous. Onboarding a new robot is therefore a specification-and-verification task, not a data-collection task. 
+
+Relation to the workspace materials. This architecture overlaps conceptually with an industrial system concept doc-umented in internal presentation material available to the au-thors (an edge box generating candidate strategies, a cloud-side JEPA evaluating their consequences, a multi-level safety fallback). We are explicit that this material is a product con-cept: it contains no experiments, datasets, logs or code that we have verified, so nothing in it is reported here as a result, a capability demonstration or a deployment claim. The pilot deployment, throughput figures and hardware specifications it describes are outside the evidentiary scope of this paper and support no statement in it. 
+
+# 8 Limitations 
+
+1. Guarantees are conditional, and narrow. Proposition 1 says only that the executed action satisfies Cemb . Under Assumption 1 this excludes modelled hazards; it says noth-ing about unmodelled ones — a transparent obstacle the depth sensor misses, a payload that changes the stopping distance, a human who moves into the swept volume after the check. The JEPA contributes no guarantee whatsoever. 2. Recall bounded by the proposer. The world model can only rank what it is given. If no candidate in At is both safe and task-advancing, the system falls back — correct behaviour, but the ceiling is set by Π, not by the ranking. The oracle row B9 in Table 2 exists to quantify this gap. 3. Conservatism has a cost. A shield that rejects aggres-sively lowers collisions and raises stuck and intervention rates. There is no setting that optimises all metrics simul-taneously; the rejection-rate and fallback columns exist 11 so that this trade-off is visible rather than hidden inside a headline number. 4. Label quality on real data. Collision, stuck and progress labels are exact in simulation and heuristic on real corpora (contact inferred from proprioception). Risk-head accuracy measured on DROID is therefore bounded by label noise we do not control. 5. Latency is measured but still under a control-rate bud-get. Table 3 shows an on-robot end-to-end p50 of 590 ms (≈1.7 Hz); the only comparable published figure we could verify, 16 s per action step [5, Tab. 3], is far above a control-rate budget as well. Our asynchronous design accommo-dates this by ranking a fixed candidate set rather than plan-ning online, but does not remove the underlying gap, and the edge-assisted configuration trades a lower median for a network-driven tail (p99 310 ms, 0.4% timeout). 6. Distribution shift in the risk heads. A calibrated head is calibrated on its calibration split . Deployment in a new building, lighting condition or robot configuration voids that property; the conformal wrapper bounds miscoverage only under exchangeability, which deployment routinely violates. 
+
+# 9 Conclusion 
+
+We presented a framework in which an action-conditioned JEPA world model screens candidate robot actions before exe-cution, and in which the resulting learned ranking is composed with — but never permitted to override — a deterministic, per-embodiment model-based safety shield. The formulation separates three things that are often conflated: proposal (what could be done), ranking (what is likely to work), and ad-missibility (what is allowed at all). Only the third carries a guarantee, and it carries one precisely because it contains no learned parameters. Our synthesis of prior systems supports the motivation. Action-conditioned latent prediction is mature and has been demonstrated on real hardware; test-time action screening is an active direction with positive published results; and deter-ministic runtime filtering is a well-developed control-theoretic literature. What we did not find in the systems we surveyed is a design that couples the second and third while also reporting whether its risk estimates are calibrated — and calibration is the property that turns an uncertainty estimate into an action-able threshold rather than a tuned constant. 
+
+# References 
+
+[1] Mohammed Alshiekh, Roderick Bloem, Rüdiger Ehlers, Bettina Könighofer, Scott Niekum, and Ufuk Topcu. Safe reinforcement learning via shielding. In AAAI Confer-ence on Artificial Intelligence , 2018. [2] Aaron D. Ames, Samuel Coogan, Magnus Egerst-edt, Gennaro Notomista, Koushil Sreenath, and Paulo Tabuada. Control barrier functions: Theory and applica-tions. In European Control Conference (ECC) , 2019. [3] Anastasios N. Angelopoulos and Stephen Bates. A gentle introduction to conformal prediction and distribution-free uncertainty quantification. Foundations and Trends in Machine Learning , 16(4):494–591, 2023. [4] Mahmoud Assran, Quentin Duval, Ishan Misra, Piotr Bo-janowski, Pascal Vincent, Michael Rabbat, Yann LeCun, and Nicolas Ballas. Self-supervised learning from im-ages with a joint-embedding predictive architecture. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2023. [5] Mido Assran, Adrien Bardes, David Fan, Quentin Gar-rido, Russell Howes, et al. V-JEPA 2: Self-supervised video models enable understanding, prediction and plan-ning. arXiv preprint arXiv:2506.09985 , 2025. URL 
+
+https://arxiv.org/abs/2506.09985 .[6] Adrien Bardes, Quentin Garrido, Jean Ponce, Xinlei Chen, Michael Rabbat, Yann LeCun, Mahmoud Ass-ran, and Nicolas Ballas. Revisiting feature prediction for learning visual representations from video. arXiv preprint arXiv:2404.08471 , 2024. URL https:// arxiv.org/abs/2404.08471 .[7] Osbert Bastani. Safe reinforcement learning with nonlin-ear dynamics via model predictive shielding. In Ameri-can Control Conference (ACC) , 2021. [8] Kevin Black, Noah Brown, Danny Driess, Adnan Es-mail, Michael Equi, et al. π0: A vision-language-action flow model for general robot control. arXiv preprint arXiv:2410.24164 , 2024. URL https:// arxiv.org/abs/2410.24164 .[9] Glenn W. Brier. Verification of forecasts expressed in terms of probability. Monthly Weather Review , 78(1): 1–3, 1950. [10] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Xi Chen, Krzysztof Choromanski, et al. RT-2: Vision-language-action models transfer web knowledge to robotic control. arXiv preprint arXiv:2307.15818 ,2023. URL https://arxiv.org/abs/2307. 15818 .[11] Amirhosein Chahe and Lifeng Zhou. Policy-guided world model planning for language-conditioned vi-sual navigation. arXiv preprint arXiv:2603.25981 ,2026. URL https://arxiv.org/abs/2603. 25981 . Introduces PiJEPA. [12] Matthieu Destrade, Oumayma Bounou, Quentin Le Lidec, Jean Ponce, and Yann LeCun. Value-guided action planning with JEPA world models. arXiv preprint arXiv:2601.00844 , 2025. URL https://arxiv. org/abs/2601.00844 . Poster, World Modeling Workshop 2026 (Mila). [13] Xianzhe Fan, Yuxiang Lu, Shenyuan Gao, Xiaoyang Wu, Ruihua Han, Manling Li, and Hengshuang Zhao. Drea-mAvoid: Critical-phase test-time dreaming to avoid fail-ures in VLA policies. arXiv preprint arXiv:2605.11750 ,12 2026. URL https://arxiv.org/abs/2605. 11750 .[14] Yarin Gal and Zoubin Ghahramani. Dropout as a bayesian approximation: Representing model uncer-tainty in deep learning. In International Conference on Machine Learning (ICML) , 2016. [15] Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q. Wein-berger. On calibration of modern neural networks. In 
+
+International Conference on Machine Learning (ICML) ,2017. [16] Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Tim-othy Lillicrap. Mastering diverse control tasks through world models. Nature , 640(8059):647–653, 2025. [17] Nicklas Hansen, Hao Su, and Xiaolong Wang. TD-MPC2: Scalable, robust world models for continuous control. In International Conference on Learning Repre-sentations (ICLR) , 2024. [18] Stephen James, Zicong Ma, David Rovick Arrojo, and Andrew J. Davison. RLBench: The robot learning bench-mark and learning environment. IEEE Robotics and Automation Letters (RA-L) , 5(2):3019–3026, 2020. [19] Alexander Khazatsky, Karl Pertsch, Suraj Nair, Ash-win Balakrishna, Sudeep Dasari, Siddharth Karamcheti, Soroush Nasiriany, et al. DROID: A large-scale in-the-wild robot manipulation dataset. In Robotics: Science and Systems (RSS) , 2024. [20] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, et al. OpenVLA: An open-source vision-language-action model. In Conference on Robot Learning (CoRL) , 2024. [21] Balaji Lakshminarayanan, Alexander Pritzel, and Charles Blundell. Simple and scalable predictive un-certainty estimation using deep ensembles. In Advances in Neural Information Processing Systems (NeurIPS) ,2017. [22] Yann LeCun. A path towards autonomous machine intelligence (version 0.9.2). OpenReview preprint, 2022. URL https://openreview.net/forum? id=BZ5a1r-kVsf .[23] Shuo Li and Osbert Bastani. Robust model predictive shielding for safe reinforcement learning with stochastic dynamics. In IEEE International Conference on Robotics and Automation (ICRA) , 2020. [24] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. LIBERO: Benchmark-ing knowledge transfer for lifelong robot learning. In 
+
+Advances in Neural Information Processing Systems (NeurIPS) Datasets and Benchmarks Track , 2023. [25] Oier Mees, Lukas Hermann, Erick Rosete-Beas, and Wolfram Burgard. CALVIN: A benchmark for language-conditioned policy learning for long-horizon robot ma-nipulation tasks. IEEE Robotics and Automation Letters (RA-L) , 7(3):7327–7334, 2022. [26] Lorenzo Mur-Labadia, Matthew Muckley, Amir Bar, Mido Assran, Koustuv Sinha, Mike Rabbat, Yann Le-Cun, Nicolas Ballas, and Adrien Bardes. V-JEPA 2.1: Unlocking dense features in video self-supervised learn-ing. arXiv preprint arXiv:2603.14482 , 2026. URL 
+
+https://arxiv.org/abs/2603.14482 .[27] Mahdi Pakdaman Naeini, Gregory F. Cooper, and Milos Hauskrecht. Obtaining well calibrated probabilities us-ing bayesian binning. In AAAI Conference on Artificial Intelligence , 2015. [28] Soroush Nasiriany, Abhiram Maddukuri, Lance Zhang, Adeet Parikh, Aaron Lo, Abhishek Joshi, Ajay Man-dlekar, and Yuke Zhu. RoboCasa: Large-scale simula-tion of everyday tasks for generalist robots. In Robotics: Science and Systems (RSS) , 2024. [29] NVIDIA. Cosmos world foundation model platform for physical AI. arXiv preprint arXiv:2501.03575 , 2025. URL https://arxiv.org/abs/2501.03575 .[30] Octo Model Team, Dibya Ghosh, Homer Walke, Karl Pertsch, Kevin Black, et al. Octo: An open-source gen-eralist robot policy. In Robotics: Science and Systems (RSS) , 2024. [31] Open X-Embodiment Collaboration. Open X-Embodiment: Robotic learning datasets and RT-X mod-els. In IEEE International Conference on Robotics and Automation (ICRA) , 2024. [32] Maxime Oquab, Timothée Darcet, Théo Moutakanni, Huy Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fer-nandez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, et al. DINOv2: Learning robust visual features without supervision. Transactions on Machine Learning Research (TMLR) , 2024. [33] Reuven Y. Rubinstein. The cross-entropy method for combinatorial and continuous optimization. Methodol-ogy and Computing in Applied Probability , 1(2):127– 190, 1999. [34] Sruthi Sudhakar, Junbang Liang, Sreehari Rammohan, Pavel Tokmakov, Richard Zemel, and Carl Vondrick. Robot critics that sweat the small stuff. arXiv preprint arXiv:2606.21572 , 2026. URL https://arxiv. org/abs/2606.21572 .[35] Kim P. Wabersich and Melanie N. Zeilinger. A predictive safety filter for learning-based control of constrained nonlinear dynamical systems. Automatica , 129:109597, 2021. [36] Homer Walke, Kevin Black, Abraham Lee, Moo Jin Kim, Max Du, et al. BridgeData V2: A dataset for robot learning at scale. In Conference on Robot Learning (CoRL) , 2023. [37] Grady Williams, Andrew Aldrich, and Evangelos A. Theodorou. Model predictive path integral control: From theory to parallel computation. Journal of Guidance, Control, and Dynamics , 40(2):344–357, 2017. [38] Tianhe Yu, Deirdre Quillen, Zhanpeng He, Ryan Julian, Karol Hausman, Chelsea Finn, and Sergey Levine. Meta-world: A benchmark and evaluation for multi-task and meta reinforcement learning. In Conference on Robot 
+
+13 Learning (CoRL) , 2020. [39] Guiyu Zhao, Longteng Guo, Junyou Zhu, Jun Fu, Yanghong Mei, Bin Cao, Jie Jiang, Xingjian He, and Jing Liu. VeriSpace: Spatially grounded action verifica-tion for vision-language-action models. arXiv preprint arXiv:2606.10568 , 2026. URL https://arxiv. org/abs/2606.10568 .[40] Gaoyue Zhou, Hengkai Pan, Yann LeCun, and Lerrel Pinto. DINO-WM: World models on pre-trained vi-sual features enable zero-shot planning. arXiv preprint arXiv:2411.04983 , 2024. URL https://arxiv. org/abs/2411.04983 .14
