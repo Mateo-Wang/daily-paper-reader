@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-22</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-23</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 17 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 6 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>4</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-22 20:43:16 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-23 19:56:19 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共读17篇论文，精读7篇、速读10篇，其中两篇获9.0高分。最值得关注的方向是连续技能学习（OrthoSkillVLA）与腿足移动操作的世界模型（DECOWAM）。普通读者可优先精读这两篇，再速读其余涉及VLA微调、潜在动作与安全对齐的工作。</p>
+<p>今日推荐聚焦具身智能与导航，精读两篇高分论文，其余为速读。</p>
+<p>最值得看的是《ADEPT》（9.0分）——用强化学习预训练/后训练加速灵巧操作；以及《Exposing the Long-tail》（8.0分）——从野外视频学习以应对城市导航长尾场景。</p>
+<p>建议普通读者优先浏览这两篇精读，速读中触觉预测（EgoTac）和无人机避障（DPNet、DevGRU）均7.0分，可按兴趣选读。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="OrthoSkillVLA: Continual Skill Learning via Gradient-Informed Skill Subspace Adaptation">OrthoSkillVLA: Continual Skill Learning via Gradient-Informed Skill Subspace Adaptation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DECOWAM: Decoupled Whole-Body World-Action Model for Legged Mobile Manipulation">DECOWAM: Decoupled Whole-Body World-Action Model for Legged Mobile Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Revisiting Open-Loop Execution in Robotics: Toward Reactive, Higher-Performing Policies">Revisiting Open-Loop Execution in Robotics: Toward Reactive, Higher-Performing Policies</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ADEPT: Accelerating Dexterity via Pre-Training and Post-Training using Reinforcement Learning">ADEPT: Accelerating Dexterity via Pre-Training and Post-Training using Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Exposing the Long-tail in Embodied Urban Navigation via Scalable Learning from In-the-Wild Videos">Exposing the Long-tail in Embodied Urban Navigation via Scalable Learning from In-the-Wild Videos</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +63,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Fine-Tuning VLAs with Self-Demonstrated Generative Control for Multi-Task Manipulation">Fine-Tuning VLAs with Self-Demonstrated Generative Control for Multi-Task Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="What Matters for Latent Actions in Robot Learning">What Matters for Latent Actions in Robot Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="SafeBranch: Branch-Pair Safety Alignment for Embodied Agents">SafeBranch: Branch-Pair Safety Alignment for Embodied Agents</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EgoTac: In-the-wild Tactile Prediction from Egocentric Vision">EgoTac: In-the-wild Tactile Prediction from Egocentric Vision</span></li><li><span class="dpr-home-dashboard-paper-title" title="DPNet: Efficient Dead-End Prediction and Avoidance for Vision-Based UAV Navigation">DPNet: Efficient Dead-End Prediction and Avoidance for Vision-Based UAV Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DevGRU: Depth-guided Visual Navigation using a Collision-aware Recurrent Model">DevGRU: Depth-guided Visual Navigation using a Collision-aware Recurrent Model</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
 </section>
 </div>
 
