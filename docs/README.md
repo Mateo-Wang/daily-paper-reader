@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-25</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-26</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 25 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>13</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-25 21:25:37 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-26 22:35:39 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共扫描25篇论文，精读13篇、速读12篇，重点聚焦具身智能与自动驾驶。最值得关注的是两篇满分工作：Pointing-VLA通过类型化空间接地提升VLA操作精度，GeoWAM将视觉几何世界模型用于自动驾驶。建议普通读者优先精读这两篇，速读部分可关注力控适应与反事实监督方向。</p>
+<p>今日聚焦视觉-语言-动作模型与机器人技能适应，共精读7篇、速读12篇；其中《GlanceWAM》与《Hierarchical Skill Retrieval》以9.0高分领跑，值得优先精读。速读中《The Imitator Game》《Act with Intent》等围绕模仿能力与意图提炼，也具启发性。建议从“测试时想象+稀疏采样”和“层级技能检索”两个方向切入，把握VLA模型高效适应与泛化的关键路径。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">13 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Pointing-VLA: Typed Spatial Grounding Interfaces for Vision-Language-Action Manipulation">Pointing-VLA: Typed Spatial Grounding Interfaces for Vision-Language-Action Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="GeoWAM: Visual Geometry World Action Models for Autonomous Driving">GeoWAM: Visual Geometry World Action Models for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Geo-VLA: Geometry-Aware Vision-Language-Action Planning via Internalization of Map Semantics">Geo-VLA: Geometry-Aware Vision-Language-Action Planning via Internalization of Map Semantics</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GlanceWAM: Sparse Test-Time Imagination for World-Action Models">GlanceWAM: Sparse Test-Time Imagination for World-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Hierarchical Skill Retrieval for Data-Efficient Adaptation of Vision-Language-Action Models">Hierarchical Skill Retrieval for Data-Efficient Adaptation of Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="GaussianWAM: Distilling Geometry and Semantics from 3D Gaussian Fields into World-Action Models">GaussianWAM: Distilling Geometry and Semantics from 3D Gaussian Fields into World-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,9 +64,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Force/Torque-Based Kinematic Adaptation for Robotic Manipulation Tasks">Force/Torque-Based Kinematic Adaptation for Robotic Manipulation Tasks</span></li><li><span class="dpr-home-dashboard-paper-title" title="CounterAlign: Counterfactual Supervision for Vision-Language-Action Models">CounterAlign: Counterfactual Supervision for Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="CIDER: Continual Interactive Distillation for Embodied Reinforcement Learning">CIDER: Continual Interactive Distillation for Embodied Reinforcement Learning</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="The Imitator Game: Benchmarking Robot Imitative Ability Beyond Action Prediction">The Imitator Game: Benchmarking Robot Imitative Ability Beyond Action Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Enhancing Sim2Real Transfer for Torque-Controlled Robots through Real2Sim Dynamics Estimation and Reinforcement Learning">Enhancing Sim2Real Transfer for Torque-Controlled Robots through Real2Sim Dynamics Estimation and Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Act with Intent: Distilling Behavior Intent for Vision-Language-Action Models">Act with Intent: Distilling Behavior Intent for Vision-Language-Action Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 </div>
 
