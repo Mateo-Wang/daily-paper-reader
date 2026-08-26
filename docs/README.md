@@ -4,11 +4,11 @@
     <h3 class="dpr-home-frontier-title">AI 前沿</h3>
     <a class="dpr-home-frontier-history" href="#/frontier/README">历史精选 <span aria-hidden="true">›</span></a>
   </div>
-  <p class="dpr-home-frontier-summary">本周精选 <strong>1</strong> 篇前沿论文 · 累计共推荐 <strong>1</strong> 篇前沿论文</p>
+  <p class="dpr-home-frontier-summary">本周精选 <strong>1</strong> 篇前沿论文 · 累计共推荐 <strong>2</strong> 篇前沿论文</p>
   <div class="dpr-home-frontier-week">
-    <span class="dpr-home-frontier-week-label">└─ 2026 第 34 周</span>
+    <span class="dpr-home-frontier-week-label">└─ 2026 第 35 周</span>
     <ul>
-    <li class="dpr-home-frontier-item"><a href="#/frontier/2026-W34/intern-s2-preview-scientific-agentic-foundation-model" title="作为科学智能体基础模型，统一多模态理解、推理与长程工具交互，可迁移至多科学领域。">Intern-S2-Preview: Scientific Agentic Foundation Model</a></li>
+    <li class="dpr-home-frontier-item"><a href="#/frontier/2026-W35/qwen-qwen3-8-27b">Qwen/Qwen3.8-27B</a></li>
     </ul>
   </div>
 </section>

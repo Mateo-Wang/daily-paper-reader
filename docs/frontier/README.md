@@ -2,6 +2,10 @@
 
 每周最多两篇：只保留值得跨领域阅读的论文、技术报告、模型发布或开源项目。
 
+## 2026 第 35 周
+
+- [Qwen/Qwen3.8-27B](#/frontier/2026-W35/qwen-qwen3-8-27b)  
+
 ## 2026 第 34 周
 
 - [Intern-S2-Preview: Scientific Agentic Foundation Model](#/frontier/2026-W34/intern-s2-preview-scientific-agentic-foundation-model)  
