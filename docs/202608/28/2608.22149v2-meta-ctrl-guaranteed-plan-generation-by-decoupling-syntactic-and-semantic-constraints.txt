@@ -1,0 +1,737 @@
+Title: Meta-Ctrl: Guaranteed Plan Generation by Decoupling Syntactic and Semantic Constraints
+
+URL Source: https://arxiv.org/pdf/2608.22149v2
+
+Published Time: Thu, 27 Aug 2026 00:07:19 GMT
+
+Number of Pages: 26
+
+Markdown Content:
+# Meta-Ctrl: Guaranteed Plan Generation by Decoupling Syntactic and Semantic Constraints 
+
+Gwen Yidou-Weng 1∗, Edward Sun 1∗, Tianyi Ma 2, Metin Alp Dogan 1,Benjie Wang 1, Allen Peng 1, Guy Van den Broeck 1, Yuchen Cui 11University of California, Los Angeles 2Michigan State University 
+
+{gwenweng,edwardsun12895 }@ucla.edu {guyvdb,yuchencui }@cs.ucla.edu 
+
+> ∗
+
+Equal contribution. 
+
+Abstract: LLMs generate fluent plans for robots but routinely violate the syntac-tic and semantic constraints they must satisfy to execute, and existing remedies trade formal guarantees against plan quality: soft methods (affordance scoring, grounded decoding) give no guarantee, while symbolic planners (LLM+P) discard the LM’s commonsense. We propose Meta-Ctrl , a constrained-decoding frame-work that guarantees the encoded constraints while preserving the base LM’s plan quality. Meta-Ctrl introduces meta-tokens —a compact vocabulary of grounded actions—enforcing syntax at the token level and semantics (preconditions, goals, ordering) at the action level, an exact factorization that cuts the memory of con-strained decoding from over 107 TB to under 2 GB. With it, a small open-weight LM becomes competitive where it otherwise sits at the bottom of the leaderboard: on WAH-NL under the LoTa-Bench protocol it reaches the highest reported sub-goal success rate, exceeding GPT-4’s, with consistent gains across the Embodied Agent Interface. We further demonstrate it on a real tabletop robot, where every generated plan satisfies its preconditions and goals by construction. 
+
+Keywords: Constrained Decoding, Formal Guarantees, Task and Motion Plan-ning 
+
+# 1 Introduction 
+
+Large language models (LLMs) are increasingly used to generate action plans for robots, mapping natural-language instructions to sequences of grounded actions [1, 2, 3, 4, 5, 6]. On long-horizon household tasks in environments such as VirtualHome [7] and BEHAVIOR [8], these plans violate constraints at high rates: hallucinated objects, precondition failures, missing steps, and incorrect orderings [9, 10]. The failures are of two kinds: syntactic (malformed output: invalid actions, wrong argument structure, ill-formed formatting) and semantic (well-formed but physically infeasible or goal-violating, such as placing an ungrasped object or skipping a required precondition). Existing methods mitigate these failures but rarely provide both formal guarantees and high plan quality. Affordance scoring [1] and grounded decoding [6] reshape the LM’s output distribution with feasibility scores or environment models, but the guidance is soft. Infeasible outputs can still be generated. Replanning with execution feedback [4, 11] retries after failures, with no termination guarantee and compounding cost. Active knowledge acquisition [12] learns missing task informa-tion by interaction; it is complementary to enforcing constraints already known, and could supply the learned constraint extractors our limitations call for. LLM+P [13] hands planning to a PDDL solver, trading the LM’s commonsense for a full domain specification. A separate line of work guarantees validity by construction. Grammar-constrained decoding (GCD) [14, 15, 16], the closest to ours, masks at each decoding step any token that would violate the grammar. But the mask is local and admits any token compatible with some valid completion, regardless of whether the remaining sequence is likely or satisfies longer-range constraints, which arXiv:2608.22149v2 [cs.RO] 25 Aug 2026 Figure 1: Meta-Ctrl enforces preconditions that the base LM violates. Task: put dishes in dishwasher; PUTIN requires holding an object and an open container. The base LM (top) attempts PUTIN while the dishwasher is closed. Meta-Ctrl (bottom) enforces the action-level precondition, inserting OPEN(dishwasher). 
+
+can sharply distort the LM’s distribution [17], yielding valid but improbable outputs, exactly when LM likelihood tracks plan plausibility. Avoiding this requires reasoning about the full remaining sequence, not just the next token . Ctrl-G [18] does so while keeping the guarantee: it weights each token by a tractable estimate of the probability that the full completion will satisfy the constraint, recovering the LM’s distribution conditioned on satisfaction. Applied to syntax, it yields guaranteed well-formed plans directly. Enforcing semantic constraints on top of syntax is substantially harder: semantic validity depends on the evolving world state (e.g. whether an object has been grasped before it is placed), not just each action’s surface form. The na¨ ıve fix (compiling syntax and semantics into a single token-level DFA) has a state space that scales as the product of the two, exceeding 350 M states and requiring 
+
+107 TB of memory for a typical task. This is wasteful: semantics depends only on which actions occur and in what order, not on token-level formatting. It motivates factoring constraint enforcement across granularities: syntax at the token level, semantics at the action level. We introduce Meta-Ctrl , a two-level constrained-decoding framework built around meta-tokens :a compact action-level representation that lets syntax be enforced over tokens and semantics over actions (Fig. 1). Because the two levels can be aligned exactly, the joint constraint decouples into two independent subproblems, yielding a 1,900 × reduction in compute and a 67 ,000 × reduction in memory over the monolithic approach. Empirically, this turns a small open-weight LM into a competitive planner that matches or exceeds models an order of magnitude larger (Section 4). Our contributions are: • We bring formally guaranteed constrained decoding to robot planning via Ctrl-G, enforcing syntactic constraints with provable validity. • We present Meta-Ctrl , a two-level constrained-decoding framework that decouples token-level syntax from action-level semantics via meta-tokens, an exact factorization of the joint constraint. • We validate Meta-Ctrl on the EAI benchmark [9] (VirtualHome and BEHAVIOR), LoTa-Bench [19] (WAH-NL), and a real tabletop robot: on VirtualHome action sequencing, an open-weight LM (Llama 3 8B) surpasses every model on the EAI leaderboard, including the 8× larger Llama 3 70B and frontier closed models such as GPT-4o, Claude 3.5 Sonnet, and o1-preview. 
+
+# 2 Preliminaries: Ctrl-G 
+
+Constrained decoding as probabilistic reasoning. Ctrl-G [18] formulates constrained decoding as probabilistic reasoning over logical constraints. Given an LM and a constraint α (e.g. valid JSON, or containing a keyphrase), we sample from pLM (x1: n | α); decomposing autoregressively, 
+
+pLM (xt | x<t , α ) ∝ pLM (xt | x<t ) · pLM (α | x≤t). (1) 2The first factor is the LM’s next-token distribution; the second, pLM (α | x≤t), is the probability that the full sequence will satisfy α given the current prefix. Rather than a hard mask that treats all locally compatible tokens equally—and so can commit to a token from which every completion is a dead end—this term reweights each token by the probability that it leads to a constraint-satisfying completion. The reweighting (i) assigns zero probability to tokens with no valid completion, so constraint satisfaction is guaranteed , and (ii) among valid tokens, prefers those leading to natural, high-probability completions under the LM, preserving fluency. 
+
+Tractable lookahead via HMM and DFA. Computing pLM (α | x≤t) exactly is intractable, as it marginalizes over all future sequences that satisfy α. Ctrl-G trains a Hidden Markov Model 
+
+pHMM (x1: n) ≈ pLM (x1: n) and substitutes pHMM (α | x≤t):
+
+pctrl (xt | x<t , α ) ∝ pLM (xt | x<t ) · pHMM (α | x≤t). (2) The guarantee is preserved— pHMM (α | x≤t) = 0 wherever no continuation satisfies α—so the HMM affects only the reweighting among valid tokens, and a more accurate HMM yields gener-ations that are both constraint-satisfying and natural. To evaluate the lookahead, α is represented as a deterministic finite automaton (DFA) Dα that reads tokens left to right and accepts in a final state: a natural match for autoregressive decoding, composable by intersection and union, with size 
+
+|D| measured in edges. The HMM and DFA are both finite-state, so their product is a finite-state model over (hidden state, DFA state) pairs, admitting a backward dynamic program (DP) that re-turns pHMM (α | x≤t) for every prefix; for length n, H hidden states, and DFA size |D| , it costs 
+
+O(n · |D| · H2). Ctrl-G was demonstrated on constraints with small DFAs (keywords, length, infill-ing); for compositional constraints the standard product of DFAs has edge count |D 1| · |D 2|, so the DP cost scales multiplicatively—the bottleneck we address next. 
+
+# 3 Decoupling Syntax and Semantics for Constrained Decoding 
+
+Embodied plans must satisfy two kinds of constraints at different granularities: a token-level syntac-tic constraint γ (valid action names, argument structure, well-formed JSON) and an action-level se-mantic constraint β (goal achievement, preconditions, temporal ordering among grounded actions). We enforce each at its natural level, applying Ctrl-G first to syntax (Section 3.1), then extending to semantics through a meta-token projection (Section 3.2), and finally showing why factoring across the two levels is both necessary and beneficial (Section 3.3). 
+
+3.1 Level 1: Token-Level Syntax 
+
+The syntactic constraint is naturally a token-level DFA Dγ that accepts well-formed action blocks: valid action names, correct argument arity and types, and proper JSON structure. Applying Ctrl-G with Dγ steers generation toward syntactically valid output: 
+
+p(xt | x<t , γ ) ∝ pLM (xt | x<t ) · pHMM (γ | x≤t). (3) This eliminates malformed output entirely: the raw LM frequently emits prose (e.g. 
+
+‘‘To solve this, the action is TYPE...’’ ), invalid action names, or ill-formed arguments, whereas every Level-1 output parses into a valid action sequence (e.g. 
+
+{"WALK":["computer"],"GRAB":["mouse"] }). 
+
+Syntax is not enough. A syntactically valid plan can still be semantically wrong: it may attempt to place an object before grasping it, open a container that is already open, or terminate before achieving the goal. These errors naturally live at the action level, not the token level. We therefore need a second constraint that reasons about the action sequence as a whole. 
+
+3.2 Level 2: Action-Level Semantics via Meta-Tokens 
+
+To enforce semantics, we lift generation to the action level. We introduce a vocabulary W of meta-tokens , each a grounded action (e.g., O PEN (dishwasher)), and a parser τ : supp γ → W ∗ that 3tokens [ { " G RAB " : plate } , . . .        
+
+> project via τ
+> actions GRAB
+> plate OPEN
+> dishwasher PUT
+> plate, dish.
+> βDFA closed open goal OPEN
+> CLOSE
+> PUT plate in
+
+Figure 2: Level 2: action-level semantics. The parser τ projects each action block of tokens (e.g. 
+
+{"GRAB":"plate" }) to one meta-token (G RAB (plate)). A DFA Dβ over meta-tokens enforces preconditions and goal progress (e.g. P UT requires the container open). Operating on a small action vocabulary, rather than raw tokens, is what makes the factored computation below tractable. 
+
+maps each syntactically valid token sequence to its action sequence, much as a tokenizer maps characters to tokens (Figure 2). The semantic constraint β is then a DFA over meta-tokens that tracks task-relevant state (which actions have occurred, whether preconditions hold, whether the goal is reached). We assume τ is a bijection on supp γ , so every action sequence has a unique token realization τ −1(w).1 The joint constraint is 
+
+x |= α ⇐⇒ (x |= γ) ∧ (τ (x) |= β). (4) 
+
+Factored posterior. At decoding step t, let a<l = τinc (x≤t) be the completed action history, where 
+
+τinc returns the actions parsed so far. Marginalizing the joint posterior over the identity of the current action, 
+
+p(α | x≤t) = X
+
+> al
+
+p(al | x≤t)
+
+| {z }
+
+> bridging
+
+· p(γ | x≤t, a l)
+
+| {z }
+
+> syntax
+
+· p(β | x≤t, a l, γ )
+
+| {z }
+
+> semantics
+
+. (5) The semantics term still couples both granularities. We decouple it using the bijectivity of τ on 
+
+supp γ . Define the induced meta-token distribution 
+
+pmeta (w) := pLM 
+
+ τ −1(w) γ , (6) which is well-defined because τ −1(w) is a unique token sequence in supp γ for each w ∈ W ∗.Conditional on the completed actions a<l , the candidate next action al, and the syntactic constraint 
+
+γ, the token-level prefix x≤t carries no further information about the meta-token sequence: a<l 
+
+together with al fixes the prefix of meta-tokens, which by bijectivity fixes the prefix of tokens up to the canonical tokenization that γ enforces. Hence 
+
+p β x≤t, a l, γ  = pmeta 
+
+ β a≤l
+
+ , (7) and substituting into Eq. 5 yields the fully factored posterior 
+
+p(α | x≤t) = X
+
+> al
+
+p(al | x≤t)
+
+| {z }
+
+> bridging
+
+· p(γ | x≤t, a l)
+
+| {z }
+
+> syntax
+> (token-level )
+
+· pmeta (β | a≤l)
+
+| {z }
+
+> semantics
+> (action-level )
+
+. (8) Syntax is enforced purely at the token level and semantics purely at the action level, communicating through the bridging term p(al | x≤t), which maps the current partial token sequence to a distribu-tion over the action it commits to. The decoupling is exact and requires no assumption on the LM beyond bijectivity of τ . Algorithm 1 (Appendix B) summarizes the resulting two-level decoder. 
+
+> 1
+
+For each action sequence to have exactly one token sequence, we fix a deterministic canonical tokenizer (typically shipped with the LM) and let γ admit only canonically-tokenized sequences. Then τ is one-to-one. 
+
+4Table 1: Why two levels: factoring the joint constraint is both cheaper and produces a better surrogate. Numbers are for a median VirtualHome task ( H=128 ); see Section 4 for the quality ablation. Both − log p                         
+
+> columns are per grounded action; sequence length is raw tokens (42.7) for the token HMM and grounded actions (7.6) for the meta-token HMM.
+> Efficiency
+> Monolithic Two-level States Sγ×SβSγ+Sβ
+> 350 M 57 K Compute 1,720 T 922 G DP memory 107 TB 1.6 GB
+> ∼1,900 ×faster, ∼67 ,000 ×less memory
+> Quality
+> Token HMM Meta-token HMM Vocab 128 K 132 Emission 16.4 M 16.9 K Seq. length 42.7 7.6
+> −log p/act. 33.54 2.01
+> ∼16 .7×better fit
+
+3.3 Why Two Levels? 
+
+Enforcing β and γ jointly in a single DFA would require lifting β to the token level and intersecting with γ, producing a joint DFA whose state space is the product of the two (Appendix A). Factoring keeps the levels separate: it replaces that multiplicative state space with an additive one, advances the semantic DP at the action rather than token granularity, and lets the meta-token HMM concen-trate on a small action vocabulary instead of the syntactic variation γ already handles. The result is both cheaper and a better surrogate (Table 1). This yields a lower per-action NLL surrogate, and a more accurate surrogate produces higher-quality plans among the constraint-satisfying set (Sec-tion 2). The monolithic cost is what exposing the full world state to the token level requires: the semantic automaton’s states are assignments to the scene’s tracked object attributes, so its size is exponential in scene detail, and intersecting it with the token-level DFA multiplies the two, giving the 350 M-state, 107 TB object above. Grammar-constrained decoders never meet this cost because they represent no world state, which is equally why they enforce syntax only; enforcing semantics requires carrying the state, and factoring is what makes carrying it affordable. The factorization also separates the pipeline’s cheap and expensive parts: each task’s constraints live in DFAs that compile in seconds and swap freely, while the costly trained HMMs are few and shared, one meta-token HMM per module type and one token-level HMM per base LM (Appendix D). 
+
+# 4 Experiments 
+
+We evaluate Meta-Ctrl on three planning benchmarks and on a real XArm7 tabletop robot (Sec-tion 4.4). A lookahead ablation isolates probabilistic reweighting as the source of the gains, and an analysis (Appendix I) explains where Meta-Ctrl helps most. 
+
+4.1 Setup Benchmarks. We evaluate on three benchmarks. Embodied Agent Interface (EAI) [9] covers Virtu-alHome (VH) and BEHAVIOR (BEH) over two plan-generation modules, Action Sequencing (AS) and Subgoal Decomposition (SD), yielding four (simulator, module) sets of 342 , 338 , 100 , and 100 
+
+tasks. 2 Watch-And-Help (WAH-NL) [20], under the LoTa-Bench protocol [19], provides 100 single-agent tasks across five families with a stricter symbolic executor than EAI. Each task provides an instruction and a structured scene description and is scored by the official evaluator on goal satisfac-tion and executability. We also deploy on a real XArm7 tabletop with open-vocabulary perception and downstream execution modules (Section 4.4). 
+
+Base LMs and baselines. On EAI, we evaluate Meta-Ctrl on two open-weight base models, Llama-3-8B-Instruct [21] and gpt-oss-20B [22]; on WAH-NL, we use 
+
+Llama-3.1-8B-Instruct [21]. We compare against all 14 EAI leaderboard models [9] and, on  
+
+> 2The other two EAI modules ( Goal Interpretation ,Transition Modeling ) are structured-prediction tasks whose failure modes are missing or misinterpreted predicates, which constraint enforcement cannot supply.
+
+5Table 2: WAH-NL (single-agent, n = 100 ) under the LoTa-Bench protocol. External references use different LMs and executors; we report them as ballpark context, not strict baselines. Empty entries are not reported. Same-LM rows (Llama 3.1 8B) are direct comparisons. †STEP is closed-loop; ours is open-loop.                                       
+
+> Method Base LM SR SSR Exec
+> External references (different LM / executor)
+> SayCan —0.010 0.021 —ProgPrompt —0.030 0.187 —LoTa-Bench GPT-4 —0.342 —LoTa-Bench LLaMA-1 65B —0.433 —STEP †(larger) 0.400 0.620 —
+> Same LM (Llama 3.1 8B), same evaluator, n= 100
+> Raw LM (unconstrained) Llama 3.1 8B 0.000 0.022 0.010 + syntax Llama 3.1 8B 0.000 0.037 0.010
+> Meta-Ctrl Llama 3.1 8B 0.470 0.705 1.000
+
+WAH-NL, published numbers for SayCan [1], ProgPrompt [3], LoTa-Bench [19], and STEP [23]. For internal comparison we also report each base LM unconstrained and under a hard-masking vari-ant of the syntactic DFA. 
+
+Metrics. We report Task SR (fraction of plans achieving the goal) and Exec SR (fraction executing to completion in the simulator); WAH-NL additionally reports SSR , the fraction of subgoals satisfied. Real-robot metrics are defined in Section 4.4. 
+
+Meta-Ctrl configuration. We build a syntactic Dγ and a semantic Dβ per (benchmark, module) pair and induce τ from Dγ . The trained HMMs are shared across pairs rather than built per task; Appendix D gives the sharing structure and training details. All train on unconstrained base-LM generations matching the benchmark format but containing no evaluation instance. Decoding is greedy under Eq. 8 with a 40-action horizon for the semantic DP; provably infeasible tasks fall back to γ-only. 
+
+4.2 Watch-And-Help via LoTa-Bench Constrained decoding turns an unusable LM into a deployable one, and semantic control drives the gain. Llama-3.1-8B alone solves none of the 100 tasks (SR 0.000 , Exec 0.010 ); its raw outputs are already mostly well-formed at the token level, so syntactic control alone ( +γ) raises SSR by just 1.5 points and leaves Exec at 0.010 . Adding semantic control (full Meta-Ctrl) lifts SSR a further 66 .8 points and Exec by 99 , reaching SR 0.470 , SSR 0.705 , Exec 1.000 . On the same LM and evaluator, task success goes from 0 to 0.47 , and semantic control accounts for nearly all of it. On the SSR axis comparable across protocols, Meta-Ctrl ( 0.705 ) exceeds LoTa-Bench’s strongest reported configuration (LLaMA-1-65B, 0.433 ; GPT-4, 0.342 ) and the closed-loop STEP baseline (0.620 ). 3
+
+The constraint enforces the invariants that prompting baselines violate. Examining where the ProgPrompt baseline’s plans fail under the same executor: 60 of 100 fail at G RAB , 21 at P UT IN,
+
+10 at P UT BACK . The failures are precondition violations (hands already full, target not co-located, container closed), not formatting or hallucination. Meta-Ctrl’s β DFA tracks these invariants at every decoding step, and enforcing them during generation, instead of checking them after the plan is produced, is what yields the 0 → 1.000 execution rate. 6Table 3: Embodied Agent Interface results on VirtualHome (V; n=342 AS, 338 SD) and BEHAVIOR (B; 
+
+n=100 AS, 100 SD). Task SR and Execution SR (%). Leaderboard baselines from [9]; Each base LM is grouped with its full Meta-Ctrl ( γ+β) result. Bold : best per column; underline: second-best. ‡The gpt-oss rows use a keyword-based BEHAVIOR affordance prior; the Llama rows use the taxonomy-derived specification of Appendix G. Our VirtualHome cells are means over six evaluator seeds (Appendix K). 
+
+Action Sequencing Subgoal Decomposition 
+
+Task SR Exec SR Task SR Exec SR 
+
+Model VH BEH VH BEH VH BEH VH BEH 
+
+Representative baselines 
+
+GPT-4o 71.5 47.0 81.3 53.0 87.6 49.0 91.1 55.0 Claude-3.5 Sonnet 76.1 60.0 81.3 69.0 89.1 39.0 92.0 44.0 o1-preview 65.2 81.0 72.5 91.0 89.4 60.0 93.2 62.0 Mistral Large 78.4 33.0 84.6 50.0 84.3 31.0 92.0 38.0 Llama 3 70B Instruct 59.0 34.0 66.6 42.0 78.4 21.0 87.3 30.0 Llama 3 8B Instruct (base) 21.3 10.0 23.6 16.0 48.8 22.0 58.0 29.0 + Meta-Ctrl (ours) 90.4 34.0 97.7 89.0 89.9 36.0 93.5 66.0 
+
+gpt-oss-20B (base) 74.4 40.0 80.3 51.0 72.5 27.0 82.2 36.0 + Meta-Ctrl (ours) ‡ 86.6 40.0 94.1 90.0 82.3 41.0 86.4 66.0 
+
+Table 4: Porting Meta-Ctrl to newer base LMs, VH AS ( n=342 ), task / execution SR (%). Each port rebuilds 
+
+γ over the new tokenizer automatically and uses a uniform token-level HMM over the new vocabulary; the meta level is unchanged (uniform meta-surrogate rows for all three bases). No training of any kind. VH-AS means over six evaluator seeds. 
+
+Base LM unconstrained + Meta-Ctrl changed lines 
+
+Llama 3 8B Instruct 21.3 / 23.6 90.7 / 97.7 —Qwen3-8B 50.8 / 58.4 90.7 / 97.7 ∼40 
+
+Gemma-3-12B-it 47.5 / 50.5 89.4 / 96.1 ∼35 
+
+4.3 Embodied Agent Interface Meta-Ctrl lifts open-weight LMs to match frontier closed-weight models on VirtualHome. On 
+
+Llama-3-8B-Instruct , Meta-Ctrl raises task SR from 21 .3 to 90 .4 on VH Action Sequencing and from 48 .8 to 89 .9 on Subgoal Decomposition (Table 3); on gpt-oss-20B , it raises VH AS from 74 .4 to 86 .6. Both lifted numbers exceed every model on the EAI leaderboard, including o1-preview ( 65 .2 on VH AS), Claude 3.5 Sonnet ( 76 .1), and Mistral Large ( 78 .4). On BEHAVIOR the task-SR lift is positive but smaller ( Llama-3-8B : 10 → 34 on AS, 22 → 36 on SD; gpt-oss :
+
+40 → 40 on AS, 27 → 41 on SD), while the execution-SR lift stays large ( 16 → 89 on AS, 29 → 66 
+
+on SD): enforcing the constraints removes the failures that stop a plan from running, but achieving a BEHAVIOR goal also needs world knowledge the prompt withholds (Appendix I). Constrained decoding closes the gap between an 8B open-weight LM and the strongest proprietary models on VirtualHome and brings a 20 B open-weight LM above all of them. 
+
+Meta-Ctrl works best when the prompt specifies the task’s constraints. The gap between Vir-tualHome and BEHAVIOR shows when Meta-Ctrl helps most. VirtualHome prompts describe each object’s properties and states directly, so the DFA can encode 82% of the task’s preconditions from the prompt alone; BEHAVIOR prompts do not, and the DFA can encode only 24% from the prompt (Appendix I). For BEHAVIOR the remainder comes from the benchmark’s public BDDL object taxonomy, looked up by the synsets the prompt already names, plus five documented generic rules (Appendix G); this is still strictly less than the complete transition model the benchmark hands its own planner baselines. The method recovers the most when a task’s constraints can be made explicit and written into the DFA. 
+
+> 3
+
+Prior WAH-NL evaluations use natural-language instruction inputs and a Unity simulator; the LoTa-Bench protocol [19] uses oracle-goal inputs and a strict symbolic executor. SSR-to-SSR is the comparable axis across protocols. 
+
+7Table 5: What each component contributes, task / execution SR (%) on Llama 3 8B. Rows 3–6 share the                                                         
+
+> same constraint construction (meta-tokens, γand βcompiled from the prompt and the public object taxonomy) and the same guarantee; they differ only in the guidance signal. Search, no LLM is breadth-first search over the meta-level automaton with the LM removed. Masking keeps only the support of the lookahead term, a reachability yes/no. Uniform and trained instantiate the lookahead measure itself. Classical planner is Fast Downward given the benchmark’s own PDDL domain, i.e. a complete transition model, strictly more information than our automata encode; SD asks for goal states rather than actions, so planners do not apply.
+> Method (Llama 3 8B) VH AS VH SD BEH AS BEH SD
+> LLM only (unconstrained) 21.3 / 23.6 48.8 / 58.0 10 / 16 22 / 29 LLM + syntax-only GCD ( γmask) 1.4 / 97.3 0.0 / 96.0 12 / 20 19 / 31 Classical planner, full domain 47.2 / 84.6 n/a 13 / 37 n/a
+> with our meta-level automata:
+> Search, no LLM 83.8 / 93.1 72.5 / 79.0 31 / 77 52 / 64 LLM + masking (reachability only) 81.7 / 87.5 88.7 / 92.6 33 / 85 38 / 51 LLM + uniform lookahead 90.7 /97.7 88.4 / 93.2 36 / 89 41 / 59 LLM + trained lookahead (Meta-Ctrl) 90.4 / 97.7 89.9 /93.5 34 / 89 36 / 66
+
+The construction transfers to new base LMs without training. The token-level HMM turns out to be nearly inert once β is present: replacing the trained one with a uniform HMM over the same vocabulary leaves 273 of 342 VH AS programs byte-identical, and the 69 that differ swap tie-broken synonym verbs ( 41 of them F IND ↔WALK ), moving task SR by −0.7. Since γ is compiled from the prompt over whatever tokenizer the base model uses, and the meta level is defined over grounded actions rather than tokens, porting to a new base LM needs no retraining at either level. We ported to two 2025 open-weight models spanning two tokenizer families, Qwen3-8B (byte-level BPE, 152 K) and Gemma-3-12B-it (SentencePiece, 262 K), in well under 100 changed lines each, and both reproduce the pattern: both task and execution SR transfer exactly on Qwen3 ( 90 .7/97 .7,tying the Llama pipeline), and the guarantee transfers with zero parsing and zero affordance errors on both (Table 4). 
+
+Guarantees. Format and hallucination errors that account for 24% of raw Llama-3-8B outputs on BEH AS ( 15% hallucinated objects, 9% malformed parameters) drop to 0% under Meta-Ctrl by construction; the same pattern holds on VH AS, where the LM’s 22 .3% combined error rate becomes 
+
+0% LM-fault under Meta-Ctrl (Appendix H reports the per-module breakdown). The guarantee eliminates the failure modes that account for the majority of grammar errors at this scale. 
+
+Semantic constraints and probabilistic lookahead each carry part of the gain. Table 5 separates them. Syntax-only masking, the standard grammar-constrained setup, collapses task success while inflating execution ( 1.4 task at 97 .3 execution on VH AS): the greedy LM steers toward the shortest well-formed continuation, which executes cleanly and achieves nothing. The decoding target is p(a |
+
+constraint satisfiable ) ∝ pLM (a) · P (satisfiable future | a), and the second factor is a probability; masking, uniform, and trained lookaheads are successive approximations of it. Masking keeps only its support, a reachability yes/no that tells the LM nothing about the future: under identical γ+β
+
+automata it reaches 81 .7 on VH AS, no better than searching the automaton with no LM at all. The uniform lookahead scores each step by the accepting future it preserves and reaches 90 .7, cutting hallucination 6.2% → 1.6% and missing steps 3.3% → 0.7% and raising execution to 97 .7. On VH SD, where the automaton already pins the answer down, the measure adds nothing, exactly as this decomposition predicts. Representative masking outputs appear in Appendix F. 
+
+The LM and the automaton are both load-bearing. Search over the compiled automaton with no LM is already strong ( 83 .8 on VH AS), an honest measure of how much structure the constraints carry; the LM contributes grounding and ordering common sense worth +6 .9 on VH AS and +16 
+
+on VH SD, and the failures it removes are groundings no person would pick. In the other direction, a classical planner given the benchmark’s own full PDDL domain, strictly more information than our automata encode, solves nearly every problem it is posed yet scores 13 /37 on BEH AS and 47 .2/84 .6
+
+on VH AS: wherever its model or goal language falls short of the evaluated environment it returns 8Figure 3: Real robot setup with xArm 7 and deployed tabletop manipulation tasks. Top-row tasks require only pick-and-place; bottom-row tasks require specialized motion primitives (e.g. open door). 
+
+Table 6: Real robot evaluations on an XArm7, 20 repetitions per task. Meta-Ctrl columns are a cascade: plan success holds by construction; perception and execution are conditional on preceding stages. Baseline perception is scored per-module, independent of plan validity; its execution is end-to-end and bounded by planning failures. Baseline downstream columns are thus not directly comparable to Meta-Ctrl’s.                       
+
+> Meta-Ctrl (ours) Baseline (Llama 3 8B) Task Planning Perception Execution Planning Perception Execution
+> Put donut in canister 20/20 17/20 16/20 2/20 18/20 1/20 Pick up green block (under blocker) 20/20 19/20 18/20 1/20 19/20 1/20 Stack dishes by size 20/20 20/20 17/20 0/20 19/20 0/20
+
+confidently wrong plans, while encoding constraints rather than a world model degrades gracefully when knowledge is incomplete. 
+
+The trained surrogate is the full model the derivation calls for; uniform is its zero-training approximation. The trained HMM approximates the LM’s own distribution over futures, and it delivers the best execution SR on three of the four modules. On task success the uniform surrogate matches or slightly exceeds it, and the reason is a measurable bias rather than an equivalence: this benchmark’s mandatory but rare actions almost never appear in the LM’s unconstrained outputs (S LEEP and P LUG IN occur zero times in ∼10 8 sampled tokens), so a faithful surrogate assigns them near-zero mass and fines exactly the steps the constraints exist to enforce; the uniform surrogate is immune by construction. Training thus pays where the automaton leaves many admissible futures and the corpus covers them, and costs little where it does not; Appendix D quantifies both directions. 
+
+4.4 Real Robot Demonstrations 
+
+We deploy Meta-Ctrl on a tabletop XArm7 with a calibrated Realsense RGB-D camera, compos-ing Meta-Ctrl plans with a Code-as-Policies executor [2] that grounds objects via Molmo [24] and SAM2 [25] and synthesizes grasps via GraspGen [26]. We demonstrate 8 BEHAVIOR-derived long-horizon manipulation tasks (Fig. 3) and quantitatively evaluate 3 pick-and-place tasks over 20 rollouts each. Meta-Ctrl achieves 100% plan validity by construction, including the multi-step pre-condition sequences needed for articulated containers. The unconstrained baseline routinely skips these preconditions—P LACE into a closed container, G RASP on an occluded object, or G RASP while holding another object—so its failures concentrate at planning. Meta-Ctrl’s remaining failures occur downstream, at perception or grasp execution, isolating cleanly from planning errors. Representative rollouts and baseline precondition violations appear in Appendix J. 95 Conclusion 
+
+We presented Meta-Ctrl , a constrained-decoding framework that guarantees LLM-generated plans satisfy their encoded syntactic and semantic constraints by decoupling enforcement across granu-larities via meta-tokens. Across EAI, WAH-NL, and a real tabletop robot, Meta-Ctrl turns a small open-weight LM into a competitive planner that matches or exceeds models an order of magnitude larger, with every output constraint-satisfying by construction. 
+
+Limitations. Meta-Ctrl assumes both constraints are DFA-expressible: syntax over tokens, seman-tics over meta-tokens. Constraints requiring unbounded memory (e.g., arbitrary arithmetic over continuous quantities) fall outside this class. The semantic DFA is built per task family from a structured specification; our experiments use the simulator’s predicates and, on BEHAVIOR, the benchmark’s published object taxonomy (Appendix G). Domains without such a published spec-ification will need learned constraint extractors or more permissive constraints, and the guarantee then holds relative to whatever the extractor recovers. On a real system the automaton is initialised from the perception-estimated symbolic state, so the guarantee is relative to the robot’s believed state rather than the true one; carrying a belief over automaton states, rather than a single state, is the natural extension. The guarantee is likewise relative to the encoded constraint, and an incom-plete specification can over-constrain: on BEHAVIOR our fixed affordance prior rejects 17% of gold plans (Appendix G), with infeasible tasks falling back to γ-only decoding. Real-robot goal success is bounded by perception and grasping, not the planner; closing that gap is orthogonal to plan generation. Finally, HMM surrogates are shared across simulators (Appendix D) but trained per module type; a single surrogate spanning module types and base models remains future work. 10 Acknowledgments 
+
+This work was funded in part by the DARPA ANSR and CODORD programs under awards FA8750-23-2-0004 and HR00112590089, by DARPA SAFRON under grant HR0011-25-3-0141, and by gifts from Cisco Research, Qualcomm, and Amazon. Approved for public release; distribution is unlimited. 
+
+# References 
+
+[1] M. Ahn, A. Brohan, N. Brown, Y. Chebotar, O. Cortes, B. David, C. Finn, C. Fu, K. Gopalakr-ishnan, K. Hausman, A. Herzog, D. Ho, J. Hsu, J. Ibarz, B. Ichter, A. Irpan, E. Jang, R. J. Ruano, K. Jeffrey, S. Jesmonth, N. Joshi, R. Julian, D. Kalashnikov, Y. Kuang, K.-H. Lee, S. Levine, Y. Lu, L. Luu, C. Parada, P. Pastor, J. Quiambao, K. Rao, J. Rettinghouse, D. Reyes, P. Sermanet, N. Sievers, C. Tan, A. Toshev, V. Vanhoucke, F. Xia, T. Xiao, P. Xu, S. Xu, M. Yan, and A. Zeng. Do as i can and not as i say: Grounding language in robotic affordances. In arXiv preprint arXiv:2204.01691 , 2022. [2] J. Liang, W. Huang, F. Xia, P. Xu, K. Hausman, B. Ichter, P. Florence, and A. Zeng. Code as policies: Language model programs for embodied control. In 2023 IEEE International conference on robotics and automation (ICRA) , pages 9493–9500. IEEE, 2023. [3] I. Singh, V. Blukis, A. Mousavian, A. Goyal, D. Xu, J. Tremblay, D. Fox, J. Thomason, and A. Garg. Progprompt: Generating situated robot task plans using large language models. arXiv preprint arXiv:2209.11302 , 2022. [4] W. Huang, F. Xia, T. Xiao, H. Chan, J. Liang, P. Florence, A. Zeng, J. Tompson, I. Mordatch, Y. Chebotar, et al. Inner monologue: Embodied reasoning through planning with language models. arXiv preprint arXiv:2207.05608 , 2022. [5] W. Huang, P. Abbeel, D. Pathak, and I. Mordatch. Language models as zero-shot planners: Extracting actionable knowledge for embodied agents. In International conference on machine learning , pages 9118–9147. PMLR, 2022. [6] W. Huang, F. Xia, D. Shah, D. Driess, A. Zeng, Y. Lu, P. Florence, I. Mordatch, S. Levine, K. Hausman, et al. Grounded decoding: Guiding text generation with grounded models for em-bodied agents. Advances in Neural Information Processing Systems , 36:59636–59661, 2023. [7] X. Puig, K. Ra, M. Boben, J. Li, T. Wang, S. Fidler, and A. Torralba. Virtualhome: Simulating household activities via programs. In Proceedings of the IEEE conference on computer vision and pattern recognition , pages 8494–8502, 2018. [8] S. Srivastava, C. Li, M. Lingelbach, R. Mart´ ın-Mart´ ın, F. Xia, K. E. Vainio, Z. Lian, C. Gok-men, S. Buch, K. Liu, S. Savarese, H. Gweon, J. Wu, and L. Fei-Fei. BEHAVIOR: Benchmark for everyday household activities in virtual, interactive, and ecological environments. In 5th Annual Conference on Robot Learning , 2021. URL https://openreview.net/forum?id= TavPBk4Zs9m .[9] M. Li, S. Zhao, Q. Wang, K. Wang, Y. Zhou, S. Srivastava, C. Gokmen, T. Lee, E. L. Li, R. Zhang, et al. Embodied agent interface: Benchmarking llms for embodied decision making. 
+
+Advances in Neural Information Processing Systems , 37:100428–100534, 2024. [10] K. Valmeekam, M. Marquez, A. Olmo, S. Sreedharan, and S. Kambhampati. Planbench: An extensible benchmark for evaluating large language models on planning and reasoning about change. Advances in Neural Information Processing Systems , 36:38975–38987, 2023. [11] G. Wang, Y. Xie, Y. Jiang, A. Mandlekar, C. Xiao, Y. Zhu, L. Fan, and A. Anandku-mar. Voyager: An open-ended embodied agent with large language models. arXiv preprint arXiv:2305.16291 , 2023. 11 [12] X. Liu, A. Pesaranghader, J. Kim, T. Sadhu, H. Jeon, and S. Sanner. Activevoo: Value of observation guided active knowledge acquisition for open-world embodied lifted regression planning. Advances in Neural Information Processing Systems , 38:106621–106647, 2026. [13] B. Liu, Y. Jiang, X. Zhang, Q. Liu, S. Zhang, J. Biswas, and P. Stone. Llm+ p: Empowering large language models with optimal planning proficiency. arXiv preprint arXiv:2304.11477 ,2023. [14] G. Poesia, O. Polozov, V. Le, A. Tiwari, G. Soares, C. Meek, and S. Gulwani. Synchromesh: Reliable code generation from pre-trained language models. arXiv preprint arXiv:2201.11227 ,2022. [15] Y. Dong, C. F. Ruan, Y. Cai, Z. Xu, Y. Zhao, R. Lai, and T. Chen. Xgrammar: Flexible and efficient structured generation engine for large language models. Proceedings of Machine Learning and Systems , 7, 2025. [16] B. T. Willard and R. Louf. Efficient guided generation for large language models. arXiv preprint arXiv:2307.09702 , 2023. [17] K. Park, J. Wang, T. Berg-Kirkpatrick, N. Polikarpova, and L. D’Antoni. Grammar-aligned decoding. Advances in Neural Information Processing Systems , 37:24547–24568, 2024. [18] H. Zhang, M. Dang, N. Peng, and G. Van den Broeck. Tractable control for autoregressive language generation. In International Conference on Machine Learning , pages 40932–40945. PMLR, 2023. [19] J.-W. Choi, Y. Yoon, H. Ong, J. Kim, and M. Jang. Lota-bench: Benchmarking language-oriented task planners for embodied agents. In The Twelfth International Conference on Learn-ing Representations .[20] X. Puig, T. Shu, S. Li, Z. Wang, Y.-H. Liao, J. B. Tenenbaum, S. Fidler, and A. Torralba. Watch-and-help: A challenge for social perception and human-ai collaboration. In Interna-tional Conference on Learning Representations .[21] A. Grattafiori, A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle, A. Letman, A. Mathur, A. Schelten, A. Vaughan, et al. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 ,2024. [22] OpenAI, :, S. Agarwal, L. Ahmad, J. Ai, S. Altman, A. Applebaum, E. Arbus, R. K. Arora, Y. Bai, B. Baker, H. Bao, B. Barak, A. Bennett, T. Bertao, N. Brett, E. Brevdo, G. Brockman, S. Bubeck, C. Chang, K. Chen, M. Chen, E. Cheung, A. Clark, D. Cook, M. Dukhan, C. Dvo-rak, K. Fives, V. Fomenko, T. Garipov, K. Georgiev, M. Glaese, T. Gogineni, A. Goucher, L. Gross, K. G. Guzman, J. Hallman, J. Hehir, J. Heidecke, A. Helyar, H. Hu, R. Huet, J. Huh, S. Jain, Z. Johnson, C. Koch, I. Kofman, D. Kundel, J. Kwon, V. Kyrylov, E. Y. Le, G. Leclerc, J. P. Lennon, S. Lessans, M. Lezcano-Casado, Y. Li, Z. Li, J. Lin, J. Liss, Lily, Liu, J. Liu, K. Lu, C. Lu, Z. Martinovic, L. McCallum, J. McGrath, S. McKinney, A. McLaughlin, S. Mei, S. Mostovoy, T. Mu, G. Myles, A. Neitz, A. Nichol, J. Pachocki, A. Paino, D. Palmie, A. Pantu-liano, G. Parascandolo, J. Park, L. Pathak, C. Paz, L. Peran, D. Pimenov, M. Pokrass, E. Proehl, H. Qiu, G. Raila, F. Raso, H. Ren, K. Richardson, D. Robinson, B. Rotsted, H. Salman, S. San-jeev, M. Schwarzer, D. Sculley, H. Sikchi, K. Simon, K. Singhal, Y. Song, D. Stuckey, Z. Sun, P. Tillet, S. Toizer, F. Tsimpourlas, N. Vyas, E. Wallace, X. Wang, M. Wang, O. Watkins, K. Weil, A. Wendling, K. Whinnery, C. Whitney, H. Wong, L. Yang, Y. Yang, M. Yasunaga, K. Ying, W. Zaremba, W. Zhan, C. Zhang, B. Zhang, E. Zhang, and S. Zhao. gpt-oss-120b and gpt-oss-20b model card, 2025. URL https://arxiv.org/abs/2508.10925 .[23] T. Zhou, Z. Wang, H. Ao, G. Chen, B. Xing, J. Cheng, Y. Yang, and Y. Yue. Step planner: Constructing cross-hierarchical subgoal tree as an embodied long-horizon task planner. In 
+
+2025 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pages 16731–16738. IEEE, 2025. 12 [24] M. Deitke, C. Clark, S. Lee, R. Tripathi, Y. Yang, J. S. Park, M. Salehi, N. Muennighoff, K. Lo, L. Soldaini, et al. Molmo and pixmo: Open weights and open data for state-of-the-art vision-language models. In Proceedings of the Computer Vision and Pattern Recognition Conference ,pages 91–104, 2025. [25] N. Ravi, V. Gabeur, Y.-T. Hu, R. Hu, C. Ryali, T. Ma, H. Khedr, R. R¨ adle, C. Rolland, L. Gustafson, et al. Sam 2: Segment anything in images and videos. In International Confer-ence on Learning Representations , volume 2025, pages 28085–28128, 2025. [26] A. Murali, B. Sundaralingam, Y.-W. Chao, W. Yuan, J. Yamada, M. Carlson, F. Ramos, S. Birchfield, D. Fox, and C. Eppner. Graspgen: A diffusion-based framework for 6-dof grasp-ing with on-generator training. arXiv preprint arXiv:2507.13097 , 2025. 13 A Construction of the Joint DFA Dα
+
+We give the explicit construction of a token-level DFA Dα that accepts the joint constraint α(x) = 
+
+γ(x) ∧ β(τ (x)) from Eq. 4, and bound its size by |D γ | · |D β |. This construction is the baseline that our factored approach (Section 3) avoids. 
+
+Setup. Let Dγ = (Sγ , V, δ γ , s 0 
+
+> γ
+
+, F γ ) be the token-level syntax DFA over the LLM vocabu-lary V , with states Sγ , transition function δγ , initial state s0 
+
+> γ
+
+, and accepting states Fγ . Let 
+
+Dβ = ( Sβ , W, δ β , s 0 
+
+> β
+
+, F β ) be the meta-token-level semantic DFA over W, with the analogous com-ponents. The parser τ : supp γ → W ∗ maps each completed action block in supp γ to a single meta-token in W. Let Cγ ⊆ Sγ denote the subset of Dγ states at which an action block has just been completed (i.e., states reached by the token that closes the block). 
+
+Construction. We construct Dα as follows: • States: Sα = Sγ × Sβ .• Initial state: (s0 
+
+> γ
+
+, s 0 
+
+> β
+
+).• Transition function. For each (qγ , q β ) ∈ Sα and each token v ∈ V , let q′ 
+
+> γ
+
+= δγ (qγ , v ). If 
+
+q′ 
+
+> γ
+
+is undefined (the token violates syntax), the transition is undefined. Otherwise, 
+
+– If q′ 
+
+> γ
+
+∈ C γ (token v closed an action block), let a ∈ W be the meta-token produced by 
+
+τ from the block tokens; advance the semantic state: 
+
+δα
+
+ (qγ , q β ), v  =  q′ 
+
+> γ
+
+, δ β (qβ , a ).
+
+– If q′ 
+
+> γ
+
+/∈ C γ (token v did not close a block), hold the semantic state fixed: 
+
+δα
+
+ (qγ , q β ), v  =  q′ 
+
+> γ
+
+, q β
+
+.
+
+• Accepting states: Fα = Fγ × Fβ .
+
+Correctness. By induction on |x|, for any x ∈ V ∗, Dα reaches state (qγ , q β ) if and only if Dγ
+
+reaches qγ on x and Dβ reaches qβ on τinc (x). Hence x ∈ L(Dα) iff x |= γ (reaches Fγ ) and 
+
+τ (x) |= β (reaches Fβ ), matching Eq. 4. 
+
+Size bound. The state space satisfies |Sα| ≤ | Sγ | · | Sβ |, and each state has at most |V | outgoing transitions, giving 
+
+|D α| ≤ | Sγ | · | Sβ | · | V | ≤ |D γ | · |D β |
+
+when DFA size is measured in edges and |V | is absorbed into the per-state branching. Reachability and minimization can reduce this constant, but the multiplicative scaling persists in the worst case because each state in Cγ must branch into |Sβ | distinct successors, one per reachable semantic con-figuration. This is the bottleneck our factored approach avoids: we never construct Dα, only Dγ and 
+
+Dβ separately. 14 B Two-Level Decoding Algorithm 
+
+Algorithm 1: Two-Level Constrained Decoding 
+
+Input: Prompt xprompt ; LM pLM ; syntax HMM and DFA Dγ ; meta-token HMM and DFA Dβ ;parser τ (incremental form τinc ). 
+
+Output: Token sequence satisfying α = γ ∧ (β ◦ τ ).
+
+Bγ ← backward DP over HMM token × D γ ; // token-level lookahead 
+
+Bβ ← backward DP over HMM meta × D β ; // action-level lookahead 
+
+x ← xprompt ; l ← 1;
+
+repeat 
+
+a<l ← τinc (x) ; // completed actions so far 
+
+for each token v ∈ V admissible at the current Dγ state do 
+
+q(v) ← pLM (v | x) · p(α | x·v) ; // constraint-conditioned posterior, Eq. 8 
+
+end 
+
+xt ← arg max v q(v); x ← x · xt; if xt closes an action block then 
+
+l ← l + 1 
+
+end until xt = <EOS> ;
+
+return x
+
+# C Per-Module DFA and Parser Construction 
+
+We build a separate syntactic DFA Dγ , semantic DFA Dβ , and meta-token parser τ for each (bench-mark, module) pair. All four core modules share the same three-part skeleton: Dγ is a deterministic state machine over the base-LM token alphabet that admits exactly the grounded action /predicate plus type-compatible object-instance pairs derivable from the prompt; Dβ is a state machine over the meta-token alphabet that rejects on a precondition violation and accepts when every (non-dropped) task goal is satisfied; τ consumes the same token stream as Dγ and emits one meta-step per com-pleted action /atom boundary, remapping the prompt’s raw object ids to contiguous 0-based canoni-cal ids. 
+
+C.1 VirtualHome Action Sequencing (VH-AS) Output grammar ( Dγ ). Plans are emitted as a single JSON object whose keys are action names and whose values are flat argument arrays [name, id] (or [name 0, id 0, name 1, id 1] for two-argument actions):      
+
+> {"WALK": ["soap", "1002"] , "GRAB": ["soap", "1002"] , "PUTON": ["clothes jacket", "1003"] }
+
+Dγ threads three per-scene tries (action-name, object-name, and per-name id) compiled once from the prompt’s object listing. After a complete action block, the DFA returns to its block-start state; an arbitrary-length action list is emitted until the close brace followed by the end-of-turn token. Actions are offered only when all of their argument roles have at least one type-compatible object in the scene. 
+
+Action vocabulary ( W). The VH-AS action set has |W VH-AS | = 36 types: one nullary (S TAND UP); three binary (P OUR , P UT BACK , P UT IN); and 32 unary actions including W ALK , F IND ,GRAB , O PEN , S WITCH ON, P LUG IN, S IT , D RINK , C UT , R EAD , T YPE , W ASH , S CRUB , W IPE . The set is a subset of the official evaluator’s valid actions, omitting those that are non-executable or never goal-bearing. 15 Semantic constraints (Dβ ). Dβ tracks a state tuple consisting of: agent location, both hand-occupancy slots, posture, facing direction, and per-object bitmasks for openable, switchable, and plugged-in state, plus relational bits for graph edges and ordered action goals. Static preconditions are derived from prompt-stated object properties: GRAB requires 
+
+GRABBABLE ; O PEN /CLOSE require CAN OPEN ; S WITCH ON/SWITCH OFF require HAS SWITCH ;PLUG IN/PLUG OUT require HAS PLUG ; S IT /LIE require SITTABLE /LIEABLE ; container /surface arguments of P UT IN/PUT BACK require CONTAINERS / SURFACES . Dynamic preconditions are checked against the live state: a free hand and proximity for G RAB ; plugged-in and not-open for SWITCH ON; not-on for O PEN ; held object plus open destination for P UT *; posture for locomotion. Goals are partitioned into node, edge, character-state, and ordered action goals; a state is accepting iff all (non-dropped) goals hold. 
+
+Parser ( τ ). τ advances in lock-step with Dγ and emits one meta-step at each block-boundary closure (the ] closing an action’s argument array), reading the action name and raw ids from trie leaves and remapping each raw id to canonical form. 
+
+C.2 VirtualHome Subgoal Decomposition (VH-SD) Output grammar ( Dγ ). Plans are a JSON object with a single "output" key whose value is a list of predicate atoms in temporal order:  
+
+> {"output": ["PLUGGED IN(washing machine.1001)", "CLOSED(washing machine.1001)", "ON(washing machine.1001)"] }
+
+Each atom is PRED(name.id) or PRED(name 0.id 0, name 1.id 1) with arguments written in dotted form. Cross-argument predicates carry forward the chosen arg 0 so that arg 1’s admissible set is filtered by arg 0’s identity. 
+
+Subgoal vocabulary ( W). |W VH-SD | = 36 predicates: 9 state (C LOSED , O PEN , O N, O FF ,PLUGGED IN, P LUGGED OUT , D IRTY , S ITTING , L YING ); 6 relation (I NSIDE , O NTOP , N EXT TO,FACING , H OLDS LH, H OLDS RH); and 21 action-named intermediate-subgoal predicates (G RAB ,CLEAN , C UT , etc.). 
+
+Semantic constraints ( Dβ ). Dβ carries per-object state bitmasks plus goal-progress bits. Executor ordering is enforced as predicate preconditions: O N requires P LUGGED IN and not-O PEN ; O PEN 
+
+requires not-O N; I NSIDE /ONTOP require the destination container O PEN ; H OLDS LH/RH require a free hand and a grabbable target. State and placement goals are evaluated from the live state at accept time (re-emitting O PEN after C LOSED correctly leaves the object open), and repeated placements use latest-wins semantics mirroring the evaluator. A state is accepting iff every (non-dropped) goal is currently satisfied. 
+
+Parser ( τ ). τ emits one meta-step per completed atom, reading the predicate name and dotted 
+
+name.id arguments from trie leaves and remapping ids. Structural tokens emit nothing. 
+
+C.3 BEHAVIOR Action Sequencing (BEH-AS) Output grammar ( Dγ ). Plans are a JSON array of one-action dictionaries {"action": NAME, "object": INSTANCE }:      
+
+> [{"action": "LEFT GRASP", "object": "plywood 0" },
+> {"action": "SLICE", "object": "strawberry 0" },
+> {"action": "LEFT PLACE INSIDE", "object": "jar 0" }]
+
+BEHAVIOR object instances are written as base name index . Dγ recognizes the action via a vocabulary trie and the instance via a per-scene instance trie built from the prompt, closing the list 16 with ] and EOS. As in VH-AS, the grammar is cyclic across action blocks and applies viable-action and affordance pruning (Appendix G). 
+
+Action vocabulary (W). |W BEH-AS | = 30 action types, all hand-explicit where the simulator is bimanual: left /right GRASP , RELEASE , PLACE ONTOP , PLACE INSIDE ,PLACE NEXT TO, PLACE UNDER , PLACE NEXT TO ONTOP (binary), and TRANS - 
+
+> FER
+
+CONTENTS INSIDE /ONTOP ; plus the hand-agnostic state actions O PEN , CLOSE , TOG - 
+
+> GLE
+
+ON, T OGGLE OFF , and the attribute actions C LEAN , S LICE , S OAK , D RY , C OOK , F REEZE ,UNFREEZE . Navigation is implicit and is not emitted. 
+
+Semantic constraints ( Dβ ). Dβ carries goal bits, two hand-occupancy slots, a per-object location hash, and per-object boolean state bits. It encodes both task-specific preconditions parsed from the prompt’s initial-state block and the task-independent affordance prior of Appendix G: G RASP 
+
+requires a free target hand, a graspable target, and no closed container in the target’s containment ancestry; P LACE INSIDE requires the destination to be open; T OGGLE ON is forbidden on an open appliance; S OAK requires the target inside a toggled-on water source; C LEAN of a stained target requires holding a soaked cleaner. A state accepts iff all (non-dropped) goal bits are set. 
+
+Parser ( τ ). τ emits one meta-step when each per-action dictionary closes, mapping captured 
+
+base name index strings to canonical ids. 
+
+C.4 BEHAVIOR Subgoal Decomposition (BEH-SD) Output grammar ( Dγ ). Plans are a JSON object {"output": [ ... ] } whose elements are temporally ordered subgoal steps; within a step, atoms are joined by " and " (a conjunctive set):  
+
+> {"output": ["holds rh(carton.66) and inside(hardback.64, carton.66) and inside(hardback.65, carton.66)", ...] }
+
+Each atom is [not ]pred(name.id[, name.id]) with lowercase predicate names. The grammar uses " and " within a step and ", " between steps. 
+
+Subgoal vocabulary ( W). 16 positive predicates plus their NOT negations ( 32 atoms total): 8 state (open , toggledon , cooked , frozen , sliced , soaked , stained , dusty ); 8 relation ( inside ,
+
+ontop , under , onfloor , nextto , touching , holds lh , holds rh ). Anti-goals are first-class. 
+
+Semantic constraints ( Dβ ). Dβ carries goal bits, container-open bits, and a clean /soak chain bit-mask. It accepts every γ-valid atom, setting the matching goal bit on positive match. Two precon-dition mechanisms are retained. Gate : an object the prompt’s initial state places inside a closeable container requires that container’s open bit before any non-open predicate may target it. Clean /soak chain : soaked or not stained goals are creditable only after the place–toggle–soak prerequisite chain. Goals are obtained by expanding the prompt’s quantified goal AST; anchored relations whose anchor is itself repositioned impose the ordering that the anchor’s placement goal must be set first. 
+
+Parser ( τ ). τ emits one meta-step per atom, mapping instance labels to canonical ids. 
+
+C.5 WAH-NL via LoTa-Bench 
+
+The WAH-NL setting reuses the VirtualHome machinery with Llama-3.1-8B-Instruct as the base LM. Dγ is the VH-AS DFA restricted to the WAH-relevant action subset (navigation, manipulation, object interaction, posture; W AKE UP, S LEEP , and P UT OBJ BACK are trimmed). Dβ is the Virtual-Home state machine of Appendix C.1 applied to WAH goals: G RAB requires a free hand and co-location; P UT IN requires holding the object and the destination container not closed; O PEN /CLOSE 
+
+require co-location; S WITCH ON requires the appliance plugged-in. These are the invariants whose violation accounts for the 60 / 21 / 10 failure distribution of the ProgPrompt baseline in Section 4.2: 17 any action whose precondition fails is never offered to the LM. τ is the VirtualHome parser of Appendix C.1 applied to the WAH action subset. 
+
+C.6 Shared construction notes Canonical tokenization. All DFAs operate over the base LM’s token alphabet using a single canonical tokenization per atom. Token sets are computed once per tokenizer; structural sub-strings with more than one tokenization are treated as equivalence classes and marginalized over by logsumexp , so no tokenization variant collapses the candidate set mid-stream. 
+
+EOS handling. End-of-sequence is treated as a meta-token gated by β: EOS is admitted only at an action /atom boundary, and only when the β state is accept-reachable. 
+
+# D HMM Training 
+
+Training data construction. For each (benchmark, module) pair we construct a training set of unconstrained base-LM generations whose prompts share the benchmark format but contain no evaluation task instances. Specifically, we hold out the official evaluation tasks and construct training prompts by category-preserving substitution: object names and predicate arguments in the EAI/WAH-NL prompt template are resampled from the corresponding vocabularies (objects, prop-erties, locations) so the surface format and predicate distribution match evaluation but the actual instances do not. We sample up to 1,000 ,000 generations per (benchmark, module) pair at temper-ature 0.1, top-p 0.95 , length cap 2048 tokens (seed 42 ); the BEHAVIOR halves comprise 492 ,352 
+
+(AS) and 703 ,360 (SD) raw generations. Generations that fail to parse are discarded ( γ-acceptance for AS outputs, closed-output for SD), and the two simulators’ surviving halves are subsampled to a balanced 1:1 mixture before training. The retained sequences are used for both the token-level HMM (raw token sequence) and the meta-token HMM (the τ -projection of the same sequence). 
+
+Corpus diversity. Continuations are sampled with a distinct seed per generation call. At temper-ature 0.1 the corpora are highly redundant: BEH AS yields 58 distinct meta-token sequences from 
+
+95 ,665 samples over 70 prompts, and scaling VH AS by 5.3× adds 14 ; held-out NLL agrees ( 9–10 ×
+
+more data buys 0.07 –0.08 nats, and the last 1.6× buys 0.005 ). The temperature-1.0 corpus is far more diverse ( 294 of 512 raw continuations distinct per prompt; 34 .8% of meta-token sequences distinct on BEH AS). Diversity does not, however, recover mandatory-but-rare actions, which are absent from the base LM’s output distribution at any temperature. 
+
+HMMs. For EAI we train two meta-token HMMs: a 132-symbol Action Sequencing HMM shared by VH-AS and BEH-AS, trained on the union of the two simulators’ AS augmented generations, and a 123-symbol Subgoal Decomposition HMM shared by VH-SD and BEH-SD, trained on the union of their SD generations. WAH-NL uses a third meta-token HMM. Each uses hidden dimen-sion H=128 . We train one token-level HMM per base LM over that model’s tokenizer vocabulary (Llama 3: 128K, gpt-oss: 200K) and reuse it unchanged across all of that base LM’s modules and simulators. The meta-token alphabet decomposes into grounded-action (or predicate) names, one object-ID symbol per argument slot, U NK , and E OS :4 for Action Sequencing the 132 symbols are 81 action names, 49 object-ID symbols ( ID0 through ID48 ), U NK , and E OS ; Subgoal Decom-position’s 123 decompose analogously. The main configuration uses the trained meta-HMM; the uniform variant below is an ablation. 
+
+Trained vs. uniform meta-HMM. We compare the trained meta-token HMM against a uniform variant in which the emission and transition parameters are uniform (i.e., no learned action-level    
+
+> 4A meta-token is one grounded action, the symbol over which Dβis defined (e.g. G RAB (plate)). The HMM emits each grounded action as its name followed by one object-ID symbol per argument: a nullary action is one symbol, a unary action two ([ ACTION , ID]), a binary action three ([ ACTION , ID, ID]). Hand assignment is folded into the action name (e.g. L EFT GRASP ), so it carries no separate symbol. The vocabulary sizes count these emission symbols, not distinct grounded actions.
+
+18 Table 7: HMM parameter counts. Token-level HMM size is dominated by the emission matrix 
+
+H × | V |; meta-token HMM is dominated by the H × H transition matrix at this scale. H=128 
+
+throughout; token-level |V | shown for the Llama-3 tokenizer (gpt-oss uses |V |≈ 201 K ⇒ ∼ 25 .7M).                       
+
+> Vocab Token-level HMM Meta-token HMM
+> VH-AS 132 actions / 128 K tokens ∼16 .4M∼33 KVH-SD 123 predicates / 128 K∼16 .4M∼32 KBEH-AS 132 actions / 128 K∼16 .4M∼33 KBEH-SD 123 predicates / 128 K∼16 .4M∼32 KWAH-NL 7 actions + 128 ids / 128 K∼16 .4M∼34 K
+
+prior; the meta-HMM contributes no preference beyond which actions are constraint-reachable and how far they are from acceptance). The main-table configuration uses the trained meta-HMM. Both surrogates enforce the same constraint and carry the same guarantee; they differ only in how they rank the constraint-satisfying set. Table 8: Trained vs. uniform meta-token HMM on Llama 3 8B, task / execution SR (%). All trained rows use the single recipe of Section D: parse-filtered corpus, balanced 1:1 simulator mix-ture, App. D hyperparameters, no decode-time scaling. The last row retrains the same recipe on a temperature-1.0 corpus. VH-AS cells are means over six evaluator seeds (Appendix K).                              
+
+> Meta-HMM VH AS VH SD BEH AS BEH SD
+> Uniform 90.7 / 97.7 88.4 / 93.2 36 / 89 41 / 59 Trained ( T=0 .1corpus) 90.4 / 97.7 89.9 /93.5 34 / 89 36 / 66
+> Trained ( T=1 .0corpus) 90.1 / 98.0 87.8 / 92.6 33 / 96 42 / 65
+
+The two configurations trade places by a few points per module. The trained surrogate wins where the automaton leaves many admissible continuations and the corpus covers them: with the more diverse temperature-1.0 corpus it overtakes uniform on BEH SD ( 42 vs 41 ) and takes the best ex-ecution SR on the action-sequencing modules; the uniform surrogate is slightly ahead elsewhere. Where the trained surrogate loses, the mechanism is a bias toward corpus typicality: this bench-mark’s mandatory but rare actions almost never appear in the LM’s unconstrained outputs (S LEEP 
+
+and P LUG IN never occur in ∼10 8 sampled tokens), so a faithful surrogate assigns them near-zero mass and fines exactly the steps the constraints exist to enforce; the uniform surrogate is immune by construction. A fuller treatment of surrogate calibration for constrained decoding is left to future work. 
+
+# E Decoding Details 
+
+Greedy decoding under the factored posterior. At each decoding step we evaluate the factored posterior of Eq. 8 and select the argmax token. We do not use temperature sampling, top-p, or beam search; the constraint-aware reweighting is the only departure from greedy. 
+
+Decoding overhead. At batch size 1, constrained decoding runs at parity with unconstrained greedy decoding ( 20 .6 vs 20 .9 ms per token, medians over 12 VH-AS tasks with matched gen-eration lengths); per-task automaton construction adds a median 2.3 s ( γ) and 0.7 s ( β), and peak device memory is 32 GiB including the fp16 8B model. 
+
+Horizon budget. The semantic backward DP requires a finite horizon over meta-tokens. We set this budget to 40 actions for all EAI and WAH-NL evaluations. This bound is generous: across the four EAI modules, gold plans have a median length of 4 meta-tokens and a 95 th-percentile length of 19 , well within budget. Only a single VH AS task ( 54 -step plan) exceeds the cap; remaining 879 remaining evaluation tasks fit. The budget cap is not the primary source of fallback. 19 F Qualitative Examples: DFA-only Degeneration vs. Meta-Ctrl 
+
+Section 4.3 reports that hard masking on the same γ DFA collapses task success while inflating execution rate. DFA-only collapses to a single trivially-true predicate after the LM’s first sample, because no token in the local mask is preferred over closing the bracket. Meta-Ctrl emits a concise, goal-completing plan because the β backward DP assigns zero mass to any continuation that closes the bracket before the goal predicates are reached. Table 9: Representative outputs from DFA-only ( γ hard mask) and Meta-Ctrl ( γ+β) on Virtual-Home Subgoal Decomposition. DFA-only emits a single locally-true predicate and stops; Meta-Ctrl produces the predicates required to reach the goal.       
+
+> Task Prompt id DFA-only ( γmask) Meta-Ctrl ( γ+β)
+> Turn on light scene 1 125 2 NEXT TO(character.65, light.411) PLUGGED IN(light.411), ON(light.411)
+
+The DFA-only output is locally valid: NEXT TO(character, light) is a syntactically correct subgoal predicate and is true in the initial scene, so the executor accepts it and reports the plan as executed ( 96 .0% execution rate on VH SD). It does not change the light’s state, so it does not satisfy the task goal ( 0.0% task SR on VH SD). Meta-Ctrl’s lookahead, scoring each token by the probability that the remaining sequence satisfies β, rules out the early bracket close and forces the LM to emit the predicates the goal requires. 
+
+# G BEHAVIOR Affordance Prior 
+
+The BEHAVIOR system prompt specifies the action grammar, object instances, initial-state rela-tions, and goal predicates, but does not expose per-object affordances (which objects are openable, toggleable, graspable, valid containers, or valid cleaning agents). VirtualHome prompts carry this information directly via property tags; the BEHAVIOR prompt format does not. To match Virtu-alHome’s setup, we recover the missing affordance information from the benchmark’s own public object taxonomy. 
+
+Affordances come from the BDDL taxonomy, not from an author list. Each BEHAVIOR prompt names its object instances by WordNet synset (e.g. bucket.n.01 ), and the BEHAVIOR Domain Definition Language (BDDL) [8] ships a taxonomy over those synsets: an ISA tree of 
+
+1,822 nodes together with per-synset ability annotations ( openable , toggleable , soakable ,
+
+cleaningTool , and so on). BDDL is the language in which the benchmark’s own activity defi-nitions are written and is distributed in the public bddl package; our copy is semantically identical to the released one ( 1,822 nodes, zero ability differences). Affordance membership for an instance is therefore a lookup: the prompt supplies the synset, the taxonomy supplies the abilities and the ISA class, and Dβ reads them off. No substring matching over instance names and no author-curated keyword list is involved. 
+
+Two additions on top of the taxonomy. The taxonomy is not quite sufficient, and we state exactly where we go beyond it. First, an admissibility rule used at DFA-construction time: OPEN and CLOSE (and the corresponding open atoms in Subgoal Decomposition) enter the action universe for an object only if the prompt’s initial or goal state mentions that object’s open state, or the object is an open-gated container in container role for this task, i.e. the target of an inside goal or the holder of an initial inside relation. This is a statement about which actions the task gives evidence for, not a generation-time heuristic, and it is load-bearing: removing it flips seven tasks from success to failure and none in the other direction, worth +3 task points on both BEHAVIOR modules. Second, five generic rules, each justified by a statement about the physical world that stands without reference to the evaluator: open-top vessels ( bucket , basket , bin ISA subtrees) have no lid and are not open-gated; bathtubs are tap-equipped water fixtures, hence toggleable water sources; kettles, 20 teapots and pools dispense or hold water without a switch, hence passive water sources; an object a goal asks to be repositioned is graspable, whatever its ISA class; and soaking or drying applies to cleaning implements unless the prompt states otherwise. The first of these knowingly disagrees with the benchmark’s gold plans, which do emit open on buckets and baskets; we keep the physical statement and absorb the resulting over-constraint. 
+
+General precondition rules. The β state machine enforces a small number of task-independent precondition rules, each a domain-general property of the simulator: a grasp is rejected if the target hand is already holding an object; interacting with or placing into a closeable container requires it to be open; an object cannot be placed inside itself or anything (transitively) contained in it; and a position anchor must be established before relations referencing it. 
+
+Scope of the prior. The prior encodes the kinds of object-affordance facts that VirtualHome’s prompt format exposes directly. The taxonomy lookup, the one admissibility rule, the five generic rules and the ≈4 precondition families apply to every task in the module; none of them depends on a task’s goal, gold plan, or intermediate state. The information available to Dβ is thus the prompt plus a published object taxonomy, strictly less than the planner baselines of Table 5 receive, since the benchmark itself distributes a full BEHAVIOR PDDL domain with 30 action schemas carrying preconditions and effects, whereas Dβ encodes no effects. 
+
+Over-constraint on gold plans. Because the prior is fixed and task-independent, it can be stricter than a given task requires. Applied to the BEHAVIOR gold plans with no LM in the loop, it renders 17 of 100 infeasible, each containing one action the gold plan performs but a precondition rule rejects. Meta-Ctrl falls back to γ-only decoding on these, so they cap achievable BEHAVIOR task SR independently of the base LM. That the prior rejects this many gold plans is itself evidence it is generic rather than fit to the gold set. 
+
+# H Format and Hallucination Errors: Per-Module Breakdown 
+
+Table 10 reports the rate of parsing, hallucination, and parameter errors for the raw Llama 3 8B baseline and for Meta-Ctrl across all four EAI (simulator, module) pairs. Total is the fraction of plans containing the corresponding error type. We then decompose this total into a benchmark-side 
+
+component (errors caused by quirks of the evaluator’s input handling, where the LM’s output is in fact admissible under the prompt’s stated grammar and vocabulary) and an LM-fault component (residual errors that would constitute genuine constraint violations Meta-Ctrl was responsible for preventing). The LM-fault column is uniformly zero by construction: every Meta-Ctrl output satis-fies its syntactic DFA Dγ , which encodes exactly the parsing and vocabulary constraints these error categories test. 
+
+Notes on benchmark-side residuals. The non-zero Meta-Ctrl rates in the Total column reflect quirks of the EAI evaluator rather than LM output errors:  
+
+> a
+
+VH AS, 1.3% parsing: four prompts ( 339 1 , 627 1 , 84 1 , 93 1 ) have empty goal blocks in the benchmark specification; the LM correctly emits {} , which the evaluator’s parser then rejects as malformed.  
+
+> b
+
+VH AS, 1.3% hallucination: four prompts ( 125 2 , 715 2 , 173 1 , 134 1 ) emit the 
+
+PLUGIN action, which is listed in the prompt’s action vocabulary (PLUGIN: (1, [[‘HAS PLUG’]]) ) and admitted by Dγ , but is not in the evaluator’s accept set for the action-sequencing module—a vocabulary desynchronization between the prompt template and the evaluator’s parser.  
+
+> c
+
+VH SD, 2.1% parsing: seven prompts emit the POUR subgoal predicate; the evaluator’s grammar reports Unknown primitive: POUR even though POUR appears in the predi-cate vocabulary supplied with the benchmark. This is a known upstream issue in the EAI evaluator’s predicate dispatcher. 21 Table 10: Format and hallucination error rates for raw Llama 3 8B and Meta-Ctrl. Parsing : output fails the evaluator’s parser. Hallucination : output references objects or predicates not present in the evaluator’s per-task vocabulary. Parameter : argument arity, type, or formatting mismatch. The Meta-Ctrl benchmark-side column counts plans rejected by the evaluator even though they comply with the prompt’s stated grammar and vocabulary (footnotes identify each case). The LM-fault 
+
+column is the residual after removing benchmark-side rejections, and is zero across every module and error class.                                                                       
+
+> Module Error class Raw Llama 3 8B Meta-Ctrl Total Benchmark-side LM-fault
+> BEH AS Parsing 0.0% 0.0% 0.0% 0.0% Hallucination 15.0% 0.0% 0.0% 0.0% Parameter 9.0% 0.0% 0.0% 0.0%
+> Sum format/hallucination 24.0% 0.0% 0.0% 0.0%
+> VH AS Parsing 14.4% 1.3% 1.3% a0.0% Hallucination 6.9% 1.3% 1.3% b0.0% Parameter 1.0% 0.0% 0.0% 0.0%
+> Sum format/hallucination 22.3% 2.7% 2.7% 0.0%
+> VH SD Parsing 0.6% 2.1% 2.1% c0.0% Hallucination 3.3% 0.0% 0.0% 0.0% Parameter 0.6% 0.0% 0.0% 0.0%
+> Sum format/hallucination 4.5% 2.1% 2.1% 0.0%
+> BEH SD Parsing 0.0% 0.0% 0.0% 0.0% Hallucination 21.0% 1.0% 1.0% d0.0% Parameter 0.0% 0.0% 0.0% 0.0%
+> Sum format/hallucination 21.0% 1.0% 1.0% 0.0%
+> d
+
+BEH SD, 1.0% hallucination: one prompt ( packing boxes for household move or trip 0 Ihlen 1 int )has two scene objects of category shirt n 01 : shirt.0 and t-shirt.1 . Meta-Ctrl’s canonical object encoder normalizes the second to shirt.1 and emits the (canonically valid) shirt.1 , which the evaluator then reports as “Object shirt.1 is not in scene.” A naming-pipeline mismatch, not an LM-emitted hallucination. The LM-fault column separates these benchmark-side discrepancies from genuine LM output errors. Across all four modules and all error classes, Meta-Ctrl produces zero LM-fault errors, consistent with the syntactic guarantee of Dγ .
+
+# I Why BEHAVIOR Gains Less from Constrained Decoding than VirtualHome 
+
+Meta-Ctrl’s gain on a benchmark depends on how completely the prompt specifies the task’s con-straints, because the DFA can only enforce what the prompt makes available. VirtualHome and BEHAVIOR sit at opposite ends of this axis, and the gap in observed task SR lift tracks the gap in prompt content. 
+
+VirtualHome prompts expose object affordances; BEHAVIOR prompts do not. Every Virtu-alHome prompt lists, for each object, the properties that determine which actions are applicable to it (e.g. HAS PLUG , GRABBABLE , CAN OPEN ). On average each prompt carries about 11 such property tags. BEHAVIOR prompts list object instances, an initial-state block, and goal predicates, but do not expose per-object affordances at all; this is a property of the benchmark’s prompt format, not of the tasks themselves. 
+
+Most VirtualHome preconditions are derivable from the prompt; most BEHAVIOR precon-ditions are not. For each action in each gold plan, we look up its declared preconditions, taken 22 from the benchmark’s own action definitions, the VirtualHome evaluator’s action schemas, and the BDDL/BEHAVIOR PDDL domain, and ask whether the predicate and its bound object can be read off the prompt directly:      
+
+> Prompt-derivable preconditions Affordance tags per prompt VirtualHome 82% ∼11
+> BEHAVIOR 24% 0
+
+On VirtualHome the DFA can encode 82% of declared preconditions from prompt-stated facts alone. On BEHAVIOR it can encode 24% ; the rest must come either from a task-independent affordance prior (Appendix G) or from the LM’s own world knowledge. 
+
+The remaining BEHAVIOR gap cannot be closed by enlarging the prior. BEHAVIOR’s gold plans reference 148 unique object base-names; the task-independent prior assigns an actionable affordance class to 43 of them, and the uncovered tail is dominated by everyday items that the tax-onomy places under classes carrying no relevant ability ( book, candle, apple, plywood, strawberry, shoe, soap, jar, . . . ). What is missing is not taxonomy coverage (every instance resolves to a synset) but the per-task state information VirtualHome prompts list directly; the gap is one of benchmark prompt content, not of constraint enforcement. This is also why the prior remains generic rather than fitted: its memberships are read from a published taxonomy that was authored for the benchmark’s activity definitions, not by us, and it rejects 17% of the gold plans it is scored against. 
+
+The effect. On BEHAVIOR Action Sequencing, Meta-Ctrl lifts Llama 3 8B from 10% to 34% 
+
+task SR; on VirtualHome AS, from 21% to 89% . The absolute gain is large on BEHAVIOR because the baseline is low, but the achieved score is bounded by what the prompt makes encodable. The same DFA construction yields a larger gain on VirtualHome because the prompt supplies more of the constraints the DFA could enforce in the first place. 
+
+# J Real Robot Demonstrations 
+
+We list the generated plans for five of the eight real-robot demonstrations in Fig. 3, contrasting the unconstrained Llama 3 8B baseline with Meta-Ctrl (ours). Each line is one meta-token (grounded action); instance IDs are dropped for readability. Actions that Meta-Ctrl inserts or substitutes to satisfy a precondition or goal the baseline violates are shown in green; baseline actions that violate a precondition or leave the goal unsatisfied are marked with ✗. Videos of each rollout are on the project website: https://meta-ctrlg.github.io/ .
+
+J.1 Clean dishes with detergent 
+
+Goal: clean the plate and bowl. C LEAN with a rag requires the rag to be soaked, and proper dish-cleaning requires detergent to be applied first. 
+
+Baseline (Llama 3 8B)     
+
+> 1. G RAB (orange rag) 2. C LEAN (plate) ✗rag not soaked 3. C LEAN (bowl) ✗rag not soaked 4. P UT ON(orange rag, stool)
+
+Meta-Ctrl (ours) 
+
+> 1. G RAB (spray bottle) 2. S PRAY (plate) 3. S PRAY (bowl) 4. P UT ON(spray bottle, stool) 5. G RAB (orange rag) 6. S OAK (cup of water) 7. C LEAN (plate) 8. C LEAN (bowl) 9. P UT ON(orange rag, stool)
+
+What Meta-Ctrl adds: detergent application before cleaning and an explicit S OAK step so the rag satisfies the C LEAN precondition. 23 J.2 Put dishes in dishwasher 
+
+Goal: place blue mug, white cup, and gray pot inside the dishwasher. P UT IN requires the target container to be open. 
+
+Baseline (Llama 3 8B) 
+
+1. G RAB (blue mug) 2. P UT IN(blue mug, dishwasher) ✗ dish-washer closed 3. G RAB (white cup) 4. P UT IN(white cup, dishwasher) ✗
+
+5. G RAB (gray pot) 6. P UT IN(gray pot, dishwasher) ✗
+
+Meta-Ctrl (ours) 
+
+1. O PEN (dishwasher) 2. G RAB (blue mug) 3. P UT IN(blue mug, dishwasher) 4. G RAB (white cup) 5. P UT IN(white cup, dishwasher) 6. G RAB (gray pot) 7. P UT IN(gray pot, dishwasher) 
+
+What Meta-Ctrl adds: a single O PEN (dishwasher) prefix that unlocks every subsequent P UT IN.
+
+J.3 Fetch egg from fridge 
+
+Goal: place fridge-stored ingredients into a pot and heat it on the stove. G RAB on items inside a closed container is infeasible. 
+
+Baseline (Llama 3 8B) 
+
+1. G RAB (orange) ✗ fridge closed 2. P UT IN(orange, pot) 3. G RAB (syrup) ✗ fridge closed 4. P UT IN(syrup, pot) 5. G RAB (pot) 6. P UT ON(pot, stove) 7. T OGGLE ON(stove) 
+
+Meta-Ctrl (ours) 
+
+1. O PEN (fridge) 2. G RAB (orange) 3. P UT IN(orange, pot) 4. G RAB (syrup) 5. P UT IN(syrup, pot) 6. G RAB (pot) 7. P UT ON(pot, stove) 8. T OGGLE ON(stove) 
+
+What Meta-Ctrl adds: an O PEN (fridge) precondition for the enclosed ingredients. 
+
+J.4 Set up breakfast table 
+
+Goal: arrange a bowl, bread, oat-milk carton, and tuna can on the stool. The gripper is single-handed: G RAB requires the hand to be empty. 
+
+Baseline (Llama 3 8B) 
+
+1. G RAB (bowl) 2. P UT ON(bowl, stool) 3. G RAB (bread) 4. G RAB (oat-milk carton) ✗ holding bread 5. G RAB (blue tuna can) ✗ holding oat-milk 6. P UT ON(blue tuna can, stool) ✗ bread, milk lost 
+
+Meta-Ctrl (ours) 
+
+1. G RAB (bowl) 2. P UT ON(bowl, stool) 3. G RAB (bread) 4. P UT IN(bread, bowl) 5. G RAB (oat-milk carton) 6. P UT ON(oat-milk carton, stool) 7. G RAB (blue tuna can) 8. P UT ON(blue tuna can, stool) 
+
+What Meta-Ctrl adds: a release step (P UT IN/P UT ON) between every consecutive G RAB , respecting the single-gripper invariant and ensuring all four items reach the goal surface. 
+
+J.5 Place boxed objects in drawer 
+
+Goal: move the tools inside the boxes (pliers, screwdriver) into their respective shelves. The baseline misreads the goal as relocating the boxes themselves. 24 Baseline (Llama 3 8B)       
+
+> 1. O PEN (box 1) 2. O PEN (shelf 1) 3. G RAB (box 1) ✗wrong object 4. P UT IN(box 1, shelf 1) ✗goal not met 5. C LOSE (shelf 1) 6. O PEN (box 2) 7. O PEN (shelf 2) 8. G RAB (box 2) ✗
+> 9. P UT IN(box 2, shelf 2) ✗
+> 10. C LOSE (shelf 2)
+
+Meta-Ctrl (ours) 
+
+> 1. O PEN (box 1) 2. O PEN (shelf 1) 3. G RAB (pliers) 4. P UT IN(pliers, shelf 1) 5. C LOSE (shelf 1) 6. O PEN (box 2) 7. O PEN (shelf 2) 8. G RAB (screwdriver) 9. P UT IN(screwdriver, shelf 2) 10. C LOSE (shelf 2)
+
+What Meta-Ctrl adds: goal-aware object selection. The semantic DFA encodes the goal predicate INSIDE (pliers , shelf 1 ) ∧ INSIDE (screwdriver , shelf 2 ), so the only G RAB that drives the β DFA toward acceptance is on the tools, not the boxes that contain them. 
+
+Summary. The five demos cover the three precondition families Meta-Ctrl is designed to repair: 
+
+container access (dishwasher, fridge), tool-use chains (detergent →soak →clean), and single-gripper / object-identity goals (breakfast table, boxed tools). In every case the baseline produces a syntacti-cally clean plan that nonetheless fails at the planning stage; Meta-Ctrl’s β-DFA inserts the missing precondition or substitutes the goal-relevant object without changing any otherwise-valid step. 
+
+# K Extended Evaluation on Recent Models 
+
+The EAI leaderboard [9] was published in 2024 and predates several frontier and open-weight model releases. To contextualize Meta-Ctrl against the current state of the art, we evaluated nine recent models on EAI under its official protocol (Table 11): four Claude variants (Opus 4.6, 4.7, 4.8; Sonnet 4.6), three GPT-5 variants (5.4, 5.4 mini, 5.5), and two open-weight models (Gemma 4 31B and gpt-oss-20B, the latter also serving as a Meta-Ctrl base model). 
+
+Evaluation protocol. We used the official EAI evaluation pipeline [9] with prompts and scoring identical to the leaderboard configuration. For each model, we generated plans under default sam-pling parameters and scored them with EAI’s official symbolic evaluator on the full VirtualHome (n = 342 AS, 338 SD) and BEHAVIOR ( n = 100 AS, 100 SD) test sets. Open-weight models were run locally on 8 ×NVIDIA H200 GPUs. We report both Task SR and Execution SR. 
+
+Evaluation protocol. The official VirtualHome evaluator matches a task’s gold action goals in a hash-dependent order, so VH-AS task SR on identical plans can vary by up to ±1.4 points across runs (thirteen of the 342 tasks carry more than one action goal). All our VirtualHome numbers are therefore means over six fixed evaluator seeds. 
+
+Where Meta-Ctrl stands. Meta-Ctrl with Llama 3 8B tops the VH-AS Task SR column (90.4, mean over six evaluator seeds), above Claude Opus 4.8 (87.9), despite the base LM being roughly an order of magnitude smaller and open-weight; the two Meta-Ctrl models also take the top two slots on VH-AS execution (97.7 and 94.1). On VH-SD, recent frontier models (Claude Opus 4.6, GPT-5.4) reach 92.9 Task SR, surpassing Meta-Ctrl (89.9 with Llama 3 8B), and they keep the lead on execution as well (95.6 vs. 93.5). On BEHAVIOR, recent frontier models lead Task SR in both modules, but the picture splits on execution: Meta-Ctrl with gpt-oss-20B tops BEH-AS execution (90.0), just ahead of Claude Sonnet 4.6 (89.0), while frontier models retain the lead on BEH-SD execution. This pattern is consistent with our hypothesis that constraint enforcement most benefits weaker base models on objectives where plan validity is the dominant failure mode—hence Meta-Ctrl’s strength on the execution-SR columns—while stronger base models recover their advantage on Task SR, which demands richer world knowledge and goal interpretation, most visibly on BE-HAVIOR. The Subgoal Decomposition results on VirtualHome are particularly telling: every recent 25 Table 11: Extended Embodied Agent Interface results on recent models, evaluated by us under the official EAI protocol. Task SR (T) and Execution SR (E) on VirtualHome (VH; n = 342 AS, 338 
+
+SD) and BEHAVIOR (BEH; n = 100 AS, 100 SD). Meta-Ctrl rows from Table 3 included for reference. Bold : best per column; underline: second-best. 
+
+Action Sequencing Subgoal Decomposition 
+
+VH BEH VH BEH 
+
+Model T E T E T E T E Avg 
+
+Recent frontier models 
+
+Claude Opus 4.8 87.9 86.2 74.0 81.0 90.8 93.8 61.0 65.0 78.4 Claude Opus 4.7 77.7 76.1 73.0 82.0 91.1 93.8 64.0 71.0 76.5 Claude Opus 4.6 74.4 74.8 78.0 87.0 92.9 95.6 78.0 82.0 80.8 
+
+Claude Sonnet 4.6 73.1 75.7 84.0 89.0 91.7 93.5 73.0 79.0 80.5 GPT-5.5 73.4 78.0 72.0 75.0 92.3 95.0 69.0 76.0 76.7 GPT-5.4 70.8 74.8 57.0 59.0 92.9 95.3 66.0 76.0 71.7 GPT-5.4 mini 71.5 76.7 70.0 79.0 91.1 94.7 63.0 76.0 73.9 
+
+Recent open-weight models 
+
+Gemma 4 31B 20.7 22.6 51.0 58.0 83.7 93.5 37.0 42.0 48.1 gpt-oss-20B 74.4 80.3 40.0 51.0 72.5 82.2 27.0 36.0 53.5 
+
+Meta-Ctrl 
+
+Llama 3 8B + Meta-Ctrl 90.4 97.7 34.0 89.0 89.9 93.5 36.0 66.0 62.6 gpt-oss-20B + Meta-Ctrl 86.6 94.1 40.0 90.0 82.3 86.4 41.0 66.0 62.5 T = Task SR, E = Execution SR. Avg = mean of the four Task SR columns. 
+
+frontier model clusters within 90.8–92.9 Task SR (and 93.5–95.6 execution), suggesting SD has become a near-saturated benchmark where constraint enforcement contributes less marginal value. 26

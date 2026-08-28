@@ -1,0 +1,922 @@
+Title: GaussVLA: Geometry-Aware Spatial Reasoning for Vision-Language-Action Model
+
+URL Source: https://arxiv.org/pdf/2608.24959v1
+
+Published Time: Thu, 27 Aug 2026 00:06:01 GMT
+
+Number of Pages: 24
+
+Markdown Content:
+> arXiv:2608.24959v1 [cs.RO] 25 Aug 2026
+
+MD SELIM SAROWAR ET AL.: GAUSSVLA 1
+
+# GaussVLA: Geometry-Aware Spatial Reasoning for Vision-Language-Action Model 
+
+Md Selim Sarowar 1
+
+selim.sarowar12@gmail.com 
+
+Md Tanvir Islam 2
+
+tanvirnwu@knu.ac.kr 
+
+Sungho Kim 1∗
+
+sunghokim@yu.ac.kr 
+
+Sangtae Ahn 2
+
+stahn@knu.ac.kr  
+
+> 1
+
+Yeungnam University, Republic of Korea  
+
+> 2
+
+Kyungpook National University, Republic of Korea 
+
+Abstract 
+
+Vision-Language-Action (VLA) models encode visual observations as flat 2D patch tokens that carry no intrinsic geometric structure, and augmenting them with dense monocular depth injects per-pixel scalar values that encode neither surface orientation nor geometric confidence. This leaves the policy with limited structured spatial reasoning for action prediction. We propose GaussVLA , a mamba-based VLA that incorporates two custom modules: Gaussian Spatial Tokenizer (GST) to lift frozen semantic and depth features into compact 3D Gaussian tokens, pools geometrically salient regions with learned queries, and Depth-Aware Chain-of-Thought (DA-CoT) that performs struc-tured, non-autoregressive geometric reasoning under language and flow-time conditioning. Across both simulation and real-world evaluations, GaussVLA demonstrates strong spatial-manipulation performance while remaining parameter efficient. On LIBERO, it achieves 93.5% average success and 100.0% success on the Spatial suite with only 200M param-eters, improving over SpatialVLA by 19.7% relative average success while remaining significantly more parameter-efficient. 
+
+# 1 Introduction 
+
+Figure 1: Overview of GaussVLA .
+
+Learning robot manipulation policies from demonstra-tions has become a dominant paradigm, where vision-language-action (VLA) models [4, 13, 42] leverage visual observations and language conditioning to en-able generalizable robotic skills across diverse tasks. These models inherit strong language grounding from pretrained vision-language backbones [20, 34] and translate this grounding into executable, language-conditioned manipulation policies. However, their visual front-end projects each RGB observation into a flat sequence of 2D patch tokens. While these tokens 
+
+© 2026. The copyright of this document resides with its authors. It may be distributed unchanged freely in print or electronic forms. 
+
+> ∗
+
+Corresponding author. Project page: GaussVLA 2 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+capture appearance and semantic information, they lack explicit metric 3D geometry and spatial information, treating all patches equally regardless of depth, surface orientation, or ge-ometric reliability. Although such representations can achieve good performance on standard benchmarks, they become less reliable when tasks require precise geometric reasoning and robustness to variations. Recent work attempts to address this limitation by injecting geometric information, either by augmenting visual tokens with monocular depth estimates [27] or by incorporating additional reasoning mechanisms into the policy pipeline [30]. While effective to some extent, these approaches typically model depth as a per-pixel scalar signal, which primarily encodes distance but does not explicitly capture surface orientation or geometric reliability. As a result, important spatial cues, such as local surface structure, must be inferred implicitly from depth patterns, which can be ambiguous. Moreover, treating all depth predictions as equally reliable ignores the estimator’s confidence that varies across regions [11]. Beyond representation, current VLA pipelines remain limited in their ability to reason about spatial relationships prior to action decoding. While modern flow-matching and diffusion-based action heads [4, 15] generate continuous action sequences conditioned on backbone features, spatial relationships are encoded only implicitly, without modeling of geometric structure. Autoregressive Chain-of-Thought (CoT) reasoning [33, 36] introduces intermediate reasoning steps, but operates primarily in 2 D image space, incurs latency from sequential token generation, and remains decoupled from action decoding without direct spatial supervision. To address these limitations, we propose a model GaussVLA that integrates structured 
+
+GST with reasoning-aware action decoding. Instead of representing visual observations as flat 2 D tokens or scalar depth maps, GST encodes the observations as a set of 3 D Gaussian primitives that capture spatial position, local geometry, and depth-aware features in a con-tinuous representation, thereby enabling the modeling of geometric relationships. Building on this, we introduce DA-CoT , which injects structured spatial reasoning directly into the action decoding process through supervised multimodal tokens, aligning reasoning with action generation. To efficiently model the resulting structured, long-range dependencies in our proposed GaussVLA , we adopt a mamba-based backbone [7], which enables linear-time sequence modeling and improved computational efficiency over attention-based architectures. Together, these components enable improved spatial reasoning and more reliable performance in robotic manipulation tasks, marked by the following key contributions: • Gaussian Spatial Tokenizer (GST). We introduce a structured 3D spatial representa-tion that converts depth and visual features into a compact set of Gaussian primitives. Each primitive is parameterized by a 3D mean that captures spatial position, a covari-ance that encodes local geometric structure and spatial extent, and an opacity term that represents depth-aware confidence, enabling structured modeling of scene geometry. The resulting representation is refined through spatial attention pooling. • Depth-Aware Chain-of-Thought (DA-CoT). We introduce a structured supervision mechanism for multimodal token prediction that incorporates spatial reasoning signals into the action generation process. DA-CoT introduces a structured, non-autoregressive reasoning-conditioning module in which a small set of learnable queries cross-attends to GST tokens under joint language and flow-time conditioning, thereby anchoring the reasoning representation to the action-prediction objective. • Efficient unified framework. We present a unified VLA framework GaussVLA that MD SELIM SAROWAR ET AL.: GAUSSVLA 3
+
+integrates GST and DA-CoT within an efficient sequence modeling backbone, enabling real-time inference with a relatively low computational footprint. We benchmark our approach on four widely used manipulation datasets, achieving performance comparable to state-of-the-art baselines while being more computationally efficient. 
+
+# 2 Related Works 
+
+Previous VLAs [1, 13, 40, 42, 43] discretize action dimensions with BPE-style binning and fine-tune pretrained VLMs to autoregressively emit action tokens. While this route preserves language grounding, it ties the plan to long sequences that accumulate prediction errors over time, leading to a drop in performance and a high computation cost as chunk length increases. On the other hand, a prominent line of research reformulates action generation as a continuous denoising process, drawing directly on Diffusion Policy [6]. By modeling the vi-suomotor policy as a conditional Denoising Diffusion Probabilistic Model (DDPM), Diffusion Policy excels at capturing multimodal action distributions and producing temporally smooth, high-dimensional trajectories. However, Diffusion Policy [6] requires multiple denoising steps per action, which slows execution, and has no language grounding. Later, this paradigm has been widely integrated into VLA architectures by appending a dedicated diffusion action head to the vision-language backbone. For instance, models such as Octo [25] and TinyVLA [31] leverage this decoupled architecture, utilizing a transformer or a lightweight VLM followed by a diffusion head to generate continuous action chunks. This approach successfully bypasses the precision limits of discrete binning while ensuring stable, multimodal control. But Octo [25] requires large pre-training data and struggles to process egocentric views, which makes it underperform. Furthermore, TinyVLA requires multiple sampling steps, which sacrifices performance and semantic understanding. To overcome this trade-off between these paradigms, more recent systems further iterate on decoupling action decoding from the autoregressive backbone. π0 [4] attaches a flow-matching action expert to a VLM via a mixture-of-transformers with shared attention, recovering continuous chunked prediction at the cost of an additional head. CogACT [15] uses a diffusion head with classifier-free guidance, which smooths trajectories but adds tens of denoising steps per chunk. To mitigate the inference latency of these generative heads, π0-FAST [26] replaces per-step tokenization with a frequency domain code (Discrete Cosine Transform) that compresses action chunks before autoregressive decoding, trading expressivity for length. PD-VLA [28] reformulates autoregressive decoding as a nonlinear system solved by parallel fixed-point iterations, recovering wall-clock speed at the price of a bounded number of refinement steps. 
+
+Spatial Awareness and Visual Reasoning. Meanwhile, recent works such as 3D-VLA [38] incorporate RGB-D observations and point-cloud representations to make VLA policies more spatially aware. Similarly, SpatialVLA [27] injects pseudo point-cloud tokens into the policy. However, such representations can lose fine-grained object morphology and remain sensitive to depth-estimation errors and sensor noise. Therefore, effectively bridging these geometric priors to low-level control demands structured reasoning mechanisms, which introduce a fundamental trade-off. In parallel, CoT-VLA [36] and ECoT [33] perform textual reasoning in 2D image coordi-nates before action prediction; this is interpretable but incurs autoregressive latency on the order of seconds per step. RD-VLA [30] moves reasoning into a latent recurrent space to 4 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+recover speed, but sacrifices the auditability of chain-of-thought and remains constrained by bounded depth generalization, as excessive recurrent unrolling leads to state saturation and degraded performance. Beyond efficiency, action representation strongly affects generalization. QueST [23] uses finite scalar quantization to learn a task-agnostic vocabulary of action primitives for few-shot transfer, while Mask2Act [35] learns latent plans from action-free video by predicting future object masks instead of full RGB frames. However, its reliance on 2D masks limits access to the 3D geometry needed for precise, contact-rich manipulation. 
+
+SSM in Robot Manipulation. Consequently, to process rich 3D sequences and structured reasoning traces without prohibitive latency, the underlying model architecture must be highly efficient. Standard transformer VLA backbones incur quadratic attention cost over the joint multimodal sequence and maintain a KV cache that grows with the chunk horizon. Selective state-space models (SSMs) such as Mamba [7] address this by replacing attention with a linear-time selective scan and a constant-size hidden state. This is highly attractive for sequences that mix language, visual patches, 3D tokens, and streaming proprioception. Recent work has demonstrated the viability of replacing transformer stacks with SSM cores to achieve favorable throughput at matched representational capacity. For instance, MaIL [10] applies this successfully to imitation learning, while RoboMamba [17] leverages the Mamba architecture to efficiently co-train vision-language reasoning and continuous motor control. However, the open question for an SSM-based VLA is how to retain random access to spatial geometry, since the linear scan summarizes context into a bounded state and cannot natively re-read individual primitives. In this study, we introduce GaussVLA to geometrically address the issues by pushing residual correction, confidence estimation, and depth-aware CoT-derived gradients directly into the tokenizer. It resolves the latency-interpretability trade-off by supervising a short, structured CoT in metric 3D coordinates rather than relying on an open-ended textual trace. 
+
+GaussVLA resolves this by coupling the Mamba core to the full P=256 Gaussian field through a global cross-attention mechanism. By mapping learned reasoning queries to pooled GST 
+
+tokens. It preserves the linear-time property of the scan while enabling the reasoning path to query fine-grained 3D primitives on demand. 
+
+# 3 Proposed Method: GaussVLA 
+
+We propose GaussVLA , an end-to-end VLA framework that equips robotic policy learning with structured 3D spatial representation and reasoning-aware action generation. Given a window of RGB observations and a language instruction, GaussVLA first performs dual-stream visual encoding to extract complementary semantic and geometric cues. These two streams are then fused by our Gaussian Spatial Tokenization (GST) module, which transforms dense 2D patch tokens into structured 3D Gaussian spatial tokens that encode semantic content, spatial location, and confidence-aware geometric structure. Building on these tokens, we introduce Depth-Aware Chain-of-Thought (DA-CoT), which aggregates task-relevant spatial relations into a small set of reasoning tokens and injects them into a Mamba-based multimodal backbone. Finally, a flow-matching policy head predicts a conditional velocity field over action trajectories, thereby generating the target action sequence. Thus, GaussVLA combines three complementary ingredients within a unified architecture: geometry-aware representation learning, reasoning-aware action conditioning, and efficient linear-time sequence modeling. MD SELIM SAROWAR ET AL.: GAUSSVLA 5
+
+Figure 2: Framework of our proposed GaussVLA for VLA-based Robot Manipulation. A frozen dual-stream encoder (SigLIP and Depth Anything V2) extracts complementary semantic and dense depth features for geometric context. These streams are fused by the Gaussian Spatial Tokenizer (GST), which lifts 2D image evidence into structured 3D Gaussian tokens via Gaussian parameters (μ, σ , α),forming geometry-aware patch tokens, and then aggregates them through spatial attention pooling. The resulting GST tokens are combined with language, CoT, action, and temporal embeddings, and processed by a shared Mamba-based multimodal backbone with positional encoding. Finally, a DA-CoT 
+
+> layer refines spatial reasoning before the flow-matching action prediction head.
+
+## 3.1 Problem Formulation 
+
+We study language-conditioned robot manipulation from demonstrations. The training set is D = {(O(n), s(n), A(n))}Nn=1, where N is the number of training samples. For each sample, 
+
+O = {x(m) 
+
+> t
+
+}To,Mt=1,m=1 denotes a window of To RGB observations from M camera views, where 
+
+x(m) 
+
+> t
+
+∈ R3×Hx×Wx is the image captured at observation step t from camera m, and Hx and Wx
+
+are the image height and width. The language instruction is denoted by s, and its encoded representation is given by l = Elan (s) ∈ Rdl . where Elan is the language encoder and dl is the language embedding dimension. The expert action trajectory is A = [ a1, . . . , aH ] ∈ RH×da ,where H is the action horizon, da is the action dimension, and at ∈ Rda is the action at step t.Our goal is to learn a policy πθ , parameterized by θ , that predicts a future action sequence ˆA = πθ (O, l). In GaussVLA , this prediction is obtained through a structured pipeline: RGB observations are first converted into semantic and geometric features, then compressed into 3D Gaussian spatial tokens, refined with depth-aware reasoning tokens, and finally decoded into actions by a Mamba-based [7] backbone with a flow-matching head. In GaussVLA , we learn a conditional velocity field for action generation in order to sample Gaussian noise ε ∼ N (0, I), and a flow time τ ∈ [0, 1] from a distribution p(τ). We then form the interpolated action state Zτ = ( 1 − τ)A + τε , whose analytic target velocity is U = ε − A.Conditioned on Zτ , the observation context O, the language embedding l, and the flow time 
+
+τ, the model predicts a velocity field vθ (Zτ , O, l, τ).The following subsections describe how GaussVLA constructs the structured representa-tion through dual-stream visual encoding, GST , and DA-CoT reasoning. 
+
+## 3.2 Dual-Stream Visual Encoding 
+
+Conventional VLA policies typically encode each RGB observation into 2D visual tokens, leaving the geometric structure to be implicitly inferred by the downstream policy. In contrast, 6 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+GaussVLA decomposes visual perception into two complementary streams before spatial tokenization: a semantic stream for appearance-aware patch features and a geometric stream 
+
+for depth-aware spatial cues. For each image x(m) 
+
+> t
+
+∈ O , we apply two frozen encoders: a semantic encoder [34] and a depth encoder [32]. The semantic stream uses a pretrained patch encoder Esem to extract a set of patch-level visual features as follows: 
+
+F(m) 
+
+> t
+
+= Esem (x(m) 
+
+> t
+
+) ∈ RP×ds , (1) where P is the number of image patches and ds is the semantic feature dimension. We denote the feature of patch r ∈ { 1, . . . , P} by f(m) 
+
+> t,r
+
+∈ Rds . These patch features retain local appearance information and high-level semantic cues useful for distinguishing objects, parts, and task-relevant visual patterns. In parallel, the depth stream uses a pretrained monocular depth encoder Edep to estimate depth from the same RGB input. To align this stream with the patch representation in Eq. (1), we sample the predicted depth map at the centers of the P image patches as follows: 
+
+d(m) 
+
+> t
+
+= Edep (x(m) 
+
+> t
+
+) ↓patch ∈ RP, (2) where ↓patch denotes patch-center sampling, and d(m) 
+
+> t,r
+
+∈ R is the depth value associated with patch r. This produces a patch-aligned semantic-depth representation in which each patch is described by the pair (f(m) 
+
+> t,r
+
+, d(m) 
+
+> t,r
+
+).
+
+## 3.3 Gaussian Spatial Tokenization (GST) 
+
+Given the patch-aligned semantic (f(m) 
+
+> t,r
+
+) and depth features (d(m) 
+
+> t,r
+
+) from the dual-stream encoder, the goal of GST is to convert dense 2D patch tokens into structured 3D Gaussian tokens using its patch-center image coordinate ur = [ ur, vr, 1]⊤ and predicted depth. To compensate for monocular depth scale bias, we apply a learnable affine correction and back-project it as follows: ˜d(m) 
+
+> t,r
+
+= λd d(m) 
+
+> t,r
+
++ βd , (3) 
+
+c(m) 
+
+> t,r
+
+= ˜d(m)
+
+> t,r
+
+ K(m)−1ur ∈ R3, (4) where K(m) ∈ R3×3 is the camera intrinsic matrix; λd , βd ∈ R are learnable scalars. Starting from the semantic feature f(m) 
+
+> t,r
+
+, a learnable Gaussian parameter head fpar predicts a residual mean offset ∆μ(m) 
+
+> t,r
+
+∈ R3, a log-scale vector η(m) 
+
+> t,r
+
+∈ R3, and a confidence score 
+
+α(m) 
+
+> t,r
+
+∈ (0, 1) as follows: 
+
+
+
+∆μ(m) 
+
+> t,r
+
+, η(m) 
+
+> t,r
+
+, α(m)
+
+> t,r
+
+
+
+= fpar 
+
+
+
+f(m)
+
+> t,r
+
+
+
+. (5) 
+
+Scope of α. The opacity α(m) 
+
+> t,r
+
+is predicted from the semantic feature f(m) 
+
+> t,r
+
+alone and does not directly consume a depth-uncertainty signal. Depth-awareness arises implicitly through the opacity-weighted GST loss (Eq. (21)): high-α patches whose back-projection disagrees with the corrected depth incur a larger penalty, inducing low α in geometrically ambiguous regions. We verify this induced correlation in the Supplementary Material A.09. MD SELIM SAROWAR ET AL.: GAUSSVLA 7
+
+We then define the Gaussian mean as follows: 
+
+μ(m) 
+
+> t,r
+
+= c(m) 
+
+> t,r
+
++ ρ tanh 
+
+
+
+∆μ(m)
+
+> t,r
+
+
+
+, (6) where ρ > 0 is a fixed workspace radius that bounds the residual offset. The corresponding Gaussian scale (log-variance) is as follows: 
+
+σ (m) 
+
+> t,r
+
+= exp 
+
+
+
+η(m)
+
+> t,r
+
+
+
+. (7) Thus, each patch gives rise to a Gaussian primitive mean  μ(m) 
+
+> t,r
+
+), log-variance (σ (m) 
+
+> t,r
+
+), where 
+
+α(m) 
+
+> t,r
+
+reflects the reliability of the local geometry. To give it 3D geometry awareness, we apply a 3D Fourier positional encoding to each Gaussian mean as follows: 
+
+γ
+
+
+
+μ(m)
+
+> t,r
+
+
+
+=
+
+h
+
+sin 
+
+
+
+20π μ (m)
+
+> t,r
+
+
+
+, cos 
+
+
+
+20π μ (m)
+
+> t,r
+
+
+
+, . . . , sin 
+
+
+
+2L−1π μ (m)
+
+> t,r
+
+
+
+, cos 
+
+
+
+2L−1π μ (m)
+
+> t,r
+
+ i 
+
+, (8) where the sine and cosine functions are applied element-wise to the three spatial coordi-nates, yielding γ(μ(m) 
+
+> t,r
+
+) ∈ R6L.We then form the geometry-aware patch token as follows: 
+
+g(m) 
+
+> t,r
+
+=
+
+h
+
+f(m) 
+
+> t,r
+
+⊕ γ
+
+
+
+μ(m)
+
+> t,r
+
+
+
+⊕ η(m)
+
+> t,r
+
+i
+
+∈ Rdg , dg = ds + 6L + 3, (9) where the ⊕ denotes concatenation along the token dimension. The token g(m) 
+
+> t,r
+
+from Eq. (9) jointly encodes semantic appearance, 3D position, and local Gaussian geometry through the log-scale vector η(m) 
+
+> t,r
+
+. The confidence term α(m) 
+
+> t,r
+
+is used separately as a reliability bias in the subsequent spatial attention pooling step. We first project the patch tokens into a pooling space using ˜G(m) 
+
+> t
+
+= G(m) 
+
+> t
+
+Win , where 
+
+Win ∈ Rdg×dp is a learnable projection matrix and dp is the pooling dimension. The pooling module maintains Ng learnable spatial queries, collected in a matrix Q ∈ RNg×dp . For clarity, we write the pooling step in a single-head form, while the actual implementation uses multi-head cross-attention. The pooled attention output is as follows: ˆZ(m) 
+
+> t
+
+= softmax 
+
+ (LN 1(Q)WQ)( ˜G(m)  
+
+> tWK)⊤
+
+√dp
+
++ 1Ng log (α(m) 
+
+> t
+
+)⊤
+
+
+
+( ˜G(m) 
+
+> t
+
+WV ), (10) where 1Ng ∈ RNg broadcasts the confidence bias across queries. A standard residual FFN block yields the final GST features Z(m) 
+
+> t
+
+= LN 3(FFN (LN 2(Q + ˆZ(m) 
+
+> t
+
+))) ∈ RNg×dz . We denote the j-th row of Z(m) 
+
+> t
+
+by z(m)  
+
+> t,j
+
+∈ Rdz , for j ∈ { 1, . . . , Ng}.Collecting the tokens over all observation steps and camera views yields the structured 
+
+GST representation as follows: 
+
+ZGST =
+
+n
+
+z(m) 
+
+> t,j
+
+oTo,M,Ng  
+
+> t=1,m=1,j=1
+
+, (11) which serves as the compact geometry-aware visual representation passed to our subsequent 
+
+DA-CoT reasoning module and the action decoder. 8 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+## 3.4 Depth-Aware Chain-of-Thought (DA-CoT) 
+
+While GST provides a compact set of geometry-aware visual tokens, these tokens are still purely perceptual. To extract task-relevant spatial relations before action decoding, we introduce a DA-CoT conditioning module. The key idea is to use a small set of learnable reasoning queries to attend over the GST representation under joint language and flow-time conditioning, thereby producing structured reasoning tokens. We begin by flattening the GST representation in Eq. (11) across observation steps, camera views, and Gaussian tokens as follows: ¯ZGST = Flatten (ZGST ) ∈ R(ToMN g)×dz , (12) where dz is the GST token dimension. We then project these tokens into a reasoning space of dimension dc using a learnable mapping f cot gst . In parallel, the language embedding l from the section 3.1 is projected to a language-conditioning token lcot = f cot lang (l) ∈ Rdc , and the flow time τ is encoded into a time-conditioning token φ τ = ftime (τ) ∈ Rdc . These components are concatenated to form the DA-CoT context as follows: 
+
+Cτ =
+
+h
+
+f cot gst ( ¯ZGST ) ⊕ l⊤ 
+
+> cot
+
+⊕ φ ⊤
+
+> τ
+
+i
+
+∈ R(ToMN g+2)×dc . (13) Next, DA-CoT maintains Nr learnable reasoning queries, collected in a matrix Y (0) ∈
+
+RNr ×dc , where Nr ≪ ToMN g. These queries are refined through self-attention, cross-attention to the context Cτ , and a feed-forward update as follows: 
+
+Y (1) = LN 1
+
+
+
+Y (0) + MHSA (Y (0))
+
+
+
+, (14) 
+
+Y (2) = LN 2
+
+
+
+Y (1) + MHCA (Y (1), Cτ , Cτ )
+
+
+
+, (15) 
+
+Rτ = LN 3
+
+
+
+Y (2) + FFN (Y (2))
+
+
+
+∈ RNr ×dc , (16) where MHSA (·) denotes multi-head self-attention, MHCA (·, ·, ·) denotes multi-head cross-attention, and LN 1, LN 2, and LN 3 are layer-normalization operators. The rows of Rτ are the final DA-CoT tokens. Each DA-CoT token summarizes a distinct subset of the GST representation, conditioned on task and flow time. Intuitively, these tokens provide a structured, non-autoregressive summary of the 3D scene’s reasoning, allowing the policy to focus on the spatial relations most relevant to the current manipulation objective, as further presented in the following section. 
+
+## 3.5 GaussVLA 
+
+This stage integrates the GST observation tokens from Eq. (10), the DA-CoT reasoning tokens from Eq. (16), language conditioning, and flow-state action tokens into a unified policy backbone. Its goal is to parameterize the conditional velocity field for flow-matching action generation. For clarity, we omit the batch dimension. We first map all inputs to the common backbone dimension db. Specifically, the GST 
+
+representation ZGST from Eq. (11) is flattened over observation steps, camera views, and Gaussian queries, then projected to ¯ Zobs ∈ RTGST ×db , where TGST = ToMN g. The DA-CoT 
+
+tokens from Eq. (16) are projected to ¯ Rτ ∈ RNr ×db . The language embedding, flow time, MD SELIM SAROWAR ET AL.: GAUSSVLA 9
+
+and interpolated action state from Sec . 3.1 are embedded as elang = flang (l), eτ = fτ (τ), and ¯Zact  
+
+> τ
+
+= fact (Zτ ). The resulting backbone tokens are concatenated along the token dimension to form the multimodal policy input as follows: 
+
+Yτ = fmamba 
+
+ eτ ⊕ elang ⊕ ¯Zobs ⊕ ¯Rτ ⊕ ¯Zact 
+
+> τ
+
+ ∈ R(2+TGST +Nr +H)×db . (17) Let Yact  
+
+> τ
+
+∈ RH×db denote the final H backbone states corresponding to the action tokens, and let Yctx  
+
+> τ
+
+denote the remaining non-action states. The action decoder refines the action states using the contextual states, DA-CoT tokens, and time embedding: ˜Yact  
+
+> τ
+
+= fdec 
+
+ Yact  
+
+> τ
+
+, Yctx  
+
+> τ
+
+, ¯Rτ , eτ
+
+ ∈ RH×db . (18) Finally, the velocity head predicts the conditional flow velocity as follows: 
+
+vθ = fvel 
+
+  ˜Yact 
+
+> τ
+
+ ∈ RH×da . (19) Thus, GaussVLA aligns geometry-aware observation tokens, DA-CoT reasoning, and flow-state action tokens within a single conditional policy backbone. 
+
+## 3.6 Training Objectives 
+
+GaussVLA is trained with three complementary objectives: the primary flow-matching loss, a 
+
+GST depth-consistency loss, and a DA-CoT supervision loss. Together, these terms encourage accurate action generation, geometrically consistent spatial tokens, and reasoning features that remain aligned with the target velocity field. For our proposed GaussVLA , the flow matching loss is defined as follows: 
+
+LFM = E(O,s,A)∼D, τ∼p(τ), ε∼N (0,I)
+
+h
+
+∥vθ (Zτ , O, l, τ) − U∥22
+
+i
+
+. (20) where vθ is predicted velocity and U is target velocity as defined in section 3.1. To preserve geometric consistency within GST , we use an opacity-weighted depth re-construction loss on the z-coordinate μ(m) 
+
+> t,r,z
+
+of each Gaussian mean (Eq. (5)) against the affine-corrected depth ˜ d(m) 
+
+> t,r
+
+(Eq. (3)), with α(m) 
+
+> t,r
+
+the patch confidence as follows: 
+
+LGST = ∑t,m,r α(m) 
+
+> t,r
+
+μ(m) 
+
+> t,r,z
+
+− ˜d(m)
+
+> t,r
+
+∑t,m,r α(m)
+
+> t,r
+
+. (21) We attach an auxiliary supervision term so that the DA-CoT tokens remain predictive of the target flow velocity. Let ¯ Rτ = [ rτ,1, . . . , rτ,Nr ] ∈ RNr ×db denote the DA-CoT tokens after projection to the backbone dimension, and define their mean summary as follows: ¯rτ = 1
+
+NrNr
+
+# ∑
+
+> j=1
+
+rτ, j ∈ Rdb . (22) This summary is broadcast across the H action steps and combined with the action-decoder hidden output ˜ Y act  
+
+> τ
+
+∈ RH×db . A learnable residual head f res CoT then predicts an auxiliary velocity: ˆUCoT = f res CoT 
+
+ ˜Y act  
+
+> τ
+
++ 1H ¯r⊤
+
+> τ
+
+
+
+∈ RH×da , (23) 10 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+where 1H ∈ RH broadcasts the DA-CoT summary over the action horizon. Given the flow-matching target velocity Uτ ∈ RH×da , the DA-CoT supervision loss is as follows: 
+
+LCoT = 1
+
+Hd a
+
+ˆUCoT − Uτ 
+
+> 2
+> F
+
+. (24) The final training objective is the weighted sum as follows: 
+
+L = LFM + LGST + LCoT . (25) 
+
+# 4 Experiments 
+
+## 4.1 Experimental Setup 
+
+Benchmarks. We evaluate GaussVLA across simulation, robustness, long-horizon control, and real-world manipulation. LIBERO [16] serves as the primary simulation benchmark. LIBERO-PRO [41] tests robustness and Meta-World [23] evaluates difficulty-stratified ma-nipulation across Easy, Mid, Hard, and Very Hard splits, while CALVIN [22] ABCD →Dtests long-horizon sequential generalization on the 10% subset by measuring 1-5 consecutive task completions. We further evaluate sim-to-real transfer on a physical SO-101 robot using multi-task and Pick-Place in-distribution (ID) or out-of-distribution (OOD) trials. 
+
+Metrics. Report success rate (SR) for LIBERO, Meta-World, and SO-101; normalized success under perturbations for LIBERO-PRO; completed sequence length and 1-5 task completion rates for CALVIN. 
+
+Implementation. We instantiate Esem as frozen SigLIP-SO400M/14 with P = 256 patch tokens and feature dimension ds = 1152, Edep as frozen Depth-Anything-V2 (ViT-L), and 
+
+Elang as a frozen CLIP text encoder. All encoders remain frozen; only GST , DA-CoT , the Mamba backbone, and the action decoder are trained. GST uses Ng = 128 Gaussian queries per camera with a workspace radius of 0 .8m, while DA-CoT uses Nr = 4 reasoning queries with 512-dimensional hidden states. GST uses L = 10 Fourier band. The policy backbone uses a backbone dimension db = 512 with 5 Mamba blocks and intermediate dimension 1024, and predicts 7-DoF action chunks over a horizon H = 10 using a flow-matching action decoder with 10 Euler steps. The action decoder uses two cross-attention blocks with 4 heads, and learned positional embeddings are used for the multimodal token sequence. We train with AdamW, learning rate 2 .5 × 10 −5, weight decay 10 −4, batch size 256, and BF16 precision. The flow time is sampled from Beta (1.5, 1.0) and the learning rate follows a cosine schedule. The auxiliary loss weights are set to λGST = 0.05 and λCoT = 0.10 with a 5-epoch warm-up. Reported parameter counts exclude the frozen external SigLIP, Depth-Anything-V2, and CLIP backbones; Full GaussVLA has 200M total model parameters and 179M trainable parameters. Inference runs at 12.97 ms/step on a single NVIDIA RTX Pro 6000 Blackwell. Following the official LIBERO benchmark settings, we performed 40 rollouts for each task. For real-world SO-101 experiments, we use a 6-DoF arm with a parallel-jaw gripper and a RealSense camera at 640 ×480 and 60 Hz; control runs at 15 Hz with replanning every H = 10 steps, using 50 teleoperated demonstrations per task. More details are provided in Supplementary Material. MD SELIM SAROWAR ET AL.: GAUSSVLA 11                                                                                             
+
+> Method Venue Spatial Object Goal Long Average Parameters DP [6] RSS’23 78.3 92.5 68.3 50.5 72.4 80M MaIL [10] CoRL’24 53.8 81.5 56.3 41.7 58.3 24M QueST [23] NeurIPS’24 89.0 90.0 88.4 87.0 88.6 152M OpenVLA [13] CoRL’24 84.7 88.4 79.2 53.7 76.5 7B SpatialVLA [27] RSS’25 88.2 89.9 78.6 55.5 78.1 4B ThinkAct [8] NeurIPS’25 88.3 91.4 87.1 70.9 84.4 7B CoT-VLA [36] CVPR’25 81.5 91.6 87.6 69.0 82.43 7B Mask2Act [35] BMVC’25 76.1 68.7 75.1 30.6 62.6 7B TraceVLA [40] ICLR’25 84.6 85.2 75.1 54.1 74.8 4B
+> π0[4] RSS’26 90.0 86.0 95.0 73.0 86.0 3.3B SUREFlow[9] IROS’26 94.8 91.0 93.8 90.2 92.5 179.1M
+> GaussVLA BMVC’26 100 95.8 95.3 83.0 93.5 1B
+
+Table 1: Performance comparison on the LIBERO [16] benchmark. GaussVLA achieves the highest overall average success rate while using substantially fewer parameters than large-scale VLA baselines. 
+
+## 4.2 Simulation Results 
+
+LIBERO. Table 1 summarizes the main simulation results on LIBERO [16]. GaussVLA 
+
+achieves the best overall average success rate of 93.5%, outperforming the strongest prior av-erage, QueST, by 4.9 points, and substantially exceeding large-scale VLA baselines such as π0,OpenVLA, SpatialVLA, ThinkAct, and CoT-VLA. The gains are especially clear on geometry-sensitive suites: GaussVLA reaches 100.0% on Spatial, 95.8% on Object, and 95.3% on Goal. 
+
+Figure 3: Representative LIBERO [16] rollouts showing 
+
+GaussVLA executing tasks from initial state to completion. 
+
+This suggests that the proposed 
+
+GST provides a useful 3D struc-ture rather than merely adding model capacity. On the Long suite, GaussVLA obtains 83.0%, ranking second behind QueST while remaining well above most VLA baselines, indicating that the model preserves temporal consis-tency across extended manipula-tion episodes. Importantly, these gains are achieved with only 200M trainable parameters, far smaller than several 3.3B-7B VLA sys-tems, highlighting the parameter efficiency of the proposed spatial reasoning design. Representative LIBERO rollouts in Fig. 3 further illustrate successful execution from initial state to goal state across Spatial, Goal, Object, and Long tasks. 
+
+Meta-World and CALVIN. Table 2 evaluates whether the same design transfers beyond LIBERO [16] to difficulty-stratified manipulation and long-horizon sequential control. On Meta-World, GaussVLA achieves the best performance on the Easy split and remains highly competitive as task difficulty increases, obtaining the second-best average performance among the compared methods. A notable trend is that several baselines show strong performance only in limited regimes: DP and TinyVLA perform well on Easy tasks but degrade sharply on 12 MD SELIM SAROWAR ET AL.: GAUSSVLA                                                         
+
+> Method Venue Meta-World Method Venue Tasks completed in a row (CALVIN) Avg. Easy Mid Hard V.Hard Avg. 12345Length BC-RNN [19] CoRL’21 4.5 3.8 3.2 3.0 3.6 MCIL[18] RSS’21 0.37 0.027 0.002 0.000 0.000 0.40 DP [6] IJRR’25 83.6 31.1 9.0 26.6 37.6 MT-R3M[24] CoRL’22 0.408 0.146 0.043 0.014 0.002 0.61 TinyVLA [31] ICRA’25 77.6 21.5 11.4 15.8 31.6 RT-1[1] RSS’23 0.249 0.069 0.015 0.006 0.000 0.34
+> π0[4] RSS’26 71.8 48.2 41.7 30.0 47.9 GR-1[2] ICLR’24 0.778 0.533 0.332 0.218 0.139 2.0 GaussVLA BMVC’26 92.7 47.9 37.3 41.6 54.9 GaussVLA BMVC’26 0.637 0.367 0.291 0.179 0.000 1.474
+
+Table 2: Comparison with recent imitation learning and VLA baselines on Meta-World [21] and CALVIN [22]. The Meta-World panel reports SR across splits by task difficulty. The CALVIN panel reports long-horizon performance as the fraction of rollouts that complete 1-5 consecutive tasks, along with the average length of completed sequences. 
+
+Hard and Very Hard settings, whereas GaussVLA maintains a more balanced profile across difficulty levels. Although π0 leads on the Mid and Hard splits, GaussVLA closely matches the best result on Very Hard tasks and achieves a strong overall average, suggesting that its geometric tokenization is particularly useful for manipulation tasks that require robust spatial grounding. On CALVIN, GaussVLA consistently ranks second behind GR-1 for completing one to four consecutive tasks and achieves an average sequence length of 1.474. Compared with MT-R3M, GaussVLA improves the 1, 2, 3, and 4-task completion rates by large margins, indicating that the policy not only succeeds at isolated actions but also maintains coherent behavior across multi-step rollouts. The remaining gap to GR-1, especially at five consecutive tasks, indicates that very long-horizon recovery remains challenging; however, GaussVLA’s strong performance through four-task sequences demonstrates that the proposed depth-aware reason-ing improves temporal robustness and reduces early compounding failures. Representative Meta-World simulation frames are provided in the supplementary.                                
+
+> Model LIBERO Goal LIBERO Spatial LIBERO 10 LIBERO Object Avg. Obj Pos Sem Task Env Obj Pos Sem Task Env Obj Pos Sem Task Env Obj Pos Sem Task Env SR ↑
+> OVLA [13] 0.96 0.00 0.98 0.00 0.98 0.97 0.00 0.97 0.00 0.89 0.81 0.00 0.96 0.00 0.85 0.98 0.00 0.98 0.00 0.00 0.52
+> π0.5[3] 0.97 0.38 0.97 0.00 0.46 0.97 0.20 0.97 0.01 0.46 0.92 0.08 0.93 0.01 0.46 0.98 0.17 0.96 0.01 0.73 0.53
+> π0[4] 0.94 0.00 0.93 0.00 0.39 0.95 0.00 0.97 0.00 0.60 0.79 0.00 0.82 0.00 0.27 0.94 0.00 0.90 0.00 0.29 0.44
+> GaussVLA 0.81 0.00 0.70 0.00 0.00 0.93 0.00 0.73 0.00 0.27 0.83 0.00 0.67 0.00 0.00 0.92 0.00 0.63 0.00 0.17 0.33
+
+Table 3: Comparison on LIBERO-PRO [41] benchmark. Normalized success rates (SR) under five perturbation types. Here, OVLA : OpenVLA [13]. 
+
+Figure 4: Real-world SO-101 evaluation comparing GaussVLA with ACT and SpatialVLA across multi-task settings and Pick-Place ID and OOD trials, alongside rollout frames showing successful execution of a physical stacking task. MD SELIM SAROWAR ET AL.: GAUSSVLA 13 
+
+## 4.3 Robustness and Real-World Evaluation 
+
+We first evaluate robustness on LIBERO-PRO [41], which introduces substantially larger distribution shifts than standard LIBERO by varying object appearance, position, semantics, task instructions, and environments. As shown in Table 3, this benchmark remains highly challenging: even VLA models built on large pretrained VLM backbones suffer severe performance drops, indicating that LIBERO-PRO tests robustness beyond in-distribution imitation. Although GaussVLA does not achieve the highest LIBERO-PRO score, it obtains a meaningful average SR of 0.33 with a lightweight 200M-parameter architecture. This suggests that structured Gaussian Spatial Tokenization provides useful transfer under distribution shift without relying on massive model scale. Since simulation robustness alone does not fully capture deployment behavior, we further evaluate GaussVLA on a real-world SO-101 robot platform. Figure 4 shows that GaussVLA 
+
+achieves the highest success rate across all real-world multi-task categories, improving the average success rate to 58.8% compared with 46.3% for SpatialVLA and 35.7% for ACT. The gain is especially clear on Sorting, where GaussVLA outperforms SpatialVLA by 15.7 points, highlighting the benefit of spatial tokenization under real camera noise and GaussVLA 
+
+execution uncertainty. In the Pick-Place setting, GaussVLA reaches 81.0% ID trials and 46.7% on OOD trials, outperforming SpatialVLA by 12.0 and 10.9 points, respectively. These results indicate that GaussVLA provides a stable geometric basis for manipulation as object placement and scene configuration change.                                                 
+
+> Variant 2D Tokens GST DA-CoT LIBERO ↑LIBERO-PRO ↑Params (M) ↓Trainable (M) ↓GFLOPs ↓Latency (ms) ↓
+> Vanilla GaussVLA ✓✗✗78.1 11.2 179 158 3.50 10.85 + GST only ✗✓✗90.5 29.0 190.2 169.2 4.33 12.27 + DA-CoT only ✓✗✓82.1 16.7 188.8 167.8 4.00 11.55
+> Full GaussVLA ✗✓✓93.5 33.3 200 179 4.83 12.97
+
+Table 4: Core contribution and efficiency ablation. Vanilla GaussVLA denotes the same architecture with GST and DA-CoT removed. GST contributes the dominant performance gain, while DA-CoT provides a complementary improvement. Efficiency is measured on a single NVIDIA RTX Pro 6000 Blackwell. Latency is end-to-end, including frozen encoder forwards and the 10-step Euler ODE of the flow-matching action expert. 
+
+## 4.4 Ablation Study                                   
+
+> Ng832 64 128 256 LIBERO (%) ↑86.4 90.7 92.4 93.5 93.6 Latency (ms) ↓11.6 12.0 12.4 12.97 14.1
+> Nr124816 LIBERO (%) ↑91.8 92.8 93.5 93.4 92.9 Latency (ms) ↓12.7 12.8 12.97 13.2 13.7
+
+Table 5: Sensitivity to GST queries Ng and DA-CoT queries Nr. Default Ng=128, Nr=4 is near-optimal on LIBERO and Pareto-optimal on the LIBERO/latency frontier. 
+
+Table 4 analyzes the contribution of the two main components of GaussVLA : the GST 
+
+and DA-CoT . Removing both modules gives the vanilla variant, which relies on conven-tional 2D visual tokens and achieves 78.1% on LIBERO and 11.2% on LIBERO-PRO. Adding GST alone increases performance to 90.5% on LIBERO and 29.0% on LIBERO-PRO, showing that lifting visual observa-tions into geometry-aware Gaussian tokens provides the dominant improvement. This gain is especially important under LIBERO-PRO perturbations, where spatial structure improves robustness beyond standard 2D token representations. 14 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+DA-CoT also provides a complementary benefit. When added without GST , it improves the vanilla model from 78.1% to 82.1% on LIBERO and from 11.2% to 16.7% on LIBERO-PRO. While this gain is smaller than that of GST alone, it shows that structured depth-aware reasoning still helps action prediction even when the visual representation remains 2D. Combining both modules yields the full GaussVLA model, reaching 93.5% on LIBERO and 33.3% on LIBERO-PRO. The combined improvement indicates that GST and DA-CoT 
+
+address different aspects of the problem: GST provides spatially grounded tokens, while 
+
+DA-CoT uses them for intermediate geometric reasoning prior to action generation. The efficiency results show that these gains come with modest computational overhead. Full GaussVLA increases latency from 10.85 ms to 12.97 ms compared with the vanilla model, while remaining suitable for real-time control. The trainable parameter count increases from 158M to 179M, and GFLOPs increase from 3.50 to 4.83, suggesting that the performance gains are not simply due to increased capacity but are driven by the proposed spatial reasoning design. Table 5 further studies the sensitivity to the number of GST queries Ng and DA-CoT 
+
+reasoning queries Nr. Increasing Ng improves LIBERO performance from 86.4% at Ng = 8 to 93.5% at Ng = 128, after which the gain saturates while latency continues to rise. Similarly, increasing Nr improves performance up to Nr = 4, with larger values offering no meaningful benefit and slightly higher latency. Therefore, the default setting Ng = 128 and Nr = 4provides the best trade-off between accuracy and efficiency, lying near the Pareto frontier of LIBERO success rate and inference latency. 
+
+Additional analyses. We provide Supplementary Material with implementation details, statistical ablations, sensitivity and latency analyses, representation probing, architecture studies, and SO-101 setup details. 
+
+# 5 Conclusion 
+
+We presented GaussVLA , a geometry-aware VLA model designed to address the limitations of conventional VLA representations that encode visual observations as flat 2D patch tokens. By introducing a GST , GaussVLA lifts frozen semantic and depth features into compact anisotropic 3D Gaussian tokens, providing the policy with structured spatial cues and task-relevant 3D geometry. We further introduced DA-CoT reasoning to provide structured, intermediate geometric supervision prior to action prediction. Extensive experiments show that GaussVLA improves spatially demanding manipulation while remaining lightweight. On LIBERO, GaussVLA improves the average success rate by 8.7% relative to π0 and by 13.5% relative to CoT-VLA, while having only 200M parameters, corresponding to about 97% fewer parameters than these 7B-scale VLA baselines. Results on Meta-World [21], CALVIN [22], and real-world SO-101 experiments further demonstrate that the proposed spatial representation supports both simulation generalization and physical robot execution. Ablation studies confirm that GST provides the dominant performance gain, while DA-CoT 
+
+contributes complementary improvements in reasoning and robustness. At the same time, robustness under severe distribution shift remains an open challenge. In particular, LIBERO-PRO position and task-level perturbations reveal limitations in viewpoint generalization and language-side robustness. Future work will explore stronger camera calibration, viewpoint augmentation, per-episode geometric adaptation, and broader instruction perturbations to further improve deployment under diverse real-world conditions. Overall, GaussVLA provides an effective step toward geometry-grounded VLA models for reliable robot manipulation. MD SELIM SAROWAR ET AL.: GAUSSVLA 15 
+
+# Acknowledgement 
+
+This work was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government(MSIT) (No. IRIS RS-2023-00219725). 
+
+# References 
+
+[1] Brohan Anthony, Brown Noah, Carbajal Justice, and et al. Rt-1: Robotics transformer for real-world control at scale. In Robotics: Science and Systems (RSS) , Daegu, Republic of Korea, July 2023. [2] Johan Bjorck, Fernando Castañeda, Nikita Cherniadev, Xingye Da, Runyu Ding, Linxi Fan, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer Huang, et al. Gr00t n1: An open foundation model for generalist humanoid robots. arXiv preprint arXiv:2503.14734 ,2025. [3] Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, and et al. π0.5: a vision-language-action model with open-world generalization. In 9th Annual Conference on Robot Learning , 2025. [4] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, et al. π0: A vision-language-action flow model for general robot control. In Robotics: Science and Systems (RSS) ,Sydney, Australia, July 2026. [5] Jiahang Cao, Qiang Zhang, Jingkai Sun, Jiaxu Wang, Hao Cheng, Yulin Li, Jun Ma, Kun Wu, Zhiyuan Xu, Yecheng Shao, Wen Zhao, Gang Han, Yijie Guo, and Renjing Xu. Mamba policy: Towards efficient 3d diffusion policy with hybrid selective state models. In 2025 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) ,pages 11359–11366, 2025. [6] Cheng Chi, Zhenjia Xu, Siyuan Feng, Eric Cousineau, Yilun Du, Benjamin Burchfiel, Russ Tedrake, and Shuran Song. Diffusion policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics Research , 44(10-11):1684–1704, 2025. [7] Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces. In First conference on language modeling , 2024. [8] Chi-Pin Huang, Yueh-Hua Wu, Min-Hung Chen, Yu-Chiang Frank Wang, and Fu-En Yang. Thinkact: Vision-language-action reasoning via reinforced visual latent planning. In Advances in Neural Information Processing Systems (NeurIPS 2025) , 2025. [9] Md Tanvir Islam, Sai Navaneet Peddapalli, Sangmoon Lee, and Sangtae Ahn. Sureflow: State-space uncertainty-aware residual flow matching for robust robot manipulation. 
+
+arXiv preprint arXiv:2607.10504 , 2026. [10] Xiaogang Jia, Qian Wang, Atalay Donat, Bowen Xing, Ge Li, Hongyi Zhou, Onur Celik, Denis Blessing, Rudolf Lioutikov, and Gerhard Neumann. MaIL: Improving imitation learning with selective state space models. In 8th Annual Conference on Robot Learning ,2024. 16 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+[11] Alex Kendall and Yarin Gal. What uncertainties do we need in bayesian deep learning for computer vision? In Proceedings of the 31st International Conference on Neural Information Processing Systems , NIPS’17, page 5580–5590, Red Hook, NY, USA, 2017. Curran Associates Inc. ISBN 9781510860964. [12] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkuehler, and George Drettakis. 3d gaussian splatting for real-time radiance field rendering. ACM Trans. Graph. , 42(4), July 2023. ISSN 0730-0301. [13] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, and et al. Balakrishna. Openvla: An open-source vision-language-action model. In Pulkit Agrawal, Oliver Kroemer, and Wolfram Burgard, editors, Proceedings of The 8th Conference on Robot Learning , volume 270 of Proceedings of Machine Learning Research , pages 2679–2713. PMLR, 06–09 Nov 2025. [14] Jason Lee, Jiafei Duan, Haoquan Fang, Yuquan Deng, Shuo Liu, Boyang Li, Bohan Fang, Jieyu Zhang, Yi Ru Wang, Sangho Lee, et al. Molmoact: Action reasoning models that can reason in space. arXiv preprint arXiv:2508.07917 , 2025. [15] Qixiu Li, Yaobo Liang, Zeyu Wang, Lin Luo, Xi Chen, Mozheng Liao, Fangyun Wei, Yu Deng, Sicheng Xu, Yizhong Zhang, and et al. Cogact: A foundational vision-language-action model for synergizing cognition and action in robotic manipulation. 
+
+arXiv preprint arXiv:2411.19650 , 2024. [16] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning. Advances in Neural Information Processing Systems , 36:44776–44791, 2023. [17] Jiaming Liu, Mengzhen Liu, Zhenyu Wang, Pengju An, Xiaoqi Li, Kaichen Zhou, Senqiao Yang, Renrui Zhang, Yandong Guo, and Shanghang Zhang. Robomamba: Efficient vision-language-action model for robotic reasoning and manipulation. In The Thirty-eighth Annual Conference on Neural Information Processing Systems , 2024. [18] Corey Lynch and Pierre Sermanet. Language conditioned imitation learning over unstructured data. In Robotics: Science and Systems , 2021. [19] Ajay Mandlekar, Danfei Xu, Josiah Wong, Soroush Nasiriany, Chen Wang, Rohun Kulkarni, Li Fei-Fei, Silvio Savarese, Yuke Zhu, and Roberto Martín-Martín. What matters in learning from offline human demonstrations for robot manipulation. In 
+
+Conference on Robot Learning (CoRL) , 2021. [20] Andrés Marafioti, Orr Zohar, Miquel Farré, Merve noyan, Elie Bakouch, Pedro Manuel Cuenca Jiménez, Cyril Zakka, Loubna Ben allal, Anton Lozhkov, Nouamane Tazi, Vaibhav Srivastav, Joshua Lochner, Hugo Larcher, Mathieu Morlon, Lewis Tun-stall, Leandro Von Werra, and Thomas Wolf. SmolVLM: Redefining small and efficient multimodal models. In Second Conference on Language Modeling , 2025. [21] Reginald McLean, Evangelos Chatzaroulas, Luc McCutcheon, Frank Röder, Tianhe Yu, Zhanpeng He, K.R. Zentner, Ryan Julian, J K Terry, Isaac Woungang, Nariman Farsad, and Pablo Samuel Castro. Meta-world+: An improved, standardized, RL benchmark. In 
+
+The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track , 2025. MD SELIM SAROWAR ET AL.: GAUSSVLA 17 
+
+[22] Oier Mees, Lukas Hermann, Erick Rosete-Beas, and Wolfram Burgard. Calvin: A bench-mark for language-conditioned policy learning for long-horizon robot manipulation tasks. IEEE Robotics and Automation Letters , 7(3):7327–7334, 2022. [23] Atharva Mete, Haotian Xue, Albert Wilcox, Yongxin Chen, and Animesh Garg. Quest: Self-supervised skill abstractions for learning continuous control. Advances in Neural Information Processing Systems , 37:4062–4089, 2024. [24] Suraj Nair, Aravind Rajeswaran, Vikash Kumar, Chelsea Finn, and Abhinav Gupta. R3m: A universal visual representation for robot manipulation. In 6th Annual Conference on Robot Learning , 2022. [25] Octo Model Team, Dibya Ghosh, Homer Walke, Karl Pertsch, Kevin Black, Oier Mees, Sudeep Dasari, Joey Hejna, Charles Xu, Jianlan Luo, Tobias Kreiman, You Liang Tan, Lawrence Yunliang Chen, Pannag Sanketi, Quan Vuong, Ted Xiao, Dorsa Sadigh, Chelsea Finn, and Sergey Levine. Octo: An open-source generalist robot policy. In 
+
+Proceedings of Robotics: Science and Systems , Delft, Netherlands, 2024. [26] Karl Pertsch, Kyle Stachowicz, Brian Ichter, Danny Driess, Suraj Nair, Quan Vuong, Oier Mees, Chelsea Finn, and Sergey Levine. Fast: Efficient action tokenization for vision-language-action models. In Robotics: Science and Systems (RSS) , Los Angeles, California, June 2025. [27] Delin Qu, Haoming Song, Qizhi Chen, Yuanqi Yao, Xinyi Ye, Jiayuan Gu, Zhigang Wang, Yan Ding, Bin Zhao, Dong Wang, and Xuelong Li. Spatialvla: Exploring spatial representations for visual-language-action models. In Robotics: Science and Systems (RSS) , Los Angeles, California, June 2025. [28] Wenxuan Song, Jiayi Chen, Pengxiang Ding, Han Zhao, Wei Zhao, Zhide Zhong, Zongyuan Ge, Zhijun Li, Donglin Wang, Lujia Wang, Jun Ma, and Haoang Li. Pd-vla: Accelerating vision-language-action model integrated with action chunking via parallel decoding. In 2025 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pages 13162–13169, 2025. [29] Hambal Tella, Prajyot Patil, and Maria Kyrarini. Robot learning framework using behavioral cloning and gaussian mixture model (bc-gmm) for sorting tasks. In 2025 International Conference on Machine Learning and Applications (ICMLA) , pages 893– 898, 2025. [30] Yalcin Tur, Jalal Naghiyev, Haoquan Fang, Wei-Chuan Tsai, Jiafei Duan, Dieter Fox, and Ranjay Krishna. Recurrent-depth VLA: Implicit test-time compute scaling of vision–language–action models via latent iterative reasoning. In The First Workshop on Efficient Spatial Reasoning , 2026. [31] Junjie Wen, Yichen Zhu, Jinming Li, Minjie Zhu, Kun Wu, Zhiyuan Xu, Ning Liu, Ran Cheng, Chaomin Shen, Yaxin Peng, Feifei Feng, and Jian Tang. Tinyvla: Towards fast, data-efficient vision-language-action models for robotic manipulation. IEEE Robotics and Automation Letters , 2025. [32] Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiaogang Xu, Jiashi Feng, and Hengshuang Zhao. Depth anything v2. In Advances in Neural Information Processing Systems , volume 37, 2024. 18 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+[33] Michał Zawalski, William Chen, Karl Pertsch, Oier Mees, Chelsea Finn, and Sergey Levine. Robotic control via embodied chain-of-thought reasoning. In 8th Conference on Robot Learning (CoRL) , 2024. [34] Xiaohua Zhai, Basil Mustafa, Alexander Kolesnikov, and Lucas Beyer. Sigmoid loss for language image pre-training. In Proceedings of the IEEE/CVF international conference on computer vision , pages 11975–11986, 2023. [35] Junbo Zhang and Kaisheng Ma. Mask2act: Predictive multi-object tracking as video pre-training for robot manipulation. In 36th British Machine Vision Conference 2025, BMVC 2025, Sheffield, UK, November 24-27, 2025 . BMVA, 2025. [36] Qingqing Zhao, Yao Lu, Moo Jin Kim, Zipeng Fu, Zhuoyang Zhang, Yecheng Wu, Zhaoshuo Li, Qianli Ma, Song Han, Chelsea Finn, Ankur Handa, Ming-Yu Liu, Donglai Xiang, Gordon Wetzstein, and Tsung-Yi Lin. Cot-vla: Visual chain-of-thought reasoning for vision-language-action models. In IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , 2025. [37] Tony Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn. Learning fine-grained bimanual manipulation with low-cost hardware. In Robotics: Science and Systems (RSS) , Daegu, Republic of Korea, July 2023. [38] Haoyu Zhen, Xiaowen Qiu, Peihao Chen, Jincheng Yang, Xin Yan, Yilun Du, Yining Hong, and Chuang Gan. 3d-vla: A 3d vision-language-action generative world model. In ICML , 2024. [39] Haoyu Zhen, Xiaowen Qiu, Peihao Chen, Jincheng Yang, Xin Yan, Yilun Du, Yining Hong, and Chuang Gan. 3D-VLA: A 3D vision-language-action generative world model. In Ruslan Salakhutdinov, Zico Kolter, Katherine Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett, and Felix Berkenkamp, editors, Proceedings of the 41st International Conference on Machine Learning , volume 235 of Proceedings of Machine Learning Research , pages 61229–61245. PMLR, 21–27 Jul 2024. [40] Ruijie Zheng, Yongyuan Liang, Shuaiyi Huang, Jianfeng Gao, Hal Daumé III, Andrey Kolobov, Furong Huang, and Jianwei Yang. TraceVLA: Visual trace prompting en-hances spatial-temporal awareness for generalist robotic policies. In The Thirteenth International Conference on Learning Representations , 2025. [41] Xueyang Zhou, Yangming Xu, Guiyao Tie, Yongchao Chen, Guowen Zhang, Duanfeng Chu, Pan Zhou, and Lichao Sun. Libero-pro: Towards robust and fair evaluation of vision-language-action models beyond memorization. arXiv preprint arXiv:2510.03827 ,2025. [42] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin Wu, and et al. Wohlhart. Rt-2: Vision-language-action models transfer web knowledge to robotic control. In Jie Tan, Marc Toussaint, and Kourosh Darvish, editors, Proceedings of The 7th Conference on Robot Learning , volume 229 of Proceedings of Machine Learning Research , pages 2165–2183. PMLR, 06–09 Nov 2023. [43] Brianna Zitkovich, Tianhe Yu, Sichun Xu, Peng Xu, Ted Xiao, Fei Xia, Jialin Wu, Paul Wohlhart, and et al. Rt-2: Vision-language-action models transfer web knowledge to robotic control. In CoRL , pages 2165–2183, 2023. MD SELIM SAROWAR ET AL.: GAUSSVLA 19 
+
+# A Additional Implementation Details 
+
+## A.1 Architecture Hyperparameter 
+
+Table 6 lists the full configuration. All defaults are used unless otherwise stated.                                               
+
+> GST DA-CoT
+> NgGaussian queries 128 Nrreasoning queries 4Fourier bands L(dγ=6L)10 Reasoning dim dc512 Workspace radius ρ0.8 m
+> Backbone Action expert
+> Mamba blocks Lb5Action horizon H10 Backbone dim db512 Action dim da7Intermediate dim 1024 Flow-matching ODE steps 10
+> Loss weights (target) Optimization
+> ¯λGST 0.05 Optimizer AdamW ¯λCoT 0.10 Learning rate 2.5×10 −5
+> Warm-up epochs 5Weight decay 1×10 −4
+> Flow time p(τ)Beta (1.5,1.0)Schedule cosine Batch size 256 Precision BF16
+
+Table 6: Architecture and training hyperparameters used for all reported GaussVLA runs. 
+
+## A.2 Real-World Setup 
+
+A.2.1 Hardware 
+
+A single SO-101 6-DOF arm with a parallel-jaw gripper, Realsense RGB-D camera (640 ×480 @ 60 Hz). Control rate 15 Hz with action-chunk replanning every H=10 steps. Inference was run on an external workstation equipped with one GeForce 1080 Ti (note: this demonstrates real-world deployment viability on consumer-grade hardware and differs from the RTX Pro 6000 Blackwell used for the latency benchmarking in the main paper Table 4) 
+
+A.2.2 Tasks 
+
+Pick-Place : pick a 3-cm cube from a 30 ×30 cm workspace and place it in a box. Stacking :stack cubes and a small wheel in object-specified order from language prompts. Sorting :separate the cube and small wheel into left/right bins. Pick-Place ID/OOD swaps the camera between two known positions (ID: training pose; OOD: shifted ±5 cm + ±10° rotation, never seen at training). 
+
+A.2.3 Training 
+
+50 demonstrations per task collected via teleoperation. We keep fully frozen SigLIP and Depth-Anything-V2 encoders. 
+
+## A.3 Per-Component Latency Breakdown 
+
+To better characterize the inference cost of GaussVLA, we report the latency of each major component in Table 7. Measurements are obtained with a batch size of 1 and BF16 precision on a single NVIDIA RTX Pro 6000 Blackwell. 20 MD SELIM SAROWAR ET AL.: GAUSSVLA                    
+
+> Component Trainable Latency (ms) Frozen SigLIP-SO400M/14 forward ✗5.20 Frozen Depth-Anything-V2 (ViT-L) ✗3.30 GST module (lift + pool, Ng=128) ✓1.42 Mamba backbone ✓1.50 DA-CoT conditioner ✓0.70 Action decoder ✓0.25 Flow-matching ODE (10 Euler steps) ✓0.60
+> Total –12.97
+
+Table 7: End-to-end inference latency on a single NVIDIA RTX Pro 6000 Blackwell with batch size 1 and BF16 precision. All component latencies sum to 12.97 ms per step. 
+
+The frozen visual and depth encoders account for most of the measured latency, contribut-ing 8.50 ms in total. In contrast, the trainable GaussVLA modules are lightweight: GST, Mamba, DA-CoT, action decoding, and the flow-matching ODE together add 4.47 ms. Since each observation predicts an action chunk of horizon H = 10, the encoder cost can be amor-tized across multiple control steps during deployment, yielding an effective per-control-step latency of approximately 5.32 ms, or about 188 Hz. 
+
+## A.4 Probing the Learned Representations 
+
+To examine whether the proposed modules learn explicit geometric information, we train linear probes on frozen representations from three stages of the model: flat 2D patch features, pooled GST features, and DA-CoT reasoning tokens Rτ . Each probe predicts ground-truth simulator quantities from LIBERO, and we report the regression R2 score.                   
+
+> Probe target Flat 2D patches Pooled GST DA-CoT Rτ
+> Object center (3D position) 0.34 0.66 0.78
+> Gripper–object distance 0.41 0.71 0.82
+> Object orientation (principal axis) 0.28 0.49 0.61
+> Surface normal (linear from σ)—0.67 —
+
+Table 8: Linear-probe regression R2 on LIBERO simulator state. DA-CoT tokens Rτ encode richer 3D geometric structure than flat 2D patch tokens or pooled GST representations. 
+
+The probes show a consistent improvement from flat 2D patch features to pooled GST features, indicating that Gaussian Spatial Tokenization preserves substantially more task-relevant metric information. In particular, GST improves the linear predictability of object center, gripper–object distance, and object orientation, suggesting that the Gaussian represen-tation captures spatial quantities that are only weakly available in standard 2D patch tokens. DA-CoT tokens further improve all three probe targets, showing that the reasoning module does not merely aggregate visual features, but concentrates the 3D information most relevant for action prediction. The surface-normal row reports a separate linear probe from the GST log-covariance σ to ground-truth surface normals on a synthetic back-projection, where the random baseline is R2 = 0.05. The non-trivial score of R2 = 0.67 indicates that the learned Gaussian covariance encodes local orientation information despite receiving no direct normal supervision. Together, these results provide mechanistic evidence that GaussVLA’s perfor-mance gains arise from geometry-aware representations rather than merely from additional model capacity. MD SELIM SAROWAR ET AL.: GAUSSVLA 21 
+
+## A.5 Action Decoder Ablation 
+
+We ablate the sequence backbone and action-decoding design to separate the effect of efficient temporal modeling from the effect of querying action tokens against contextual states. All rows in Table 9 remove GST and DA-CoT so that the comparison focuses only on the policy backbone and action decoder.                        
+
+> Backbone Action Decoder Query Type Overall Avg. ↑Params (M) ↓GFLOPs ↓
+> Transformer Standard head –67.49 256 9.82 Mamba Standard head –73.36 110 3.28
+> Mamba Action decoder action-token queries 78.1 179 3.50
+
+Table 9: Overall Avg. is the LIBERO average. The +4.74 pt jump from row 2 to row 3 jointly reflects the action-token query decoder design and the +69 M-Parameters/ +0.22 GFLOPs capacity uplift; we hold the Mamba backbone fixed across the comparison to isolate decoder-family effects from backbone-family effects. Here, row 3 ( Mamba + Action decoder ) corresponds to the Vanilla GaussVLA configuration of Table 4 of the main paper; Adding GST + DA-CoT yields Full GaussVLA at 4.83 GFLOPs (Table 4, main paper). 
+
+Replacing the Transformer backbone with Mamba improves the LIBERO average from 67.49 to 73.36 while reducing computation from 9.82 to 3.28 GFLOPs, showing that the state-space backbone provides a better accuracy–efficiency trade-off for this policy setting. Adding the action-token query decoder further increases performance to 78.1, a gain of 4.74 points over the Mamba standard-head variant, with only a modest increase from 3.28 to 3.50 GFLOPs. This suggests that explicitly decoding the action-token states against the non-action context is more effective than applying a standard prediction head directly to the backbone outputs. The final row corresponds to the Vanilla GaussVLA configuration used in the main-paper ablation, where GST and DA-CoT are removed. Thus, this table isolates the contribution of the policy backbone and action decoder before adding the geometry-aware modules. Full GaussVLA then builds on this decoder design by adding GST and DA-CoT, yielding the complete model reported in the main paper. 
+
+## A.6 GST Ablation 
+
+We ablate the design of the Gaussian Spatial Tokenizer to determine whether the gains come from simply adding depth or from the full structured Gaussian representation. DA-CoT is disabled in all rows so that the comparison isolates the visual representation used by the policy.                             
+
+> Visual Representation Depth 3D Lifting Gaussian Param. Spatial Pooling LIBERO ↑Spatial Tasks ↑PRO Avg. ↑
+> Flat 2D patch tokens ✗✗✗✗78.1 71.2 11.2 2D patch tokens + depth concat ✓✗✗✗73.3 78.0 14.9
+> GST tokens ✓✓✓✓90.5 100 29.0
+
+Table 10: GST design ablation (without DA-CoT). Gains arise from the structured Gaussian represen-tation with confidence-aware pooling, not depth alone: scalar-depth concatenation regresses LIBERO (78.1 →73.3). 
+
+The results show that depth alone does not explain the improvement. Concatenating scalar depth to 2D patch tokens slightly improves spatial-task performance and LIBERO-PRO robustness, but reduces the overall LIBERO average from 78.1 to 73.3. This indicates that 22 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+naively appending depth can introduce noisy or poorly calibrated geometric cues that the policy cannot reliably exploit. In contrast, the full GST representation improves the LIBERO average to 90.5, reaches 100.0 on spatial tasks, and increases LIBERO-PRO average performance to 29.0. These gains come from jointly lifting patches into 3D, parameterizing each patch as a Gaussian primitive, and using confidence-aware spatial pooling to select geometrically reliable regions. The ablation therefore supports the central design of GaussVLA: robust spatial reasoning requires structured geometry-aware tokens rather than raw depth features attached to 2D patches. 
+
+## A.7 DA-CoT Ablation 
+
+We further ablate the components of the Depth-Aware Chain-of-Thought (DA-CoT) to under-stand which parts of the reasoning module contribute to manipulation performance. GST is disabled in this study, so the comparison isolates DA-CoT-style reasoning on top of the policy backbone.                                  
+
+> Reasoning Variant Depth-Aware Structured Tokens CoT Supervision LIBERO ↑Long-Horizon ↑Avg. ↑
+> No reasoning module ✗✗✗78.1 75.2 76.7 CoT without depth cues ✗✓✓80.5 87.3 83.9 DA-CoT without supervision ✓✓✗81.5 90.0 85.8
+> DA-CoT (full) ✓✓✓82.1 91.6 87.0
+
+Table 11: Depth-aware grounding is the dominant reasoning ingredient (+3.1 pt on the 2-suite avg, comparing "CoT without depth cues" 83.9 → "DA-CoT (full)" 87.0). Adding CoT supervision on top of depth-aware structured tokens contributes a complementary boost on both LIBERO (+0.6 pt, 81.5 → 82.1) and Long-Horizon (+1.6 pt, 90.0 → 91.6), for a +1.1 pt 2-suite-avg lift over the no-supervision variant. The results show that structured reasoning alone already improves over the no-reasoning baseline, especially on long-horizon tasks. Adding CoT-style structured tokens without depth raises the average from 76.7 to 83.9, suggesting that intermediate reasoning tokens help the policy organize action-relevant context. However, adding depth-aware grounding yields a larger improvement: DA-CoT without supervision reaches 85.8 average performance and 90.0 on long-horizon tasks, indicating that spatially grounded reasoning is particularly important for extended manipulation sequences. The full DA-CoT model further improves performance to 87.0 average, with gains on both LIBERO and Long-Horizon settings. Compared with the no-supervision variant, explicit CoT supervision adds 0.6 points on LIBERO and 1.6 points on Long-Horizon, showing that the auxiliary reasoning objective provides a complementary benefit beyond depth-aware token conditioning. Overall, this ablation supports the design of DA-CoT as a lightweight reasoning module that aligns spatial cues with action prediction, with depth awareness providing the dominant contribution and supervision refining the resulting reasoning tokens. 
+
+## A.8 Additional Ablation 
+
+Removing the confidence bias in spatial pooling. We train a variant where the additive log (α(m) 
+
+> t
+
+) term in Eq. (10) is set to zero, ˆZ(m) 
+
+> t
+
+= softmax 
+
+ (LN 1(Q)WQ)( ˜G(m)  
+
+> tWK)⊤
+
+√dp
+
++ 1Ng log (α(m) 
+
+> t
+
+)⊤
+
+
+
+( ˜G(m) 
+
+> t
+
+WV ), (26) MD SELIM SAROWAR ET AL.: GAUSSVLA 23 
+
+leaving the rest of GST unchanged. The LIBERO Avg drops from 93 .5 to 91 .6 ( −1.9 pt) and the LIBERO-PRO Avg drops from 33 .3 to 29 .7 ( −3.6 pt). This confirms that opacity-weighted pooling is responsible for a measurable portion of the robustness gain on LIBERO-PRO beyond 3D lifting alone. 
+
+## A.9 Confidence-Opacity Correlation with Depth-Uncertainty Proxies 
+
+To verify that the learned opacity α behaves as a depth-aware reliability signal rather than an ar-bitrary attention prior, we correlate the per-patch α predicted by the trained GaussVLA against three depth-uncertainty proxies derived independently from the frozen Depth-Anything-V2 output, computed across 5,000 LIBERO-Spatial frames: • u∇: local depth-gradient magnitude ∥∇ ˜d∥ averaged over a 3 ×3 patch neighbourhood (proxy for occlusion-boundary uncertainty). • uσd : depth-estimator per-patch variance, estimated by 8-pass MC-dropout through Depth-Anything-V2. • upc : photometric inconsistency, computed as the residual between two simulated viewpoints reprojected onto the canonical view.                  
+
+> Depth-uncertainty proxy Pearson ρ(α,−u)↑p-value
+> u∇(depth-gradient magnitude) +0.61 <10 −6
+> uσd(MC-dropout variance) +0.54 <10 −6
+> upc (photometric inconsist.) +0.47 <10 −6
+
+Table 12: Pearson correlation between the learned opacity α and three depth-uncertainty proxies (sign convention: higher α ⇔ lower uncertainty). Although α is not directly conditioned on any of these proxies, the opacity-weighted GST loss in Eq. 21 in the main paper induces a strong correlation consistent with the "depth-aware confidence" interpretation. 
+
+## A.10 Action-Chunk Horizon Sweep on CALVIN 
+
+We evaluate the effect of the action-chunk horizon H on CALVIN ABCD →D using the 10% training subset. The horizon controls how many future actions are predicted per policy query, creating a trade-off between short-horizon reactivity and long-horizon temporal consistency.                          
+
+> H12345Avg. Len.
+> 10 (default) 0.637 0.367 0.291 0.179 0.000 1.474
+> 20 0.671 0.402 0.318 0.198 0.063 1.65 50 0.598 0.331 0.237 0.122 0.030 1.32
+
+Table 13: CALVIN ABCD →D (10%) performance under varying action-chunk horizon H. The default setting H=10 provides a strong trade-off between performance and efficiency. 
+
+Increasing the horizon from H = 10 to H = 20 improves the average completed sequence length from 1.474 to 1.65 and raises the completion rate across all 1–5 task thresholds, showing that longer chunks can help preserve temporal consistency in CALVIN. However, longer chunks also reduce the frequency at which the policy can react to new observations, which can be undesirable for closed-loop control and real-world deployment. At H = 50, performance drops across all metrics, indicating that very long action chunks become harder to predict reliably and are more vulnerable to compounding errors. We 24 MD SELIM SAROWAR ET AL.: GAUSSVLA 
+
+therefore use H = 10 as the default setting in the main experiments because it provides a strong accuracy–efficiency trade-off while maintaining frequent replanning. 
+
+Figure 5: Instruction(very hard): "Pick and place a puck onto a shelf." Sequential progression of successful task execution in the Meta-world environment. 
+
+## A.11 Meta-World Successful Frames 
+
+Figure 5 shows a representative successful rollout on a Very Hard Meta-World task. The sequence illustrates how GaussVLA approaches the object, estimates the target shelf location, grasps the puck, and completes the placement while maintaining stable control throughout the trajectory. This example complements the quantitative Meta-World results by showing that GaussVLA can solve a spatially demanding manipulation task requiring object localization, grasping, and precise placement under the Very Hard setting.
