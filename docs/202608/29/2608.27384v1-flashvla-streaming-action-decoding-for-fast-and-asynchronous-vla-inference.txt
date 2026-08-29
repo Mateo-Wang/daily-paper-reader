@@ -1,0 +1,382 @@
+Title: FlashVLA: Streaming Action Decoding for Fast and Asynchronous VLA Inference
+
+URL Source: https://arxiv.org/pdf/2608.27384v1
+
+Published Time: Fri, 28 Aug 2026 01:29:59 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# FlashVLA: Streaming Action Decoding for Fast and Asynchronous VLA Inference 
+
+Zekai Li 1 Jiaming Tang 2 Zhijian Liu 1
+
+> 1
+
+UC San Diego 2MIT 
+
+https://github.com/z-lab/flashvla.git 
+
+Abstract: 
+
+Vision-Language-Action (VLA) models are increasingly promising for robotic manipulation, yet their real-world deployment remains bottlenecked by high infer-ence latency and unstable asynchronous execution. This challenge is particularly pronounced in flow-matching-based VLA models, where action decoding requires multiple iterative steps conditioned on the VLM context. While efficient inference methods improve control frequency and asynchronous methods reduce execution idle time, existing approaches often fail to jointly achieve low-latency inference and accurate, temporally consistent asynchronous execution. We introduce FlashVLA ,a streaming action decoding framework that addresses both challenges in a uni-fied formulation. FlashVLA maintains a streaming action buffer with multiple chunks at different noise levels and decodes them using chunk-wise causal atten-tion. This design allows FlashVLA to produce one executable action chunk per inference step. Moreover, its chunk-wise autoregressive formulation implicitly preserves action continuity, enabling smooth asynchronous execution without extra future-state conditioning. Across extensive simulated and real-world experiments, FlashVLA substantially improves inference speed while maintaining strong task performance. It can achieve ≥30 Hz control frequency on a single GPU with smooth asynchronous inference in real-world deployment. 
+
+Keywords: Vision-Language-Action Model, Streaming Action Decoding, Asyn-chronous Inference 
+
+# 1 Introduction 
+
+Vision-Language-Action (VLA) models [1, 2, 3, 4] map visual observations and language instructions directly to robot actions, and have become a leading paradigm for end-to-end manipulation. Recent models such as π0.5 [5] couple pretrained vision-language backbones with a flow-matching action expert, achieving strong generalization across diverse tasks. Yet their inference latency obstructs real-time control: profiling π0.5 shows that action decoding alone consumes 75% of per-step inference time (Fig. 1b), driven by the ten sequential denoising steps required per chunk. The profile is measured on an RTX 4090 with two views, with no system-level optimization applied to either model. This bottleneck creates a dilemma for VLA deployment. Synchronous inference keeps observations and actions temporally aligned, but stalls the robot at every chunk boundary while the next chunk is decoded. Asynchronous inference [6, 7, 8] overlaps prediction with execution, but predicts from a stale observation; the actions arrive at a robot state the model never saw, and the longer the lookahead, the larger the temporal mismatch. Prior work addresses one side at a time. Efficient-inference methods reduce per-step latency through lightweight architectures [9], compression [10], or token pruning [11], while asynchronous methods condition on future states or planned actions [6, 7] to suppress mismatch. Neither closes the gap: a faster synchronous schedule still stalls at chunk transitions, and a smoother asynchronous schedule still requires the lookahead that re-amplifies mismatch. arXiv:2608.27384v1 [cs.RO] 27 Aug 2026 (a) Conceptual illustration of prior VLA inference: it either stalls the robot at every chunk boundary (synchronous) or predicts from a stale observation whose mismatch grows with the lookahead (asynchronous with future-state conditioning). FlashVLA removes both costs at once by decoding chunks jointly under chunk-wise causal attention.   
+
+> (b) Action decoding con-sumes 75% of inference time. FlashVLA targets this bottleneck, reaching 3.5 ×overall speedup.
+
+Figure 1: (a) Two prevailing VLA inference patterns and FlashVLA’s joint solution. (b) Per-policy-invocation profile of π0.5 and FlashVLA. Action decoding is the dominant bottleneck. 
+
+Our central observation is that these two failure modes share a single cause. Flow-matching VLAs decode each action chunk in isolation : from pure noise, conditioned only on the current observation, and decoupled from any chunks already in flight. Isolation concentrates all ten denoising steps inside a single chunk decode (the latency cost) and leaves each new chunk uninformed about the trajectory it is about to join (the mismatch cost). Both costs collapse under a single structural change: decode chunks jointly rather than in isolation. We introduce FlashVLA , a streaming action decoding framework that realizes this idea. Inspired by streaming chunk-wise diffusion for long video [12, 13, 14], FlashVLA maintains a streaming buffer of action chunks at staggered noise levels and advances them jointly under chunk-wise causal attention. Two benefits follow from this single mechanism. First, each forward pass advances every chunk in the buffer by one denoising step, so after warm-up one executable chunk is emitted per step; each chunk passes through all N denoising steps, amortized across time rather than concentrated in a single decode. Per-step action-decoding latency drops by up to 20 ×.1 Second, higher-noise future chunks attend to lower-noise near-execution chunks under the causal mask, so the model decoding for a future robot state is implicitly conditioned on the trajectory that state will arrive on; asynchronous continuity is recovered without any explicit future-state predictor or action-conditioning module. Across LIBERO, RoboTwin 2.0, and real-world Franka tasks, FlashVLA matches or improves π0.5
+
+task success under one-step asynchronous delay, achieves up to a 2.43 × end-to-end per-action speedup, and sustains ≥30 Hz smooth control on a single GPU. 
+
+# 2 Related Work 
+
+Efficient VLA inference. Most efforts to accelerate VLA inference make each forward pass cheaper but leave the iterative decoding loop intact: lightweight backbones [15, 9, 16], weight and activation compression [17, 11, 10], visual-token pruning [18, 19, 20], and faster action heads [21, 8, 22]. A separate direction shortens the loop itself via few-step distillation of diffusion or flow-matching policies [23, 24], at the cost of retraining and a tradeoff between sample quality and step count. FlashVLA changes what the loop produces per pass: it is orthogonal to the first family and offers an alternative to the second that avoids step-count distillation.  
+
+> 1The ten-to-one pass reduction yields a 9.3 ×reduction in GPU work; eliminating inter-pass kernel-launch serialization raises the measured wall-clock speedup to 19.9 ×.
+
+2Asynchronous VLA execution. Asynchronous inference [25, 7, 6, 8, 26] hides decoding latency by overlapping prediction with execution, but predicts from a stale observation while the robot is at a state the model never saw. Prior work patches this mismatch after decoding: by conditioning the next chunk on a predicted future state [6], on previously planned actions [25], or via training-time augmentation [7]. The patch cost grows with lookahead and requires auxiliary supervision or architectural surgery. Underlying all of these is an unstated assumption: action chunks are decoded in 
+
+isolation , leaving each one uninformed about the trajectory it is about to join. FlashVLA removes the assumption rather than treating its symptom. With chunk-wise causal attention, future chunks attend to the near-execution chunks already in flight, making asynchronous continuity a structural property of the decoder rather than an external correction. 
+
+Streaming chunk-wise diffusion. Long-video generation has converged on streaming chunk-wise diffusion: a buffer of clips at staggered noise levels is denoised jointly with causal masking from clean to noisy, emitting one clean clip per pass [12, 13, 14]. FlashVLA brings this paradigm to robot action decoding, where it is in fact a closer fit than video. Lower-noise chunks in the buffer are not just about to be shown but about to be executed , so attending to them implicitly conditions higher-noise future chunks on the trajectory the robot is actually following, and recovers asynchronous continuity without explicit future-state prediction. The adaptation to action decoding lies in matching buffer depth and noise schedule to the control-frequency target, and in applying causal masking at chunk rather than token granularity. To our knowledge FlashVLA is the first VLA to adopt this formulation. Across all three directions above, the same structural choice (decoding chunks jointly rather than in isolation) collapses the latency cost and the asynchronous-mismatch cost into a single fix. 
+
+# 3 Method 
+
+We introduce FlashVLA, a streaming action decoding framework that realizes the central idea from §1: decode action chunks jointly rather than in isolation. FlashVLA is a drop-in modification to any flow-matching-based VLA model, requiring only light architectural changes and a fine-tuning pass. We describe the chunk-wise autoregressive formulation (§3.1), the streaming inference algorithm (§3.2), and the multi-buffer joint fine-tuning procedure used to adapt pretrained VLA models (§3.3). Figure 2 gives an overview of both the training and inference pipelines. 
+
+3.1 Chunk-wise Autoregressive Formulation 
+
+A flow-matching VLA produces a continuous action chunk at = {at, a t+1 , . . . , a t+H−1} from observation ot by iteratively denoising a Gaussian sample x1 ∼ N (0 , I ). The model learns a velocity field vθ that transports noisy actions toward clean ones: 
+
+xτ = (1 − τ )at + τ z, z ∼ N (0 , I ), τ ∈ [0 , 1] , dxτ
+
+dτ = z − at = vθ (xτ , τ | ot). (1) At inference, each chunk decode requires multiple sequential forward passes through the action expert (ten in π0.5), all conditioned on the same observation ot, and no chunk attends to any other. These two properties are the isolation identified in §1: concentrating all denoising inside a single chunk decode incurs the latency cost, and the lack of inter-chunk attention incurs the mismatch cost. Rather than dedicating all denoising passes to a single chunk, FlashVLA maintains a buffer of N
+
+chunks held at staggered noise levels: 
+
+Bt = [ x(1)  
+
+> τ1
+
+, x(2)  
+
+> τ2
+
+, . . . , x(N ) 
+
+> τN
+
+], τ1 < τ 2 < · · · < τ N ,ui ∼ Beta(1 .5, 1.0) , τi = 0 .001 + 0 .999 i − 1 + ui
+
+N . (2) The first slot holds an almost-clean chunk about to execute; the last slot holds a pure-noise chunk that will execute several steps later. A single forward pass advances every chunk by one step, and after warm-up one executable chunk pops off the front per step. The choice to stagger the noise levels is what makes streaming possible. A monotone staircase τ1 < · · · < τ N aligns buffer position 3Figure 2: Overview of FlashVLA. Left : Multi-buffer joint fine-tuning packs all cold-start configu-rations for one observation into a single sample. Attention masks isolate buffers, and chunk-wise causal attention lets noisier chunks attend only to cleaner ones. Right : Streaming inference runs the buffer as a queue: cold-start fills it with N −1 warm-up passes, while steady streaming advances all chunks, executes the cleanest one, and appends fresh noise. Gray squares denote padding. with denoising progress and with execution order simultaneously, so the chunk most advanced in denoising is also the chunk first to execute. Without staggering, the buffer collapses into a batch: chunks would emerge in bulk rather than one per step, reintroducing the chunk-boundary stalls that motivated streaming. Inside the buffer, we apply a chunk-wise causal mask: later (noisier) chunks attend to earlier (cleaner) chunks, but not the reverse. Bidirectional attention would let chunks about to execute condition on the noisier chunks behind them in execution order, violating the natural temporal direction of information flow. No inter-chunk attention would eliminate the implicit conditioning that gives the model its view of the ongoing trajectory. Chunk-wise causality lets information flow forward in time but not backward in noise. The same buffer-and-mask design produces three runtime properties. 
+
+Amortized denoising. Each chunk traverses all N noise levels of the buffer before execution, but the 
+
+N passes are spread across N different forward steps, each of which also advances every other chunk in the buffer. Per-step action-decoding latency drops by up to 20 × in our profile (Fig. 1b). 
+
+Implicit asynchronous conditioning. Because future chunks attend to near-execution chunks, the model decoding for a future robot state is already conditioned on the trajectory that state will arrive on, without an explicit future-state predictor or auxiliary action-conditioning module. 
+
+Chunk-level memory. Each higher-timestep chunk attends to all earlier chunks in the buffer, not just its immediate predecessor. The buffer thus encodes a short, structured history of recently refined chunks. We hypothesize that this implicit memory accounts for FlashVLA’s particularly strong gains on long-horizon tasks, and test the hypothesis in §4.4. FlashVLA’s streaming design only requires slight modifications to the model’s action expert architec-ture. We apply FiLM [27] to enhance the multi-level timestep conditioning in the action expert. For more details, please refer to Appendix A.4. 
+
+3.2 Streaming Inference 
+
+FlashVLA runs in two phases. The first fills the buffer before any prediction is executed; the second steady-state phase produces one executable chunk per forward pass. 
+
+Cold start. At the start of an episode, the buffer is empty and FlashVLA cannot yet emit a clean chunk. We initialize B with N −1 padding chunks and one Gaussian sample, then run N −1 inference steps to populate the remaining slots. During these warm-up steps the robot does not execute predicted actions; instead it executes a safe default (the initial robot state for joint-space control, or the normalized zero action for end-effector control) so that the arm remains stationary while the buffer fills. The cold-start overhead is paid once per episode and is amortized over the full rollout. 
+
+Steady streaming. Once the buffer is populated, FlashVLA runs as a queue (Alg. 1). Each inference step (i) advances every chunk by one denoising step, (ii) pops the cleanest chunk for execution, (iii) shifts the remaining chunks forward, and (iv) appends a fresh pure-noise chunk at the tail. Each chunk traverses all N noise levels of the buffer before it is executed. 4Method Success Rate (%) Efficiency                                                     
+
+> Spatial Object Goal Long Average Steps Time (s) Time / Step (ms)
+> π0.598.8 98.2 98.0 92.4 96.9 156.0 8.4 53.8 + VLASH (d=1) 98.8 99.2 96.7 94.4 97.2 ( ↑0.3) 153.9 7.2 46.8 (1.15 ×)+ VLASH (d=4) 92.5 96.9 93.3 89.6 93.1 ( ↓3.8) 176.7 5.8 32.8 (1.64 ×)+ StreamingVLA (d=1) 96.6 96.6 95.4 91.0 94.9 ( ↓2.0) n/a n/a 31.6 (1.70 ×)+ FlashVLA (d=1) 98.8 99.6 97.6 95.4 97.8 ( ↑0.9) 158.0 3.5 22.1 (2.43 ×)
+
+Table 1: Asynchronous performance on LIBERO at one-step delay ( d=1 ) unless noted. FlashVLA reaches the largest speedup over π0.5 (2.43 ×), while improving average success rate from 96.9% to 97.8%. Other asynchronous baselines either provide smaller speedups or lose success rate. Steps :actions executed per episode (averaged over 2,000 episodes); Time (s) : per-episode completion time. 
+
+System-level optimization. Because the per-step computation is structurally identical across steady-state iterations, the inference path is highly amenable to compilation. We compile each stage into a CUDA Graph, which is both faster to dispatch and non-blocking under asynchronous execution. We additionally pack linear layers to reduce kernel launch overhead and apply PyTorch’s max-autotune compilation to remove residual kernel bubbles. These optimizations are orthogonal to the algorithmic design but are necessary to realize the full latency benefit in practice. 
+
+3.3 Multi-Buffer Joint Fine-tuning 
+
+Pretrained VLAs are trained to denoise each chunk from scratch in isolation and have never seen a partially populated buffer or a chunk-wise causal attention pattern. We adapt them to the streaming paradigm during the standard downstream fine-tuning stage. 
+
+The challenge. For a single observation ot, the cold-start procedure exposes the model to N distinct buffer configurations. Configuration j has j real action chunks at the noisier slots and N −j padding chunks at the cleaner slots; the final configuration j=N is the steady-streaming state. The model must handle every such configuration. Treating each as a separate training sample multiplies the dataset by N , slows fine-tuning, and gives the optimizer no signal that they share a single observation. 
+
+The packed solution. We instead pack all N buffer configurations into a single training sample (Fig. 2). Within the packed sample, all configurations attend to the same encoded observation ot, but an attention mask isolates each buffer from the others. The model sees every possible buffer state at training time, while the expensive observation encoding is computed once. This packing exploits a structural fact about the streaming algorithm: the observation context is shared across buffer states; only the action portion changes. The training objective is the standard flow-matching loss summed over all buffer configurations: 
+
+Ljoint =
+
+> N
+
+X
+
+> j=1
+> j
+
+X
+
+> i=1
+
+Eτi,zi
+
+h
+
+vθ
+
+ x(i) 
+
+> τi
+
+, τ i | ot, B(j)
+
+> t
+
+ − (zi − a(i)) 22
+
+i
+
+. (3) This single objective covers both cold-start and steady-streaming behavior: the model learns to denoise chunks at any noise level conditioned on any valid buffer prefix. 
+
+# 4 Simulated Experiments 
+
+We evaluate FlashVLA against three claims it inherits from §1 and §3: (i) at fixed task quality, decoding chunks jointly is substantially faster than decoding them in isolation; (ii) under asynchronous execution, chunk-wise causal attention preserves trajectory continuity without an explicit future-state module; and (iii) the chunk-level memory created by the streaming buffer translates into measurable long-horizon gains. We test (i) and (ii) jointly on the primary asynchronous-deployment benchmark 51 2 3 492 94 96 98      
+
+> Avg. SR (\%)  ↑
+> 96.9 97.2 97.1 94.6 93.1 97.8 98.3 97.9 97.5
+> π0.5 (sync) VLASH FlashVLA
+
+(a) LIBERO success rate. 1 2 3 484 86 88 90 92      
+
+> Avg. SR (\%)  ↑
+> 86.0 86.9 86.4 85.9 85.1 90.6 90.6 90.4 89.8
+
+(b) RoboTwin 2.0 success rate. 1 2 3 420 30 40 50     
+
+> Time / Step (ms)  ↓ 53.8 46.8 40.6 34.1 32.8 22.1 20.6 20.7 20.6
+
+(c) LIBERO time per step. 1 2 3 442 44 46 48        
+
+> Time / Step (ms)  ↓ 47.4 47.1 46.9 46.5 46.2 43.8 43.5 43.3 42.9
+
+(d) RoboTwin 2.0 time per step. 
+
+Figure 3: Success rate and time per step across asynchronous delay d on LIBERO and RoboTwin 2.0. Both VLASH and FlashVLA are built on the same π0.5 baseline. FlashVLA remains above the synchronous success rate across d=1 –4 while achieving lower time per step. Success rate is averaged over four LIBERO suites and the clean and randomized evaluations of 50 RoboTwin 2.0 tasks; dashed lines denote synchronous π0.5.(§4.2), isolate (i) on a decoding-latency benchmark (§4.3), and test (iii) under synchronous execution to remove the asynchronous confound (§4.4). 
+
+4.1 Setup Backbones and benchmarks. We instantiate FlashVLA primarily on π0.5 [5], the current state-of-the-art flow-matching VLA, and evaluate its cross-architecture generalization on SmolVLA and LingBot-VLA in §4.5. For simulation we use LIBERO [28] (single-arm; four suites: Spatial, Object, Goal, Long) and RoboTwin 2.0 [29] (bimanual; 50 tasks evaluated under both clean and randomized settings). Following LingBot-VLA [4], we group the RoboTwin 2.0 tasks into short-, medium-, and long-horizon subsets for horizon-wise analysis. 
+
+Baselines. For asynchronous execution we compare against VLASH [6] and StreamingVLA [8], which represent the two dominant strategies for mitigating prediction-execution mismatch (future-state conditioning and action flow matching). For decoding latency we compare against Realtime-VLA [26], the strongest system-level acceleration baseline and an instance of the per-pass-cheaper family identified in §2. For reaction speed we compare against FASTER [22]. 
+
+Configuration. Unless otherwise stated, FlashVLA uses chunk size 10 and buffer length 4 on LIBERO, and chunk size 20 with buffer length 4 on RoboTwin 2.0. On RoboTwin 2.0, the 50-task multitask evaluation trains one model per method on the union of clean and randomized data from all 50 tasks with a matched 16-action execution horizon; the horizon-grouped table reports the same evaluation aggregated by task horizon. Empirically, setting the total buffer span (chunk size × buffer length) close to the pretrained model’s native action-chunk length yields the strongest success rates; we ablate this choice in Appendix A.3. All training is on 8× H200 GPUs. Simulation runs on a single RTX 4090; the latency analysis also reports RTX 5090 numbers. 6Method RTX 4090 (ms) RTX 5090 (ms)                                               
+
+> 2 views 3 views 2 views 3 views
+> π0.545.8 55.4 37.0 44.8 + Realtime-VLA 29.2 38.9 26.6 34.2 + FlashVLA 26.7 36.8 20.3 27.1
+> Table 2: Inference latency on RTX 4090 and RTX 5090 with two- and three-view inputs (one frame per view). We aver-age 100 samples after 10 warm-up iterations. Both π0.5and FlashVLA use the same system optimizations: CUDA Graphs and kernel fusion. FlashVLA is fastest in every configuration.
+> Figure 4: Reaction speed under a 30 Hz target. FlashVLA achieves 1.7 ×lower time-to-first-action (TTFA) and 1.6 ×lower time-to-react (TTR) than FASTER.
+> Method LIBERO RoboTwin 2.0
+> Spatial Object Goal Long Avg. Clean Random Avg.
+> π0.598.8 98.2 98.0 92.4 96.9 86.1 85.8 86.0 +FlashVLA 98.6 99.0 97.8 96.2 97.9 ( ↑1.0) 90.8 90.2 90.5 ( ↑4.5)
+
+Table 3: Synchronous success rates on LIBERO and RoboTwin 2.0. On LIBERO, FlashVLA improves 
+
+π0.5 by 1.0 points on average, with a 3.8-point gain on LIBERO-Long. RoboTwin 2.0 reports 50-task multitask evaluation at d=0 , improving the average across clean and randomized settings from 86.0% to 90.5%. 
+
+4.2 Asynchronous Execution 
+
+Under asynchronous execution, the policy predicts from a stale observation and its next chunk is executed from a robot state the policy never saw. An effective VLA must therefore reduce latency without amplifying this prediction-execution mismatch. We use d to denote the number of low-level action steps by which the next inference is launched early: for execution horizon E, inference starts after E − d actions and its output is executed after the current E-action segment; d=0 is synchronous. 
+
+Overall asynchronous performance. At one-step asynchronous delay, FlashVLA improves both task quality and execution speed on both benchmarks. On LIBERO, it delivers the largest joint improvement over synchronous π0.5, raising average success from 96.9% to 97.8% while reducing time per step from 53.8 to 22.1 ms (2.43 ×; Tab. 1). VLASH provides only a 1.15 × speedup at comparable success, while StreamingVLA reaches 1.70 × but loses 2.0 success points. Figure 3 further shows that on the 50-task RoboTwin 2.0 evaluation, FlashVLA reaches 90.6% success, compared with 86.0% for synchronous π0.5 and 86.9% for VLASH at the same delay, while reducing time per step from 47.4 to 43.8 ms. 
+
+Robustness to asynchronous delay. The quality and speed gains persist as the prediction-execution mismatch grows with d (Fig. 3). Across d=1 –4, FlashVLA maintains 97.5–98.3% success on LIBERO, consistently above the 96.9% synchronous baseline, while sustaining a 2.43–2.62 × speedup. In contrast, VLASH drops to 93.1% success at d=4 . On RoboTwin 2.0, FlashVLA remains 3.7–4.7 points above VLASH and above synchronous π0.5 even at d=4 (89.8% vs. 86.0%), together with a 1.08–1.10 × end-to-end speedup. The smaller RoboTwin 2.0 speedup reflects its simulator-dominated runtime: policy inference accounts for only 17% of baseline step time (8.1 of 47.4 ms), compared with 36.8 ms for rendering and 2.5 ms for communication. Because the execution horizon is matched throughout each sweep, varying d changes observation staleness without changing the number of actions executed per segment. This robustness follows from chunk-wise causal attention, which preserves temporal consistency without external mismatch correction; removing causality while retaining the buffer collapses the asynchronous gains (Appendix A.3, Fig. 6). 7Method Short Horizon Medium Horizon Long Horizon                             
+
+> Clean Random Avg. Clean Random Avg. Clean Random Avg.
+> π0.593.5 94.2 93.9 81.9 80.4 81.1 54.2 51.8 53.0 +FlashVLA 93.2 93.3 93.2 ( ↓0.7) 86.0 84.8 85.4 (↑4.3) 90.8 88.4 89.6 (↑36.6)
+
+Table 4: Synchronous performance on all 50 RoboTwin 2.0 tasks, grouped by task horizon. FlashVLA preserves short-horizon performance and improves average success by 4.3 points on medium-horizon tasks and 36.6 points on long-horizon tasks. 
+
+4.3 Decoding Latency and Reaction Speed 
+
+Table 2 compares per-policy-invocation inference latency with Realtime-VLA, which applies kernel-level optimization to the original decoding loop, on RTX 4090 and RTX 5090 with two- and three-camera inputs. FlashVLA is fastest in every configuration. Relative to the optimized π0.5
+
+baseline, it reduces latency from 45.8 to 26.7 ms and from 55.4 to 36.8 ms on the RTX 4090, and from 37.0 to 20.3 ms and from 44.8 to 27.1 ms on the RTX 5090, for two and three views respectively. It also outperforms Realtime-VLA in all four matched settings. The 20.3 ms result corresponds to a sustained ∼50 Hz policy update rate. Figure 4 compares reaction speed against FASTER under a 30 Hz target. We report time-to-first-action (TTFA), the per-observation policy response latency, and time-to-react (TTR), modeled by FASTER as ∆treact ∼ U (∆ tinfer , ∆tinfer + ∆ texec ) with E[∆ treact ] = ∆ tinfer + 0 .5 ∆ texec . For FlashVLA we report steady-state latency after the buffer is filled; the one-time cold-start overhead is counted in the episode-level completion time and is negligible when amortized over a full rollout. FlashVLA reduces TTFA from 80.0 ms for π0.5 and 62.1 ms for FASTER to 37.1 ms, and expected TTR from 130.0 and 112.1 ms to 70.4 ms. It therefore improves both initial action availability and closed-loop reaction, achieving 1.7 × lower TTFA and 1.6 × lower TTR than FASTER. 
+
+4.4 Synchronous Quality and Long-Horizon Gain 
+
+Under synchronous evaluation, FlashVLA improves average success from 96.9% to 97.9% on LIBERO (Tab. 3). On RoboTwin 2.0, it improves success from 86.1% to 90.8% under clean evaluation and from 85.8% to 90.2% under randomized evaluation (Tab. 4). These results show that the streaming formulation preserves and improves synchronous policy quality across both benchmarks. Training budget and execution horizon are matched between methods, and this setting uses no prediction-execution overlap; the gain therefore isolates joint chunk decoding rather than additional optimization or more frequent replanning. The performance gain from FlashVLA increases sharply with task horizon. Across the same 50 RoboTwin 2.0 tasks, the average difference relative to π0.5 grows from −0.7 points on short-horizon tasks to +4 .3 on medium-horizon tasks and +36 .6 on long-horizon tasks; on the long-horizon subset, Clean success rises from 54.2% to 90.8% and Random success from 51.8% to 88.4%. The trend is consistent across both evaluation settings: medium-horizon gains exceed 4 points for both Clean and Random, while long-horizon gains reach 36.6 points in each. LIBERO shows the same pattern, with a 3.8-point gain on LIBERO-Long (92.4% to 96.2%). This is the empirical signature of the chunk-level memory described in §3.1: under chunk-wise causal attention, each higher-noise future chunk attends to all earlier chunks in the streaming buffer, giving the action expert a short, structured history of recently refined chunks. Tasks that span more chunk transitions benefit more from this history, so the long-horizon gap is the structural advantage of the design surfacing in the metric most sensitive to it. The causal-mask ablation provides complementary evidence: removing inter-chunk attention while retaining the streaming buffer produces the largest degradation on LIBERO-Long (Fig. 6). Although not an explicit design target, the long-horizon improvement follows directly from the chunk-wise causal formulation. 8Method Avg. SR (%) Time / Step (ms) Inference Latency (ms)                                
+
+> LIBERO
+> SmolVLA 80.1 41.2 19.7
+> +FlashVLA ( d=0 )80.1 (↑0.0) 29.7 (1.39 ×)10.1 (1.95 ×)
+> +FlashVLA ( d=1 )79.5 ( ↓0.6) 28.7 (1.44 ×)–
+> RoboTwin 2.0
+> LingBot-VLA 85.2 56.7 70.6
+> +FlashVLA ( d=0 )88.6 (↑3.4) 49.5 (1.15 ×)25.1 (2.81 ×)
+> +FlashVLA ( d=1 )89.3 (↑4.1) 46.6 (1.22 ×)–
+
+Table 5: Cross-architecture generalization across SmolVLA and LingBot-VLA. With no or only minimal additional parameters, FlashVLA preserves SmolVLA success and improves LingBot-VLA by 3.4–4.1 points while reducing inference latency by 1.95 ×–2.81 ×. Here, d=0 denotes synchronous execution and d=1 denotes one-step asynchronous execution; delay-independent inference latency is reported only at d=0 .
+
+4.5 Cross-Architecture Generalization 
+
+FlashVLA is a plug-and-play decoding method for flow-matching VLAs. Table 5 shows that its policy-side acceleration transfers strongly across architectures: inference latency falls from 19.7 to 10.1 ms on SmolVLA and from 70.6 to 25.1 ms on LingBot-VLA, corresponding to 1.95 × and 2.81 ×
+
+speedups. Crucially, this acceleration preserves or improves task quality. On SmolVLA, synchronous success remains at 80.1%, while one-step asynchronous execution reaches 79.5%, within 0.6 points of the baseline. On LingBot-VLA, success improves by 3.4 points synchronously (85.2% to 88.6%) and by 4.1 points asynchronously (to 89.3%). The more moderate Time/Step gains reflect the runtime composition of the closed-loop evaluations: SmolVLA is a compact 0.5B model with only 19.7 ms baseline inference latency, while RoboTwin 2.0 is simulator-dominated and amortizes each policy invocation over 16 executed actions. Policy inference is therefore not the dominant evaluation cost in either setting, so Time/Step does not scale one-for-one with the substantial inference-latency reduction. These results show that FlashVLA generalizes across flow-matching VLA architectures while preserving both task quality and its core policy-side efficiency benefit. Full settings are in Appendix A.1. The adaptation is lightweight: it modifies the action expert’s timestep conditioning and attention mask, reuses native FiLM layers when available, and adds lightweight time-MLP and FiLM layers only for SmolVLA before multi-buffer fine-tuning (Appendix A.4). 
+
+# 5 Real-World Deployment 
+
+We deploy FlashVLA on a 7-DoF Franka arm with a single RTX A4000 GPU and ask whether the simulated latency and asynchronous-continuity benefits transfer to a real robot at 30 Hz control. 
+
+Setup. We evaluate three tasks chosen to span the horizon range observed in simulation: pick and place (short: pick a fruit, place it in a basket), whiteboard wiping (medium: pick up a brush, wipe all marks), and table cleaning (long: clean three objects one by one into a basket). For each task we collect 50 teleoperated demonstrations with Gello [30], yielding 22K, 30K, and 68K frames respectively. We compare four configurations: π0.5 synchronous, π0.5 naive asynchronous, π0.5
+
+asynchronous with RTC [25], and FlashVLA asynchronous. All four configurations use the same CUDA Graph and kernel-fusion system optimizations, and all asynchronous methods use a two-step delay. Each task is run for 15 trials; performance is scored on a three-point rubric (2 for full success, 1 for partial completion, 0 for failure), and we additionally report the average completion time over successful trials. Full training and evaluation details are in Appendix A.2. 9(a) Pick and place (short). (b) Whiteboard wiping (medium). (c) Table cleaning (long).  
+
+> (d) Task score. (e) Completion time.
+
+Figure 5: Real-world tasks and results. Top: the short-, medium-, and long-horizon tasks used for evaluation. Bottom: task score and average completion time over successful trials. FlashVLA outperforms all three π0.5 configurations on every task and averages a 1.3 × completion-time speedup over synchronous execution. 
+
+Results. Figure 5 reports task score and completion time across the three tasks. FlashVLA outper-forms all three π0.5 configurations on every task in both metrics, improving the cross-task average score from 80.0% for synchronous π0.5 and RTC (75.6% for naive asynchronous execution) to 84.4%. The completion-time speedup over π0.5 synchronous averages 1.3 × and over RTC averages 1.2 ×.Since completion time is measured only over successful trials, this speedup does not count early termination on failed rollouts; the joint gain in score and speed instead shows that streaming reduces chunk-boundary stalls while preserving asynchronous continuity. The speedup also grows with task horizon, mirroring the long-horizon pattern observed in simulation (§4.4): longer tasks contain more chunk transitions over which steady streaming can accumulate its benefit. On the RTX A4000, FlashVLA can achieve an inference latency of 67.3 ms, approximately two 30 Hz control periods; the two-step asynchronous delay overlaps this latency with action execution, enabling 30 Hz control. 
+
+# 6 Conclusion 
+
+We present FlashVLA, a streaming action decoder for flow-matching VLAs. A single design choice (a streaming buffer of action chunks at staggered noise levels with chunk-wise causal attention) collapses the latency cost and the asynchronous-mismatch cost that motivated two separate lines of prior work. Across LIBERO, RoboTwin 2.0, and real-world tasks, FlashVLA delivers up to 20 × lower per-step action-decoding latency, recovers asynchronous continuity without an explicit future-state predictor, and sustains ≥30 Hz smooth control on a single GPU. The chunk-wise causal mask is the active ingredient: removing it while keeping the streaming buffer collapses the asynchronous gains. The design transfers streaming chunk-wise diffusion from long video into robot action decoding, where lower-noise chunks in the buffer are not just about to be shown but about to be executed; we expect this transfer to generalize to other streaming-friendly heads in the VLA stack. 
+
+Limitations and future work. FlashVLA adapts pretrained VLAs through multi-buffer joint fine-tuning, which makes it a drop-in modification but inherits the pretrained model’s independent-chunk training objective; pretraining a VLA from scratch under the chunk-wise causal formulation is a natural next step and likely to yield further gains. The streaming buffer also requires a one-time cold-start of N −1 warm-up steps per episode; the cost amortizes quickly over multi-second rollouts but is more noticeable on very short tasks. 
+
+# Acknowledgment 
+
+We gratefully acknowledge Professor Xiaolong Wang’s lab for providing a Franka robot arm. 10 References 
+
+[1] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi, Q. Vuong, T. Kollar, B. Burchfiel, R. Tedrake, D. Sadigh, S. Levine, P. Liang, and C. Finn. Openvla: An open-source vision-language-action model, 2024. URL 
+
+https://arxiv.org/abs/2406.09246 .[2] NVIDIA, J. Bjorck, N. C. Fernando Casta˜ neda, X. Da, R. Ding, L. J. Fan, Y. Fang, D. Fox, F. Hu, S. Huang, J. Jang, Z. Jiang, J. Kautz, K. Kundalia, L. Lao, Z. Li, Z. Lin, K. Lin, G. Liu, E. Llontop, L. Magne, A. Mandlekar, A. Narayan, S. Nasiriany, S. Reed, Y. L. Tan, G. Wang, Z. Wang, J. Wang, Q. Wang, J. Xiang, Y. Xie, Y. Xu, Z. Xu, S. Ye, Z. Yu, A. Zhang, H. Zhang, Y. Zhao, R. Zheng, and Y. Zhu. GR00T N1: An open foundation model for generalist humanoid robots. In ArXiv Preprint , March 2025. [3] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, L. X. Shi, J. Tanner, Q. Vuong, A. Walling, H. Wang, and U. Zhilinsky. π0: A vision-language-action flow model for general robot control. ArXiv , abs/2410.24164, 2024. URL 
+
+https://api.semanticscholar.org/CorpusID:273811174 .[4] W. Wu, F. Lu, Y. Wang, S. Yang, S. Liu, F. Wang, Q. Zhu, H. Sun, Y. Wang, S. Ma, Y. Ren, K. Zhang, H. Yu, J. Zhao, S. Zhou, Z. Qiu, H. Xiong, Z. Wang, Z. Wang, R. Cheng, Y.-L. Li, Y. Huang, X. Zhu, Y. Shen, and K. Zheng. A pragmatic vla foundation model, 2026. URL 
+
+https://arxiv.org/abs/2601.18692 .[5] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom, K. Hausman, B. Ichter, S. Jakubczak, T. Jones, L. Ke, D. LeBlanc, S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, A. Z. Ren, L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner, Q. Vuong, H. R. Walke, A. Walling, H. Wang, L. Yu, and U. Zhilinsky. π0.5: a vision-language-action model with open-world generalization. ArXiv , abs/2504.16054, 2025. URL https://api.semanticscholar. org/CorpusID:277993634 .[6] J. Tang, Y. Sun, Y. Zhao, S. Yang, Y. Lin, Z. Zhang, J. Hou, Y. Lu, Z. Liu, and S. Han. Vlash: Real-time vlas via future-state-aware asynchronous inference, 2025. URL https: //arxiv.org/abs/2512.01031 .[7] K. Black, A. Z. Ren, M. Equi, and S. Levine. Training-time action conditioning for efficient real-time chunking, 2025. URL https://arxiv.org/abs/2512.05964 .[8] Y. Shi, D. Guo, T. Zhao, F. Gao, L. Shi, C. Yu, Z. Mo, Q. Xiao, X. Peng, Q. Liao, and Y. Wang. Streamingvla: Streaming vision-language-action model with action flow matching and adaptive early observation, 2026. URL https://arxiv.org/abs/2603.28565 .[9] M. Shukor, D. Aubakirova, F. Capuano, P. Kooijmans, S. Palma, A. Zouitine, M. Aractingi, C. Pascal, M. Russi, A. Marafioti, S. Alibert, M. Cord, T. Wolf, and R. Cad` ene. Smolvla: A vision-language-action model for affordable and efficient robotics. ArXiv , abs/2506.01844, 2025. URL https://api.semanticscholar.org/CorpusID:279119427 .[10] Y. Xu, Y. Yang, Z. Fan, Y. Liu, Y. Li, B. Li, and Z. Zhang. Qvla: Not all channels are equal in vision-language-action model’s quantization, 2026. URL https://arxiv.org/abs/2602. 03782 .[11] Y. Yang, Y. Wang, Z. Wen, Z. Luo, C. Zou, Z. Zhang, C. Wen, and L. Zhang. Effi-cientvla: Training-free acceleration and compression for vision-language-action models. ArXiv ,abs/2506.10100, 2025. URL https://api.semanticscholar.org/CorpusID:279318363 .11 [12] B. Chen, D. M. Monso, Y. Du, M. Simchowitz, R. Tedrake, and V. Sitzmann. Diffusion forcing: Next-token prediction meets full-sequence diffusion, 2024. URL https://arxiv.org/abs/ 2407.01392 .[13] A. Kodaira, T. Hou, J. Hou, M. Georgopoulos, F. Juefei-Xu, M. Tomizuka, and Y. Zhao. Streamdit: Real-time streaming text-to-video generation, 2026. URL https://arxiv.org/ abs/2507.03745 .[14] S. ai, H. Teng, H. Jia, L. Sun, L. Li, M. Li, M. Tang, S. Han, T. Zhang, W. Q. Zhang, W. Luo, X. Kang, Y. Sun, Y. Cao, Y. Huang, Y. Lin, Y. Fang, Z. Tao, Z. Zhang, Z. Wang, Z. Liu, D. Shi, G. Su, H. Sun, H. Pan, J. Wang, J. Sheng, M. Cui, M. Hu, M. Yan, S. Yin, S. Zhang, T. Liu, X. Yin, X. Yang, X. Song, X. Hu, Y. Zhang, and Y. Li. Magi-1: Autoregressive video generation at scale, 2025. URL https://arxiv.org/abs/2505.13211 .[15] J. Wen, Y. Zhu, J. Li, M. Zhu, Z. Tang, K. Wu, Z. Xu, N. Liu, R. Cheng, C. Shen, Y. Peng, F. Feng, and J. Tang. Tinyvla: Toward fast, data-efficient vision-language-action models for robotic manipulation. IEEE Robotics and Automation Letters , 10:3988–3995, 2024. URL 
+
+https://api.semanticscholar.org/CorpusID:272753287 .[16] T. Lin, Y. Zhong, Y. Du, J. Zhang, J. Liu, Y. Chen, E. Gu, Z. Liu, H. Cai, Y. Zou, L. Zou, Z. Zhou, G. Li, and B. Zhao. Evo-1: Lightweight vision-language-action model with preserved semantic alignment. ArXiv , abs/2511.04555, 2025. URL https://api.semanticscholar. org/CorpusID:282812748 .[17] H. Wang, C. Xiong, R. Wang, and X. Chen. Bitvla: 1-bit vision-language-action models for robotics manipulation. ArXiv , abs/2506.07530, 2025. URL https://api.semanticscholar. org/CorpusID:279250859 .[18] H. Wang, J. Xu, J. Pan, Y. Zhou, and G. Dai. Specprune-vla: Accelerating vision-language-action models via action-aware self-speculative pruning. ArXiv , abs/2509.05614, 2025. URL 
+
+https://api.semanticscholar.org/CorpusID:281202916 .[19] S. Xu, Y. Wang, C. Xia, D. Zhu, T. Huang, and C. Xu. Vla-cache: Efficient vision-language-action manipulation via adaptive token caching, 2025. URL https://arxiv.org/abs/2502. 02175 .[20] T. Jiang, X. Jiang, Y. Ma, X. Wen, B. Li, K. Zhan, P. Jia, Y. Liu, S. Sun, and X. Lang. The better you learn, the smarter you prune: Towards efficient vision-language-action models via differen-tiable token pruning. ArXiv , abs/2509.12594, 2025. URL https://api.semanticscholar. org/CorpusID:281325766 .[21] K. Pertsch, K. Stachowicz, B. Ichter, D. Driess, S. Nair, Q. Vuong, O. Mees, C. Finn, and S. Levine. Fast: Efficient action tokenization for vision-language-action models. ArXiv ,abs/2501.09747, 2025. URL https://api.semanticscholar.org/CorpusID:275570494 .[22] Y. Lu, Z. Liu, X. Fan, Z. Yang, J. Hou, J. Li, K. Ding, and H. Zhao. Faster: Rethinking real-time flow vlas, 2026. URL https://arxiv.org/abs/2603.19199 .[23] Y. Song, P. Dhariwal, M. Chen, and I. Sutskever. Consistency models. In International Conference on Machine Learning (ICML) , 2023. [24] K. Frans, D. Hafner, S. Levine, and P. Abbeel. One step diffusion via shortcut models. In 
+
+International Conference on Learning Representations (ICLR) , 2025. [25] K. Black, M. Y. Galliker, and S. Levine. Real-time execution of action chunking flow policies, 2025. URL https://arxiv.org/abs/2506.07339 .[26] Y. Ma, Y. Zhou, Y. Yang, T. Wang, and H. Fan. Running vlas at real-time speed, 2025. URL 
+
+https://arxiv.org/abs/2510.26742 .12 [27] E. Perez, F. Strub, H. de Vries, V. Dumoulin, and A. Courville. Film: Visual reasoning with a general conditioning layer, 2017. URL https://arxiv.org/abs/1709.07871 .[28] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone. Libero: Benchmarking knowledge transfer for lifelong robot learning, 2023. URL https://arxiv.org/abs/2306.03310 .[29] T. Chen, Z. Chen, B. Chen, Z. Cai, Y. Liu, Z. Li, Q. Liang, X. Lin, Y. Ge, Z. Gu, W. Deng, Y. Guo, T. Nian, X. Xie, Q. Chen, K. Su, T. Xu, G. Liu, M. Hu, H. ang Gao, K. Wang, Z. Liang, Y. Qin, X. Yang, P. Luo, and Y. Mu. Robotwin 2.0: A scalable data generator and benchmark with strong domain randomization for robust bimanual robotic manipulation, 2025. URL 
+
+https://arxiv.org/abs/2506.18088 .[30] P. Wu, Y. Shentu, Z. Yi, X. Lin, and P. Abbeel. Gello: A general, low-cost, and intuitive teleoperation framework for robot manipulators, 2023. 13 A Appendix 
+
+A.1 Simulated Experimental Settings LIBERO. We fine-tune the model on the merged training dataset from HuggingFaceVLA and use mean-std statistics for action normalization. We set the learning rate to 10 −4 and use a cosine scheduler with 1,000 warm-up steps, training for 50K steps in total. The per-GPU batch size is 32, and training is performed on 8 H200 GPUs. For π0.5, the action chunk size is 50. For FlashVLA, we use a chunk size of 10 and a buffer length of 4. Evaluation is conducted on an RTX 4090 using LeRobot’s LIBERO evaluation script. The model replans every 5 action steps. Time/Step is the closed-loop average episode wall time divided by the average number of executed low-level action steps, including rendering time. The LIBERO results in Tab. 1 and Tab. 3 are averaged across five runs. 
+
+RoboTwin 2.0. The training data is constructed using RoboTwin 2.0’s official scripts, converted into LeRobot’s format, and normalized with 99th percentile statistics. For the 50-task multitask results in Fig. 3 and the horizon-grouped results in Tab. 4, we train one model per method on the union of clean and randomized training data from all 50 tasks. Both π0.5 and FlashVLA use a learning rate of 5 × 10 −5 with cosine decay, a global batch size of 256 (8 per GPU on 8 H200 GPUs with four gradient-accumulation steps), and 100K optimization steps, corresponding to approximately 4.5 epochs. For π0.5, the action chunk size is 50. For FlashVLA, we use a chunk size of 20 and a buffer length of 4. Evaluation uses RoboTwin 2.0’s official evaluation scripts and RTX 4090 configuration. Both methods use a 16-action execution horizon; π0.5 therefore replans after the first 16 actions of its 50-action output. TPS follows the same closed-loop definition as LIBERO and additionally includes client-server communication. Table 4 aggregates this evaluation according to the task-horizon categorization of LingBot-VLA [4]. 
+
+Cross-architecture evaluation. For SmolVLA, we fine-tune from lerobot/smolvla base with chunk size 10 and buffer length 5 for 20K steps, using AdamW with a learning rate of 10 −4, cosine decay, 1,000 warm-up steps, a per-GPU batch size of 64, and no gradient accumulation. SmolVLA is evaluated on all four LIBERO suites with a 5-action execution horizon. For LingBot-VLA on RoboTwin 2.0, we use the 4B backbone with chunk size 20 and buffer length 4 and fine-tune on the unified clean and randomized data from all 50 tasks for 100K steps. We use AdamW with a learning rate of 5 × 10 −5, cosine decay, 5,000 warm-up steps, and a global batch size of 256 (8 per GPU on 8 GPUs with four gradient-accumulation steps). LingBot-VLA is evaluated with RoboTwin 2.0’s official scripts under a 16-action execution horizon, and success rate is averaged over the clean and randomized settings. All cross-architecture evaluations run on a single RTX 4090. Inference latency is averaged over 100 samples after 10 warm-up iterations; each baseline and its FlashVLA variant use the same CUDA Graph and kernel-fusion optimizations. 
+
+A.2 Real-World Experiment Settings 
+
+We fine-tune the model on human-collected data for each real-world task and use mean-std for normalization. We set the learning rate to 5 × 10 −5 and use a cosine scheduler with 1,000 warm-up steps. For pick-and-place, we train for 10K steps. For whiteboard wiping and table cleaning, we train for 30K steps. The per-GPU batch size is 16, and training is performed on 8 H200 GPUs. For π0.5,the action chunk size is 50. For FlashVLA, we use a chunk size of 20 and a buffer length of 4. We deploy the fine-tuned model on an RTX A4000 at a 30 Hz control frequency. All methods use the same CUDA Graph and kernel-fusion system optimizations. We set the execution horizon to 16 and the asynchronous delay to two steps for all asynchronous methods. Each task score is averaged over 15 rollouts; completion time is averaged over successful rollouts only. 14 Figure 6: Chunk-wise causal attention ablation on LIBERO. Removing the causal mask while keeping the same streaming buffer drops asynchronous success rate by roughly 10 points on average, isolating the chunk-wise causal mask as the active ingredient in FlashVLA’s asynchronous continuity.         
+
+> (a) Success rate decreases with chunk size C; one-step async beats synchronous at large C(C=15 and
+> C=20 ).
+> (b) Per-step latency. The apparent improvement at larger Cis an artifact of lower success rates triggering more reset steps per episode; the genuine one-step async speedup over π0.5averages 1.8 ×.
+
+Figure 7: Chunk size C ablation on LIBERO with buffer length N =5 fixed. (a) Success rate. (b) Per-step latency. 
+
+Task Pick and Place Whiteboard Wiping Table Cleaning 
+
+Instruction Pick up the fruit and place it into the basket Wipe all writings off the whiteboard Clean the table by putting all objects into the basket Table 6: Real-world tasks and the natural-language instructions provided to the model. 
+
+A.3 Ablations and Additional Results Chunk-wise causal attention is the active ingredient. The most direct test of the thesis in §3 is whether FlashVLA’s asynchronous continuity depends on the chunk-wise causal mask or merely on the streaming buffer. We construct a no-causal variant that retains the streaming buffer, chunk size, buffer length, training pipeline, and inference loop, but removes the chunk-wise causal mask so chunks in the buffer no longer attend to each other in any direction. As shown in Fig. 6, the asynchronous success rate drops by roughly 10 points on average. The streaming buffer alone is therefore not sufficient; the causal attention from cleaner to noisier chunks is what makes asynchronous execution lossless under lookahead. 
+
+Chunk size. We sweep chunk size C on LIBERO with buffer length N =5 fixed. Figure 7 shows 
+
+C=10 is the sweet spot under all of synchronous, one-step async, and two-step async execution. Larger chunk sizes degrade success rate; the apparent improvement in per-action time at larger C is an artifact of lower success rates triggering more reset steps per episode. The pattern is consistent with the design guideline that the total buffer span N × C should approximately match the pretrained 15 (a) Success rate is robust to buffer length N : one-step async matches or exceeds the π0.5 baseline for         
+
+> N∈ { 4,5,6}.
+> (b) Per-step latency is also stable across N; one-step async averages 1.8 ×speedup over π0.5in every con-figuration.
+
+Figure 8: Buffer length N ablation on LIBERO with chunk size C=10 fixed. (a) Success rate. (b) Per-step latency. model’s native action-chunk length (50 for π0.5). With N =5 , this prefers C=10 ; pushing C to 15 or 20 forces the model to predict up to 100 future actions per buffer, which the short-horizon LIBERO setting does not train for. Even at C=15 and C=20 , one-step async outperforms synchronous, indicating the streaming advantage persists well outside the sweet spot. 
+
+Buffer length. Figure 8 sweeps the buffer length N ∈ { 4, 5, 6} with C=10 fixed. FlashVLA is largely insensitive to N , especially under asynchronous execution: all three settings match or exceed the π0.5 baseline at one-step delay, and the average speedup is 1.8 × in every case. Increasing N
+
+deepens the staggered noise schedule, while the observed per-step latency remains nearly unchanged over this range. Practically, N =4 is a stable default on both LIBERO and RoboTwin 2.0. 
+
+A.4 Implementation Details Model architecture. Through experiments, we find that strengthening timestep conditioning in the action expert leads to substantially better performance. Specifically, we use FiLM [27] to generate scale, shift, and gate parameters from the multi-level timestep embeddings. This is natural for models such as π0.5, where FiLM-style conditioning is already implemented. For SmolVLA, which injects timestep information through a linear projection of the concatenated action and time embeddings, we additionally introduce time-MLP and FiLM layers to enhance multi-level timestep conditioning. Also, if the model explicitly uses a state embedding, we add the time and state embeddings together as the FiLM condition. FlashVLA is fine-tuned from pretrained VLA weights rather than trained from scratch. Since the streaming formulation changes the action expert’s timestep-conditioning distribution from a single denoising timestep to multi-level chunk-wise timesteps, fine-tuning can occasionally trigger gradient explosion in the pretrained action expert. Our diagnosis localizes this instability to normalization layers in the action expert: during training, the outputs of some norm layers can become numerically unstable. On datasets where this occurs, we re-initialize the action expert’s normalization layers and train them from scratch while loading the remaining pretrained weights; we use this strategy for RoboTwin 2.0 50-task multitask training. 
+
+Multi-buffer joint fine-tuning. FlashVLA introduces multi-buffer joint fine-tuning to adapt pre-trained VLA models to the streaming action decoding paradigm. For an observation at timestamp t,we retrieve the future action chunks at:t+C , at+C:t+2 C , . . . , at+( N −1) C:t+N C , where C is the chunk size and N is the buffer length, i.e., the number of different flow-matching timesteps. For the j-th buffer state, we construct the action buffer as 
+
+ pad , . . . , pad 
+
+| {z }  
+
+> N−jpadding chunks
+
+, a t:t+C , a t+C:t+2 C , . . . , a t+( j−1) C:t+jC 
+
+| {z } 
+
+> jreal action chunks
+
+ , j = 1 , . . . , N. 
+
+16 Algorithm 1 FlashVLA Streaming Inference 
+
+Require: Observation stream {ot}, buffer length N , cold-start action acs  
+
+> 1:
+
+Initialize buffer B ← [P, . . . , P, z], where z ∼ N (0 , I )
+
+▷ Cold-start: fill the buffer without executing predictions  
+
+> 2:
+
+for i = 1 to N − 1 do  
+
+> 3:
+
+B ← FlashVLA( B, o t) 
+
+> 4:
+
+Execute acs  
+
+> 5:
+
+B ← PushBack( B, z), where z ∼ N (0 , I ) 
+
+> 6:
+
+end for 
+
+▷ Steady streaming: output one chunk per inference  
+
+> 7:
+
+while episode not terminated do  
+
+> 8:
+
+B ← FlashVLA( B, o t) 
+
+> 9:
+
+ˆa ← PopFront( B) 
+
+> 10:
+
+Execute ˆa 
+
+> 11:
+
+B ← PushBack( B, z), where z ∼ N (0 , I ) 
+
+> 12:
+
+end while 
+
+We then pack all N buffer states into a single training sample, where they share the same observation 
+
+ot but are separated by attention masks to prevent cross-buffer interaction. We find that this multi-buffer fine-tuning strategy is crucial for enabling pretrained VLA models to efficiently adapt to FlashVLA’s streaming action decoding paradigm. 
+
+Streaming inference. We provide FlashVLA’s streaming inference algorithm in Algorithm 1. The streaming inference consists of two stages: cold-start and steady-streaming. 17

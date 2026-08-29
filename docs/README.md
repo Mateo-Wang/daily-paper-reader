@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-28</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-29</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-28 04:01:33 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-29 22:13:03 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读聚焦端到端驾驶鲁棒性与VLA空间推理，共筛选9篇精读、12篇速读。</p>
-<p>最值得关注：传感器退化下的注意力融合（9.0）与几何感知VLA模型（9.0）。</p>
-<p>建议下一步结合Gripper-aware与V-Link，探索多模态特征修复在驾驶任务中的迁移。</p>
+<p>今日聚焦19篇机器人学习论文，精读2篇高分工作，速读3篇操作与导航方法。最值得关注多臂VLA模型MA-VLA（9.0）与长时程世界模型WALL-SS（9.0）。建议关注世界模型与语言推理在机器人操作中的融合趋势。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Variance-Guided Spatial Attention Fusion for Robust End-to-End Driving under Asymmetric Sensor Degradation">Variance-Guided Spatial Attention Fusion for Robust End-to-End Driving under Asymmetric Sensor Degradation</span></li><li><span class="dpr-home-dashboard-paper-title" title="GaussVLA: Geometry-Aware Spatial Reasoning for Vision-Language-Action Model">GaussVLA: Geometry-Aware Spatial Reasoning for Vision-Language-Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="RA-VLA: Retrieval-Augmented VLA for Test-Time Adaptation">RA-VLA: Retrieval-Augmented VLA for Test-Time Adaptation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization">MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization</span></li><li><span class="dpr-home-dashboard-paper-title" title="WALL-SS: Scaling Long-horizon World Models via Next-Scale Autoregression">WALL-SS: Scaling Long-horizon World Models via Next-Scale Autoregression</span></li><li><span class="dpr-home-dashboard-paper-title" title="TemporalFlow-VLA: Learning Physically Grounded Execution History for Long-Horizon Robot Manipulation">TemporalFlow-VLA: Learning Physically Grounded Execution History for Long-Horizon Robot Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>7</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -66,7 +64,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Gripper-aware Vision Language Action Models">Gripper-aware Vision Language Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="SkyDrive: Learning to Drive in a New City from Aerial Traffic Monitoring">SkyDrive: Learning to Drive in a New City from Aerial Traffic Monitoring</span></li><li><span class="dpr-home-dashboard-paper-title" title="V-Link: Recovering Lost Visual Representations in Action DiT for Vision-Language-Action Models">V-Link: Recovering Lost Visual Representations in Action DiT for Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="One-Shot Learning from Demonstration of Contact-Rich Robotic Manipulation by Identifying Physical Interactions">One-Shot Learning from Demonstration of Contact-Rich Robotic Manipulation by Identifying Physical Interactions</span></li><li><span class="dpr-home-dashboard-paper-title" title="$R^3$: Training Robots to Reason in Natural Language via Reinforcement Learning">$R^3$: Training Robots to Reason in Natural Language via Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Predicting Consequences and Reinforcing Navigation Policies with Latent World Models">Predicting Consequences and Reinforcing Navigation Policies with Latent World Models</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
