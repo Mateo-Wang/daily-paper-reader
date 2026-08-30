@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-08-29</span>
+      <span class="dpr-home-dashboard-kicker">2026-08-30</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 7 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>4</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>3</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-08-29 22:13:03 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-08-30 22:08:14 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日聚焦19篇机器人学习论文，精读2篇高分工作，速读3篇操作与导航方法。最值得关注多臂VLA模型MA-VLA（9.0）与长时程世界模型WALL-SS（9.0）。建议关注世界模型与语言推理在机器人操作中的融合趋势。</p>
+<p>今日共读7篇论文，精读4篇、速读3篇，聚焦机器人控制与自动驾驶决策。最值得关注的是PonderPounce（9.0/10）和Gating Before Commitment（8.0/10），分别涉及多模态大模型驱动机器人控制与驾驶意图分歧预测。建议优先精读这两篇，再结合速读中的安全控制与室内导航方法拓展视野。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">4 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization">MA-VLA: Multi-Arm Vision-Language-Action Model for Collaboration and Compositional Generalization</span></li><li><span class="dpr-home-dashboard-paper-title" title="WALL-SS: Scaling Long-horizon World Models via Next-Scale Autoregression">WALL-SS: Scaling Long-horizon World Models via Next-Scale Autoregression</span></li><li><span class="dpr-home-dashboard-paper-title" title="TemporalFlow-VLA: Learning Physically Grounded Execution History for Long-Horizon Robot Manipulation">TemporalFlow-VLA: Learning Physically Grounded Execution History for Long-Horizon Robot Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="PonderPounce: A Pretrained MLLM as an Episode Context Engine for Robot Control">PonderPounce: A Pretrained MLLM as an Episode Context Engine for Robot Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="Gating Before Commitment: Anticipating Intent Divergence to Prevent Post-Interaction Decision Failures in Autonomous Driving">Gating Before Commitment: Anticipating Intent Divergence to Prevent Post-Interaction Decision Failures in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="RTNav: Towards Real-Time Zero-Shot Object Navigation">RTNav: Towards Real-Time Zero-Shot Object Navigation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>7</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>3</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">3 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="One-Shot Learning from Demonstration of Contact-Rich Robotic Manipulation by Identifying Physical Interactions">One-Shot Learning from Demonstration of Contact-Rich Robotic Manipulation by Identifying Physical Interactions</span></li><li><span class="dpr-home-dashboard-paper-title" title="$R^3$: Training Robots to Reason in Natural Language via Reinforcement Learning">$R^3$: Training Robots to Reason in Natural Language via Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Predicting Consequences and Reinforcing Navigation Policies with Latent World Models">Predicting Consequences and Reinforcing Navigation Policies with Latent World Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Interpreting Control Latents for System Identification via Conditional Flow Matching">Interpreting Control Latents for System Identification via Conditional Flow Matching</span></li><li><span class="dpr-home-dashboard-paper-title" title="Safety-aware Model Predictive Path Integral Control with Signal Temporal Logic">Safety-aware Model Predictive Path Integral Control with Signal Temporal Logic</span></li><li><span class="dpr-home-dashboard-paper-title" title="EgoNav: Bridging Learned Waypoints and Geometry-Aware Local Control for Robust Indoor Navigation">EgoNav: Bridging Learned Waypoints and Geometry-Aware Local Control for Robust Indoor Navigation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 </div>
 
