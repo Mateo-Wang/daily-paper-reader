@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-01</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-02</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 24 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-01 22:23:34 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-02 22:41:29 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日共读24篇论文，聚焦自动驾驶与具身智能领域，其中12篇精读、12篇速读。最值得关注的是两篇9分精读论文：《Hydra》提出离散规划与连续流匹配的导航世界模型，《A Degradation-Tolerance Benchmark》构建了纯视觉端到端驾驶的退化鲁棒性基准。建议优先深入阅读这两篇，并顺带浏览速读中有关视觉模型自适应与VLA加速的研究。</p>
+<p>今日精读20篇论文，聚焦自动驾驶视觉语言基础模型与世界行动策略两大前沿方向。其中《Qwen-Drive-1.0》与《PAVE》以满分领跑，分别从多模态驾驶理解与预测对齐进化突破瓶颈，最值得深入研读。建议普通读者先关注VLA模型如何提升驾驶可信度，后续可追踪具身智能与人形机器人自主感知的拓展应用。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">8 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Hydra: A Navigation World Action Model with Discrete Latent Planning and Continuous Flow-Matching Execution">Hydra: A Navigation World Action Model with Discrete Latent Planning and Continuous Flow-Matching Execution</span></li><li><span class="dpr-home-dashboard-paper-title" title="A Degradation-Tolerance Benchmark for Camera-Only End-to-End Driving">A Degradation-Tolerance Benchmark for Camera-Only End-to-End Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="DREAM: Deployment-Time Demonstration Generation via Real-to-Sim for Scalable Policy Adaptation">DREAM: Deployment-Time Demonstration Generation via Real-to-Sim for Scalable Policy Adaptation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Qwen-Drive-1.0: An Initial Step towards a Vision-Language Foundation Model for Autonomous Driving">Qwen-Drive-1.0: An Initial Step towards a Vision-Language Foundation Model for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="PAVE: Predictive Alignment and Value-Guided Evolution for World-Action Policies">PAVE: Predictive Alignment and Value-Guided Evolution for World-Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="ZimaBlue: Evolving Generalizable World Action Models through Scalable Video Pre-training">ZimaBlue: Evolving Generalizable World Action Models through Scalable Video Pre-training</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,7 +64,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AdaptAV: Continuous Adaption of Vision Models for Autonomous Vehicles Using Cloud-based Oracle">AdaptAV: Continuous Adaption of Vision Models for Autonomous Vehicles Using Cloud-based Oracle</span></li><li><span class="dpr-home-dashboard-paper-title" title="CGFM-Nav: Cognitive Graph-Field Memory for Semantic-Guided Lifelong Multimodal Embodied Navigation">CGFM-Nav: Cognitive Graph-Field Memory for Semantic-Guided Lifelong Multimodal Embodied Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="AdaVLA: Adaptive Step Flow Matching for Training-free Acceleration of Vision-Language-Action Models">AdaVLA: Adaptive Step Flow Matching for Training-free Acceleration of Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="AGM: Achievement-Grounded Memory for Closed-Loop Agents with Frozen VLA Policies">AGM: Achievement-Grounded Memory for Closed-Loop Agents with Frozen VLA Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Agile Perceptive Traversal of Sparse 3D Structures for Humanoids">Learning Agile Perceptive Traversal of Sparse 3D Structures for Humanoids</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking Language&#x27;s Role in Efficient VLA for Autonomous Vehicles: Toward Smarter, Trustworthy Driving">Rethinking Language&#x27;s Role in Efficient VLA for Autonomous Vehicles: Toward Smarter, Trustworthy Driving</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
