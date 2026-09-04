@@ -1,0 +1,458 @@
+Title: DiffuSearch: How Hybrid Trajectory Planning Benefits from Aligned Objectives in Diffusion and Action Space
+
+URL Source: https://arxiv.org/pdf/2609.02252v1
+
+Published Time: Thu, 03 Sep 2026 00:44:16 GMT
+
+Number of Pages: 17
+
+Markdown Content:
+# DiffuSearch: How Hybrid Trajectory Planning Benefits from Aligned Objectives in Diffusion and Action Space 
+
+Steffen Hagedorn 1,2 , Aron Distelzweig 1,3 , and Alexandru P. Condurache 1,2 
+
+> 1
+
+Robert Bosch GmbH, Germany 
+
+steffen.hagedorn@de.bosch.com  
+
+> 2
+
+Institute for Neuro- and Bioinformatics, University of Lübeck, Germany  
+
+> 3
+
+Department of Computer Science, University of Freiburg, Germany 
+
+Abstract. In trajectory planning for autonomous driving, hybrid plan-ning architectures are often realized as a collection of disparate modules, each with its own objectives. This lack of a unifying principle can lead to inconsistencies between the initial and refined trajectory, resulting in suboptimal behavior. We address this by introducing DiffuSearch , a novel hybrid planner that uses a unified set of objectives across gener-ation and refinement. Our model encourages all components to follow the same shared driving goals: collision avoidance, drivable area compli-ance, comfort, and progress. DiffuSearch employs a two-stage architec-ture. First, a guided diffusion model generates a scene-consistent, joint trajectory prediction, using our driving objectives as differentiable guid-ance functions to implicitly steer the denoising process. Second, a Monte Carlo Tree Search (MCTS) in a discretized action space performs an explicit, local refinement of this proposal, leveraging the same driving objectives as its reward function. This synergistic design leverages the diffusion model’s strength in finding scene-consistent solutions combined with the explainable, constraint-aware refinement of MCTS. Experiments on nuPlan and interPlan reactive closed-loop benchmarks demonstrate that DiffuSearch achieves strong and often state-of-the-art performance, substantially reducing collisions and improving comfort, particularly in complex, interactive scenarios. Our ablation studies indicate that MCTS refinement is the main mechanism behind the gains, while sharing ob-jectives between implicit guidance and explicit search provides further consistent improvements. 
+
+Keywords: Autonomous Driving · Action Planning · Machine Learning 
+
+## 1 Introduction 
+
+In autonomous driving systems, trajectory planning is the vital link between per-ception and actuation. While modern deep learning-based methods offer flexible behavior in diverse traffic scenarios, they provide limited explainability and do not by themselves expose explicit safety checks that are essential for deployment. arXiv:2609.02252v1 [cs.RO] 2 Sep 2026 2 S. Hagedorn et al .Hybrid Trajectory Planning Varying Objectives  
+
+> Observation Initial Plan
+> Planner
+> Objective A Objective B
+> Refinement
+> Objective A Objective C Objective D
+
+Aligned Objectives 
+
+> Observation
+> Planner
+> Objective A Objective B Objective C
+> Refinement
+> Objective A Objective B Objective C Final Plan Final Plan Initial Plan
+> Consistent Consistent
+
+Fig. 1: Varying vs. unified driving objectives: Current hybrid planners use vary-ing objectives in different modules. This can lead to undesired effects, where the re-finement changes the initial plan to a completely different and suboptimal behavior. We use a shared set of driving objectives across modules to facilitate a continuous refinement of the initial trajectory. 
+
+Consequently, many state-of-the-art planners use hybrid approaches that apply a refinement stage to make the final trajectory better satisfy critical driving ob-jectives [5,7,21,23,47]. Unfortunately, this refinement stage is often disconnected from the initial proposal generator, with each module optimizing for its own ob-jectives (Fig. 1). This lack of a unifying principle can lead to inconsistencies where the refinement radically changes the initial plan rather than improving it, resulting in suboptimal behavior. We address this issue by proposing a model built on unified objectives, encouraging all components to work towards the same goal to achieve a continuous refinement of the trajectory. Further, our model is designed to meet the theoretical requirements for interactive and safe planning: The ideal planner would repeatedly interleave prediction and planning to model bidirectional interactions between agents [16]. However, the computational de-mand of this approach is prohibitive. A strong practical alternative is a joint prediction and planning model, which can implicitly capture these bidirectional interactions within a single, unified step [1,33,46,47]. Our method, DiffuSearch ,extends this concept to a two-stage architecture: a joint diffusion [18] model backbone followed by a Monte Carlo Tree Search (MCTS) refiner. This design combines the diffusion model’s ability to capture the joint, multi-modal data distribution of a traffic scene with the MCTS’s strength in performing focused, explainable optimization that explicitly evaluates constraint violations for the ego trajectory [4, 27, 44, 49]. The diffusion model first generates an initial tra-jectory proposal by leveraging classifier-free guidance [19], where differentiable functions representing our driving objectives (collision avoidance, drivable area compliance, comfort, and progress) implicitly steer the generation process. How-ever, since this implicit guidance cannot formally guarantee compliance, we use an explicit MCTS in a discretized action space to refine the plan, using the very same driving objectives as its reward function. This unified objective provides a strong inductive bias, supports explainability, and enables explicit constraint-aware refinement. Our contributions are threefold: DiffuSearch 3
+
+1. We present a novel trajectory planner, DiffuSearch , that combines a guided diffusion backbone with an MCTS refinement in action space, using an initial joint prediction as a strong prior to effectively confine the search space. 2. We show that MCTS refinement is the primary source of improvement, and that using the same objectives in classifier-free diffusion guidance and the MCTS reward provides additional gains. 3. We demonstrate that our model achieves competitive and state-of-the-art results in reactive closed-loop simulation across nuPlan and interPlan bench-marks with different background traffic agents. 
+
+## 2 Related Work 
+
+2.1 Hybrid Trajectory Planning 
+
+Deep learning-based trajectory planning for autonomous driving has focused on different paradigms throughout the past years. Many early methods used mono-lithic neural networks and imitation learning to directly regress the planned trajectory for the ego vehicle [2,10,43]. While flexibly adapting to diverse traffic scenarios, these methods lack explainability and safety guarantees [16]. Conse-quently, modular end-to-end architectures became popular, dividing the model into interpretable modules to facilitate introspection and introduce domain-knowledge, while still optimizing the whole model for the final planning task [3, 30, 45]. To reliably enforce safety-critical constraints, many models implement hybrid planning strategies that generate trajectory proposals with an (end-to-end) learned model and select or refine them based on interpretable driving objectives [5, 12, 21, 23]. Typical driving objectives comprise drivable area com-pliance, collision avoidance, comfort, and progress along the route [12, 37, 47]. However, trajectory refinement is often based on different driving objectives than in previous modules, which can lead to suboptimal solutions. We address this shortcoming by using a shared objective across proposal generation and refinement to improve model consistency and planning performance. 
+
+2.2 Diffusion Models 
+
+Denoising diffusion probabilistic models (DDPMs) are generative models that excel at capturing complex, multi-modal data distributions [13, 18]. A neural network, often a Transformer [28], is trained to iteratively denoise a sample, starting from pure Gaussian noise and conditioned on relevant context informa-tion. This is formally achieved by learning the score function sθ (xt, t ), which approximates the gradient of the log-probability of the noisy data distribution, 
+
+sθ (xt, t ) ≈ ∇ xt log p(xt) [36]. The key advantage of DDPMs for planning lies in their controllability at inference time via guidance. Classifier-free guidance [19] steers generation by adding a w-weighted corrective term derived from a differ-entiable objective function O(xt)
+
+ˆsθ (xt, t ) = sθ (xt, t ) − w∇xt O(xt, t ). (1) 4 S. Hagedorn et al .
+
+In autonomous driving, diffusion models have been applied to motion predic-tion [24], planning [37, 47], and traffic simulation [48]. Works like Diffusion Planner [47] have qualitatively shown that classifier-free guidance can generate safe and comfortable trajectories. Notably, they have not reported improvements through guidance on scale but only exemplarily. Moreover, implicit guidance of-fers no formal guarantees that the final trajectory complies with all constraints. This motivates the need for a subsequent refinement stage, which to date is dis-connected from the generative model’s own objectives [37, 38, 47]. DiffuSearch 
+
+addresses this disconnect by using the same driving objectives first for implicit diffusion guidance and then for explicit MCTS evaluation. 
+
+2.3 Monte Carlo Tree Search 
+
+Monte Carlo Tree Search (MCTS) is a heuristic search algorithm for sequential decision-making [11, 26, 35]. It incrementally builds a search tree by balancing the exploration of new action sequences with the exploitation of known high-reward paths, making it well-suited for refining an initial plan. In autonomous driving, MCTS is applied by framing planning as a search over a tree of future vehicle states and driving actions [14, 41]. However, MCTS is fundamentally it-erative and can be computationally expensive in vast search spaces without a strong prior to guide the search. Our work leverages this synergy: we use the high-quality trajectory from our diffusion model as a strong prior, enabling the MCTS to perform a focused, local refinement rather than a slow, unguided ex-ploration. A key design choice in MCTS-based planning is the definition of the search space. While some variants search in an abstract latent space [34], a com-mon approach in driving is to search in a discretized action space (typically acceleration and steering angle) [4, 27, 49]. This provides inherent explainabil-ity, as each tree branch is an interpretable maneuver, and allows for explicit constraint enforcement via the reward function for each branch. Recent hybrid planners have confirmed the value of using learned priors to guide this explicit search, e.g., HYPE [44] uses learned ego proposals, while MBAPPE [4] uses a learned world model to simulate the consequences of actions. End-to-end differentiable tree planners such as TPP [6] and DTPP [22] optimize learned latent pipelines, but sacrifice this explicit explainability. In contrast, no action-space MCTS planner has aligned the reward function with the objective of the learned prior gener-ator. DiffuSearch closes this gap by using the same shared driving objectives for diffusion guidance and MCTS refinement, making the search focus on a prior already shaped by similar preferences. 
+
+## 3 Methodology 
+
+The theoretical challenges of autonomous driving, balancing global scene under-standing with local, safety-critical optimization, motivate a hybrid architectural design. Our proposed method, DiffuSearch , addresses this by combining a gen-erative diffusion model with a search-based model for explicit refinement. This DiffuSearch 5Map & Route Static Objects 
+
+Diffusion Transformer MCTS in Action Space 
+
+> Encoder Decoder
+> Classifier-Free Guidance
+> Action Selection
+> Prior
+> Centered on initial Ego Plan from
+> Denoising PUCT
+> Ego State Agents History
+> Simulation
+> Kinematic Model
+> Scene State
+> Map & Route Agents Static Objects Ego State
+> Scene State
+> Map & Route Agents Static Objects Ego State Ego Motion Compensation Track Joint Prediction
+> Evaluation
+
+Joint Prediction Inputs Ego Trajectory Refinement  
+
+> Reward
+> On-Road No Collision Progress Comfort No Collision On-Road Progress Comfort
+> Backup
+
+Fig. 2: DiffuSearch model overview. A diffusion transformer takes object-level in-puts to make a joint prediction, guided by differentiable driving objective functions. The ego trajectory of this joint prediction is used as the prior distribution for MCTS refinement. In a focused search around the initial ego plan, action sequences are se-lected with the PUCT rule and simulated using a kinematic model for the ego vehicle and diffusion-based joint predictions for other agents. The reward consists of the same driving objectives used to guide the diffusion model, facilitating a consistent refinement of the initial ego trajectory. 
+
+two-stage process, illustrated in Fig. 2, is built upon a unified set of driving objectives that guide both stages, encouraging a coherent planning pipeline. 
+
+3.1 Joint Prediction via Guided Diffusion 
+
+The first stage of our framework is a generative model tasked with generating a scene-consistent joint prediction. This joint prediction serves as a strong prior for the subsequent refinement stage, constraining the search space to a region around this initial solution. We formulate joint prediction as a conditional gener-ation problem, where the goal is to jointly generate future trajectories for the ego vehicle and all surrounding agents in a fixed radius, conditioned on the current scene context (Fig. 2). For this, we employ a guided diffusion model, trained via a simple imitation objective on trajectory data to learn the underlying distribu-tion of expert driving behavior from a large-scale dataset. Following GUMP [20], 
+
+STR [37], and DiffusionPlanner [47], we choose a DiT -architecture [28] as our backbone. At each denoising step t, the trajectory score is steered by the learned data distribution and by differentiable driving objectives 
+
+O(xt) = Ocollision (xt) + Odrivable (xt) + Oprogress (xt) + Ocomfort (xt). (2) Here, xt is the generated trajectory, and the objective terms penalize collision risk, deviation from the drivable area, lack of progress, and uncomfortable ma-neuvers. The gradient −∇O (xt) implicitly guides denoising towards safe, effi-cient, and comfortable trajectories, yielding a single, scene-consistent joint tra-jectory proposal already biased towards satisfying our core driving principles. Using one objective across modules is a deliberate trade-off: specialized mod-ules can tune local behavior more strongly toward individual objectives, but 6 S. Hagedorn et al .
+
+may also create incompatible preferences between proposal generation and re-finement. We therefore use the shared objective as a conservative coordination mechanism, without claiming it is universally preferable to specialized modular designs. 
+
+Collision. Following Zheng et al . [47], we penalize proximity to other agents using the signed distance D between the ego bounding box and each agent M
+
+at pose τ ∈ N, τ < τ max along trajectory xτt . Distances below sensitivity radius 
+
+r receive an exponential penalty shaped by Ψ (D) := eD − D, with a stronger penalty for overlap (D < 0) . wcollision controls penalty weight and sensitivity, and ϵ avoids zero-division 
+
+Ocollision =
+
+P 
+
+> M,τ
+
+1DτM >0 · Ψ (wcollision · max(1 − DτM 
+
+> r
+
+, 0)) 
+
+P 
+
+> M,τ
+
+1DτM >0 + ϵ
+
++
+
+P 
+
+> M,τ
+
+1DτM <0 · Ψ (wcollision · max(1 − DτM 
+
+> r
+
+, 0)) 
+
+P 
+
+> M,τ
+
+1DτM <0 + ϵ . (3) 
+
+Drivable Area Compliance. We compute a differentiable cost map C with a Euclidean Signed Distance Field [7, 47] and penalize any ego pose xτt, ego outside the drivable area 
+
+Odrivable =
+
+P 
+
+> τ
+
+Ψ (wdrivable · C(xτt, ego )) 
+
+P 
+
+> τ
+
+1C(xτt, ego )>0 + ϵ . (4) 
+
+Progress. We encourage efficient progress by penalizing squared deviations from target speed vtarget , but only outside tolerance δ. For desired speed range 
+
+[vlow , v high ] with vhigh ≤ vlimit , we set vtarget = vlow +vhigh  
+
+> 2
+
+and δ = vhigh −vlow  
+
+> 2
+
+,yielding 
+
+Oprogress = wprogress · max dxτt, ego 
+
+dτ − vtarget − δ, 0
+
+!2
+
+. (5) 
+
+Comfort. We penalize excessive jerk, i.e., the change rate of acceleration, be-yond longitudinal and lateral jerk thresholds jlon, max and jlat, max 
+
+Ocomfort = wcomfort · Eτ
+
+ 12 max jlon,max − d3xτt, ego 
+
+dτ 3
+
+> lon
+
+!
+
+∆τ 3
+
+> lon
+
+, 0
+
+!2
+
++ 12 max jlat,max − d3xτt, ego 
+
+dlat τ 3
+
+!
+
+∆τ 3
+
+> lat
+
+, 0
+
+!2 .
+
+(6) Selecting wcollision > w drivable >> w progress ≈ wcomfort prioritizes safety over comfort for the generated initial ego trajectory. DiffuSearch 7
+
+3.2 MCTS in Action Space 
+
+While the diffusion model produces a globally plausible plan, it does not by it-self provide explicit constraint checks required for safety-critical deployment. The second stage of DiffuSearch is therefore an MCTS planner that performs an explicit, interpretable refinement of the initial proposal. Following recent works in autonomous driving [4,44], we define the search over a discretized action space composed of combined longitudinal (acceleration α) and lateral (steering angle 
+
+φ) command tuples a ˆ= ( α, φ ). This approach provides two key benefits: explain-ability and explicit constraint enforcement throughout the search steps (Fig. 2). 
+
+Selection. Starting from the root node, which represents the current vehicle state, the algorithm recursively traverses the tree by selecting the child node that maximizes the PUCT (Polynomial Upper Confidence bound for Trees) cri-terion [32]. This ensures a balance between exploiting high-value branches and exploring less-visited ones. For a given state s, the next action a is selected as 
+
+at = arg max  
+
+> a
+
+Q(s, a ) + cpuct · P (s, a )
+
+pP  
+
+> b
+
+N (s, b )1 + N (s, a )
+
+!
+
+. (7) where Q(s, a ) is the mean action value (derived from reward R, cf. Eq. (9)), 
+
+N (s, a ) is the visit count, cpuct is a hyperparameter balancing exploration, and 
+
+P (s, a ) is the prior probability of selecting action a. Unlike methods that use a broad prior [4, 44], we use the diffusion-generated ego trajectory to provide a strong, focused prior. Specifically, P (s, a ) is modeled as a tight Gaussian distri-bution centered on the discrete action that is closest to the action prescribed by our diffusion proposal at that timestep. This focuses the MCTS search effort on a local, scene-consistent region of the action space. 
+
+Expansion. When selection reaches a leaf node, all feasible actions from the dis-cretized set create child nodes. Feasibility follows continuity constraints [4] on acceleration and steering changes, promoting comfort, physical feasibility, and locality. 
+
+Simulation. When expanding a leaf node, simulation updates the scene based on the action and evaluates the resulting state. A kinematic bicycle model trans-fers the ego action (α, φ ) into a new pose, promoting physically plausible ego motion under normal operating conditions [31]. As with any low-order vehicle model, this approximation can become inaccurate under extreme lateral acceler-ation or tire-slip regimes. All other agents are updated using the joint predictions from our diffusion model at 10 Hz. This provides a realistic world model for the MCTS to plan against and is a reasonable assumption due to the locality of our refinement. The value of a simulated trajectory is explicitly calculated as a re-ward R(xego ) by summing the same four driving objectives used for the implicit diffusion guidance 
+
+R(xego ) = R(xego )collision + R(xego )drivable + R(xego )progress + R(xego )comfort .
+
+(8) The guidance functions in Eq. (3) to Eq. (6) are non-negative costs O ∈ [0 , +∞)
+
+with 0 as ideal outcome, so we use inverse rewards R ∝ −O ∈ (−∞ , 0] . We use 8 S. Hagedorn et al .
+
+the same weights wcollision , wdrivable , wprogress and wcomfort as for the guidance functions (Sec. 3.1), ensuring that MCTS optimizes the objectives that guided proposal generation. 
+
+Backpropagation. The simulation reward R is backpropagated to the root node, updating visit counts N (s, a ) and mean action values Q(s, a ) along the traversed search path 
+
+N (s, a ) ← N (s, a ) + 1 ; Q(s, a ) ← N (s, a ) · Q(s, a ) + R(xego )
+
+N (s, a ) + 1 . (9) By repeatedly performing these steps, the MCTS builds a focused search tree in action space, using the diffusion proposal as its central prior. 
+
+Final Trajectory Planning. After a fixed computational budget, e.g., 256 search steps, the optimal trajectory is retrieved from the tree. Starting from root state s0, we greedily follow the child with the highest visit count N (s, a ),yielding action sequence A∗ = ( a∗
+
+> 0
+
+, a ∗
+
+> 1
+
+, . . . , a ∗
+
+> τmax −1
+
+), with a∗ 
+
+> τ
+
+ˆ=( α∗ 
+
+> τ
+
+, φ ∗ 
+
+> τ
+
+), and state sequence S∗ = ( s0, s ∗
+
+> 1
+
+, . . . , s ∗ 
+
+> τmax
+
+)
+
+a∗ 
+
+> τ
+
+= arg max  
+
+> a∈A (s∗
+> τ)
+
+N (s∗ 
+
+> τ
+
+, a ) (10) where A(s∗ 
+
+> τ
+
+) is the set of all possible actions from state s∗ 
+
+> τ
+
+. A kinematic bicycle model transforms this action sequence into the final ego trajectory. Since the plan remains contingent on the predicted scene evolution, we include the emergency braking mechanism used by most hybrid planners [12, 29, 37, 40, 47]. However, this is scarcely needed since at 10 Hz replanning, DiffuSearch quickly adapts to atypical scene development in the next cycle. 
+
+3.3 Experimental Setup Datasets, Benchmarks & Metrics. We develop our DiffuSearch model in the nuPlan framework [25], which contains ∼1,300 hours real world driving data. Since many works have shown that open-loop evaluation weakly correlates with real world driving behavior [9, 12, 15], we focus on reactive closed-loop simula-tion. nuPlan’s closed-loop simulator runs each scenario for 15 s at 10 Hz, starting from a real traffic situation. While the ego vehicle is controlled by the planner and a low-level controller, other traffic agents are updated with a rule-based In-telligent Driver Model ( IDM ) [39]. Alternatively, learned, reactive SMART agents provide versatile behavior to test more complex interactions in closed-loop simu-lation [15, 42]. On nuPlan, we use these two closed-loop benchmarks to measure the reactive R-score and the SMART -reactive SR-score. Both scores are normalized to [0 , 100] and are derived from the number of collisions (NC), time-to-collision (TTC), drivable area compliance (DAC), progress, and comfort [12, 25]. Results are reported on three data splits: Val14, Test14, and Test14-hard, which con-tain 1118, 280, and 272 traffic scenarios, respectively. Test14-hard is a curated data split of difficult scenarios with a high degree of interaction between traffic participants like unprotected turns or tight merges [8], and hence suitable to dif-ferentiate the capability of planners with similar performance on the standard DiffuSearch 9DiffuSearch (Ours)  Scenario 1 Scenario 2 Scenario 3 Scenario 4 Scenario 5 DiffusionPlanner      
+
+> Ego Vehicle Ego Trajectory Surrounding Vehicles Surrounding Trajectories Pedestrians Ped. Trajectories
+
+Fig. 3: Closed-loop behavior of DiffuSearch (top row) compared to the strongest baseline DiffusionPlanner (bottom row) on five nuPlan Test14-hard-R scenarios. 
+
+DiffuSearch corrects collision-prone diffusion proposals, keeps larger safety margins, waits for pedestrians, and proactively changes lanes in critical situations. 
+
+Val14 split. To test cross-benchmark transfer beyond nuPlan, we additionally use the interPlan lane-change benchmark with low-, medium-, and high-density traffic settings [17]. 
+
+Baseline Models. Our model is compared against the best other hybrid plan-ners in nuPlan. DTPP and DiffusionPlanner are the most similar to our work, as they apply a learned tree search, and a diffusion backbone, respectively (see Sec. 3). To facilitate a clear investigation on the effect of MCTS-based trajec-tory refinement and aligned objectives in diffusion guidance and MCTS reward, we use the same pretrained diffusion backbone as DiffusionPlanner for our experiments with DiffuSearch .
+
+## 4 Experiments & Results 
+
+Comprehensive quantitative and qualitative results of our DiffuSearch plan-ner are presented in this section. We structure the analysis around the central insights gained on the nuPlan splits and the interPlan lane-change benchmark. 
+
+4.1 DiffuSearch excels on hard, interactive scenarios. 
+
+A comparison of DiffuSearch with the best hybrid planners in reactive (R) and 
+
+SMART -reactive (SR) closed-loop simulation on the three nuPlan data splits is shown in Tab. 1. DiffuSearch achieves state-of-the-art results on all SR bench-marks and two out of three R benchmarks. Compared to other models, our method performs especially well in hard, interactive traffic scenarios. Specifically, our method generates an improvement of up to 1.82% compared to the strong 
+
+DiffusionPlanner baseline and up to 4.92% over the nuPlan challenge win-ner PDM-Hybrid on Test14-hard-SR. On Val14-R, DiffuSearch lies slightly be-hind the PDM-Hybrid baseline. This could be explained by the strong centerline-following prior of this baseline. The standard driving scenarios of Val14 together 10 S. Hagedorn et al .                                                            
+
+> Table 1: Planner evaluation on nuPlan reactive closed-loop benchmarks. Rmeans closed-loop simulation with nuPlan’s reactive IDM agents [39]. SR is measured using SMART -reactive agents [15, 42]. Bold indicates the best-performing method, and underline indicates the second-best.
+> Planner Val14 Test14 Test14-hard R↑SR ↑R↑SR ↑R↑SR ↑
+> PDM-Hybrid [12] 92.11 89.44 91.28 90.24 76.07 72.15
+> GameFormer [23] 79.78 78.05 82.05 79.33 67.05 62.48
+> DTPP [22] 63.95 62.41 73.88 64.82 47.47 54.65
+> PLUTO [7] 90.48 83.88 90.29 85.27 76.88 69.36
+> DiffusionPlanner [47] 91.33 88.84 92.28 88.97 78.79 75.25
+> DiffuSearch (ours) 91.39 89.55 93.03 91.12 79.98 77.07
+
+with the cautious behavior of uniformly lane-following IDM agents in reactive closed-loop simulation lets PDM-Hybrid naturally blend in. However, as soon as interactive SMART agents challenge the planner with more realistic and diverse behaviors, our method outperforms the baseline. When increasing the difficulty further and switching to the harder scenarios in Test14-hard, the generative backbone and the MCTS refinement let DiffuSearch find better solutions for complex situations. Fig. 3 shows a qualitative comparison of our model with the strongest baseline on this data split. Since both models use the same, pre-trained diffusion backbone, the difference is consistent with the effect of applying guidance and MCTS refinement. Fig. 3 illustrates the type of local repair tar-geted by our refiner: DiffuSearch steers diffusion-based trajectories away from collision-prone interactions with other vehicles and pedestrians, smooths abrupt maneuvers, and even changes the lane after anticipating a critical situation with pedestrians walking at the edge of the road. To test whether this advantage transfers beyond the nuPlan splits, we additionally evaluate both planners on the interPlan lane-change benchmark, which stresses repeated lane changes across dense reactive traffic [17]. The results in Tab. 2 show that DiffuSearch con-sistently outperforms DiffusionPlanner across all traffic densities and under both IDM and SMART background traffic. The gains are particularly pronounced in medium- and high-density settings, where safe progress depends on repeated lo-cal corrections and robust interaction handling. This supports our central claim that aligned guidance and explicit local search are most beneficial when the planner must negotiate tightly coupled maneuvers rather than merely follow the lane. 
+
+4.2 MCTS refinement consistently improves results. 
+
+In the ablation experiments shown in Tab. 3, we investigate the influence of classifier-free diffusion guidance when generating the initial joint prediction and the subsequent MCTS refinement of the ego trajectory in action space. The results are consistent across all data splits and benchmarks: adding guidance alone does not improve planning performance. More severely, it even decreases DiffuSearch 11 
+
+Table 2: Cross-benchmark evaluation on the interPlan lane-change bench-mark [17]. Reactive closed-loop scores are reported on the benchmark’s native [0 , 1] 
+
+scale across three traffic densities. 
+
+Planner IDM SMART 
+
+Low Med. High Low Med. High 
+
+DiffusionPlanner [47] 0.642 0.583 0.598 0.583 0.532 0.350 
+
+DiffuSearch (ours) 0.688 0.679 0.629 0.630 0.578 0.419 Table 3: Ablation of guidance and MCTS refinement. Guidance alone degrades scores, MCTS alone improves them, and their aligned combination performs best.                                                    
+
+> Planner Module Val14 Test14 Test14-hard Diffusion Guidance MCTS R↑SR ↑R↑SR ↑R↑SR ↑
+> DiffusionPlanner [47] ✓91.33 88.84 92.28 88.97 78.79 75.25
+> DiffuSearch (ours) ✓✓89.88 86.77 91.31 86.87 77.88 74.41
+> DiffuSearch (ours) ✓✓91.36 89.32 92.59 89.84 79.52 76.36
+> DiffuSearch (ours) ✓✓✓91.39 89.55 93.03 91.12 79.98 77.07
+
+the score by up to −1.45% on Val14-R and −2.1% on Test14-SR, which might explain why no quantitative results have been published so far. In contrast, adding MCTS refinement alone consistently leads to improvements of up to 
+
++1 .11% on Test14-hard-SR and never decreases planning performance. Finally, when combining diffusion guidance and MCTS refinement in action space, the best performance is achieved on all data splits and benchmarks. This is an un-expected result since diffusion guidance alone decreases performance. However, when combined with MCTS refinement, performance increases beyond simply adding up the impact of the individual design choices of diffusion and MCTS refinement. We hypothesize that this could be related to guidance function de-sign. Zheng et al . [47] report that classifier-free guidance delicately depends on the guidance functions’ properties. They state that guidance functions should ideally be sparse, i.e., only influence denoising in critical situations, address higher-order state derivatives indirectly, and create smooth and continuous gradi-ents of consistent magnitude. Combining the learned denoising gradient sθ (xt, t )
+
+with a hand-crafted objectives gradient ∇xt O(xt, t ) is susceptible to emergent effects, where the diffusion model is pushed into regions outside of the distribu-tion encountered during training without guidance. This could locally optimize the generated trajectory w.r.t. the guidance objectives but result in globally inconsistent solutions. Adding MCTS refinement smooths the inconsistencies caused by the described emerging effects and even seems to benefit from the local “hints” provided through guidance. This interpretation is corroborated by the trajectory-consistency analysis in Tab. 4. Compared to PLUTO , which also applies rule-based post-processing to a learned proposal [7], DiffuSearch yields substantially smaller deviations between the initial and refined trajectories in terms of position and speed while maintaining similarly small heading correc-tions. The refiner therefore acts as a local repair mechanism rather than replacing 12 S. Hagedorn et al .
+
+Table 4: Trajectory consistency between the initial and refined trajectory on nu-Plan Test14. Lower values indicate that the refinement stays closer to the original proposal.                                                      
+
+> Agents Planner ∆L2 [m] ∆Heading [rad] ∆Speed [m/s]
+> IDM PLUTO [7] 1.469 ±1.410 0.015 ±0.012 0.474 ±0.432
+> DiffuSearch (ours) 0.754 ±0.484 0.016 ±0.020 0.382 ±0.381
+> SMART PLUTO [7] 3.373 ±2.713 0.030 ±0.031 1.061 ±0.804
+> DiffuSearch (ours) 1.859 ±1.810 0.022 ±0.028 0.919 ±1.241 64 128 256 512
+> Number of MCTS search steps k[#]
+> 0.0 0.1 0.2 0.3 0.4 0.5
+> Diffusion + MCTS time [s]
+> Diffusion + MCTS Diffusion MCTS CL-R Score 0.922 0.924 0.926 0.928 0.930 0.932 0.934
+> CL-R Score
+
+Fig. 4: Runtime and performance vs. MCTS search steps. Diffusion dominates runtime for small budgets, while MCTS adds linearly with the number of search steps and improves performance until local refinement saturates around 256 steps. Runtime is measured on a Python implementation without runtime optimizations. The CL-R score axis is zoomed to make the differences better visible. 
+
+the diffusion proposal with a qualitatively different plan. This is the behavior intended with the unified objectives: the generator already places the plan in a promising region of the solution space, and MCTS refines the same objectives locally. In summary, the ablation results suggest that aligning the objectives across the model synchronizes trajectory generation and refinement, leading to a more consistent planning process. The additional search cost of this local refinement is analyzed in Fig. 4. For small search budgets, the majority of the runtime is spent in the diffusion back-bone, while the MCTS contribution grows approximately linearly with the num-ber of search steps. At the same time, planning performance improves steadily until the local refinement converges around 256 search steps, which is therefore the operating point used throughout our experiments. This trade-off highlights that the explicit search is not used for broad global exploration, but for focused local improvement around a strong learned prior. 
+
+4.3 Unified objectives provide additional gains. 
+
+The previous experiments show that guidance and MCTS refinement together consistently yield the best planning performance. In a second ablation study we switch off individual components of the guidance objective O and the re-ward R (cf. Sec. 3). The results are shown in Tab. 5. In summary, each compo-DiffuSearch 13 
+
+Table 5: Ablation study of guidance and reward components. The impact of individual objective terms for both guidance and MCTS reward is evaluated on the Test14-hard benchmark. The final row represents the full model configuration.                                                                      
+
+> Guidance Objective MCTS Reward Test14-hard Collision Drivable Progress Comfort Collision Drivable Progress Comfort R↑
+> ✓✓✓✓✓✓✓79.44
+> ✓✓✓✓✓✓✓78.77
+> ✓✓✓✓✓✓✓79.18
+> ✓✓✓✓✓✓✓79.01
+> ✓✓✓✓✓✓✓42.53
+> ✓✓✓✓✓✓✓72.58
+> ✓✓✓✓✓✓✓66.24
+> ✓✓✓✓✓✓✓79.34
+> ✓✓✓✓✓✓✓✓79.98
+
+Table 6: Metric comparison against DiffusionPlanner with SMART agents. 
+
+DiffuSearch improves NC, TTC, and comfort while maintaining competitive DAC and progress.                                                     
+
+> Split Planner Score ↑NC ↑TTC ↑DAC ↑Comfort ↑Progress ↑
+> Val14 DiffusionPlanner [47] 88.84 97.83 92.41 99.82 70.34 96.93
+> DiffuSearch (ours) 89.55 98.92 94.03 99.37 86.53 96.38 Test14 DiffusionPlanner [47] 88.97 97.83 94.22 99.28 72.20 96.03
+> DiffuSearch (ours) 91.12 98.19 95.67 99.28 87.73 96.03 Test14-hard DiffusionPlanner [47] 75.25 96.63 90.26 98.50 65.92 90.26
+> DiffuSearch (ours) 79.98 98.50 94.01 97.00 83.90 88.76
+
+nent contributes to the overall performance and using the same objective set in diffusion guidance and MCTS reward yields the best observed planned trajec-tory. Nevertheless, there are large differences in the importance of the individual components. Generally, switching off guidance objectives leads to much smaller performance decreases than switching off MCTS rewards. This is expected, when considering the role these objectives play in the two modules. Diffusion guidance objectives are designed to only affect the generated trajectory when constraints are violated. They selectively adapt the imitation-based joint prediction that serves as the initial ego plan. Conversely, the MCTS shapes the final plan based on the defined reward, which directly penalizes violations during refinement. Ablating a component of the reward means removing this term from the opti-mization problem, so that the final trajectory is no longer directly penalized for violating this objective. An apparent outlier is the comfort reward, which hardly changes the planner’s behavior. This result is grounded in the kinematic bicycle model used in our MCTS refinement. It promotes that the planned trajectory already is smooth and feasible for the vehicle without the comfort reward. Al-together, our result suggests that unified objectives in diffusion guidance and MCTS reward provide additional gains for trajectory planning. 14 S. Hagedorn et al .
+
+4.4 DiffuSearch reduces collisions and boosts comfort. 
+
+Finally, we conduct a detailed study of individual driving metrics to understand how our model behaves differently compared to the strongest baseline to achieve state-of-the-art scores on various nuPlan benchmarks. Since DiffuSearch excels in realistic, interactive traffic scenarios, we perform this study on SR bench-marks. We provide a breakdown of the individual driving metrics in Tab. 6. Overall, the results are consistent with the priority of driving objectives we for-mulated in Sec. 3, namely wcollision > w drivable >> w progress ≈ wcomfort . The safety-critical and most relevant objective of collision avoidance (NC) improves as the number of collisions reduces. Moreover, DiffuSearch increases the time-to-collision (TTC), resulting in larger safety margins to adjacent vehicles, pedes-trians, and bicycles, as exemplarily shown in Fig. 3. This improvement in collision avoidance results in unchanged or slightly decreased drivable area compliance (DAC) and progress. The planner prioritizes collision avoidance over drivable area compliance and, in critical scenarios, prevents collisions by swerving into parking bays and onto the shoulder (Fig. 3, scenario 2). Due to the less offensive driving behavior showcased in scenario 3 of Fig. 3, our model progresses slightly slower compared to the strongest baseline. This behavior is particularly accept-able as it serves the primary objective of collision avoidance. Finally, though least important, DiffuSearch considerably improves ride comfort due to the kinematic model used in MCTS refinement by up to +18% .
+
+## 5 Conclusion & Future Work 
+
+In this paper, we introduced DiffuSearch , a novel hybrid planner that syner-gistically combines a guided diffusion model with an MCTS refiner. Our core contribution is the use of a unified set of driving objectives, which are used as implicit guidance for diffusion and as explicit rewards for MCTS. Experiments on nuPlan and interPlan closed-loop benchmarks show that the combination of diffusion and an MCTS tightly focused around a learned prior already achieves strong performance, while sharing objectives across both stages provides addi-tional improvements, consistently reducing collisions and improving ride com-fort, particularly in challenging, interactive scenarios. Future work will focus on two main extensions. First, we will incorporate an error feedback mechanism, allowing the prediction model to learn from past errors and improve its temporal consistency during closed-loop inference. Second, we aim to extend DiffuSearch 
+
+to handle multi-modal proposals, enabling the MCTS to explicitly reason over distinct strategic maneuvers in ambiguous scenarios. We believe these exten-sions, built upon the strong performance of our hybrid two-stage planner, are key steps toward creating even more robust and intelligent autonomous driving systems. DiffuSearch 15 
+
+## References 
+
+1. Bansal, M., Krizhevsky, A., Ogale, A.: Chauffeurnet: Learning to drive by imitating the best and synthesizing the worst. arXiv preprint arXiv:1812.03079 (2018) 2. Bojarski, M., Del Testa, D., Dworakowski, D., Firner, B., Flepp, B., Goyal, P., Jackel, L.D., Monfort, M., Muller, U., Zhang, J., et al.: End to end learning for self-driving cars. arXiv preprint arXiv:1604.07316 (2016) 3. Casas, S., Sadat, A., Urtasun, R.: Mp3: A unified model to map, perceive, predict and plan. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition. pp. 14403–14412 (2021) 4. Chekroun, R., Gilles, T., Toromanoff, M., Hornauer, S., Moutarde, F.: Mbappe: Mcts-built-around prediction for planning explicitly. In: IEEE IV Symposium 2024. pp. 2062–2069. IEEE (2024) 5. Chen, S., Jiang, B., Gao, H., Liao, B., Xu, Q., Zhang, Q., Huang, C., Liu, W., Wang, X.: Vadv2: End-to-end vectorized autonomous driving via probabilistic planning. arXiv preprint arXiv:2402.13243 (2024) 6. Chen, Y., Karkus, P., Ivanovic, B., Weng, X., Pavone, M.: Tree-structured policy planning with learned behavior models. arXiv preprint arXiv:2301.11902 (2023) 7. Cheng, J., Chen, Y., Chen, Q.: Pluto: Pushing the limit of imitation learning-based planning for autonomous driving. arXiv preprint arXiv:2404.14327 (2024) 8. Cheng, J., Chen, Y., Mei, X., Yang, B., Li, B., Liu, M.: Rethinking imitation-based planners for autonomous driving. In: 2024 IEEE International Conference on Robotics and Automation (ICRA). pp. 14123–14130. IEEE (2024) 9. Codevilla, F., Lopez, A.M., Koltun, V., Dosovitskiy, A.: On offline evaluation of vision-based driving models. In: Proceedings of the European conference on com-puter vision (ECCV). pp. 236–251 (2018) 10. Codevilla, F., Müller, M., López, A., Koltun, V., Dosovitskiy, A.: End-to-end driv-ing via conditional imitation learning. In: 2018 IEEE international conference on robotics and automation (ICRA). pp. 4693–4700. IEEE (2018) 11. Coulom, R.: Efficient selectivity and backup operators in monte-carlo tree search. In: International conference on computers and games. pp. 72–83. Springer (2006) 12. Dauner, D., Hallgarten, M., Geiger, A., Chitta, K.: Parting with misconceptions about learning-based vehicle motion planning. In: Conference on Robot Learning. pp. 1268–1281. PMLR (2023) 13. Dhariwal, P., Nichol, A.: Diffusion models beat gans on image synthesis. Advances in neural information processing systems 34 , 8780–8794 (2021) 14. Essalmi, K., Garrido, F., Nashashibi, F.: An extended horizon tactical decision-making for automated driving based on monte carlo tree search. In: 2025 IEEE Intelligent Vehicles Symposium (IV). pp. 1127–1132. IEEE (2025) 15. Hagedorn, S., Donkov, L., Distelzweig, A., Condurache, A.P.: When planners meet reality: How learned, reactive traffic agents shift nuplan benchmarks. arXiv preprint arXiv:2510.14677 (2025) 16. Hagedorn, S., Hallgarten, M., Stoll, M., Condurache, A.P.: The integration of pre-diction and planning in deep learning automated driving systems: A review. IEEE Transactions on Intelligent Vehicles (2024) 17. Hallgarten, M., Zapata, J., Stoll, M., Renz, K., Zell, A.: Can vehicle motion plan-ning generalize to realistic long-tail scenarios? arXiv:2404.07569 (2024) 18. Ho, J., Jain, A., Abbeel, P.: Denoising diffusion probabilistic models. Advances in neural information processing systems 33 , 6840–6851 (2020) 16 S. Hagedorn et al .19. Ho, J., Salimans, T.: Classifier-free diffusion guidance. arXiv preprint arXiv:2207.12598 (2022) 20. Hu, Y., Chai, S., Yang, Z., Qian, J., Li, K., Shao, W., Zhang, H., Xu, W., Liu, Q.: Solving motion planning tasks with a scalable generative model. In: European Conference on Computer Vision. pp. 386–404. Springer (2024) 21. Hu, Y., Yang, J., Chen, L., Li, K., Sima, C., Zhu, X., Chai, S., Du, S., Lin, T., Wang, W., et al.: Planning-oriented autonomous driving. In: Proceedings of the IEEE/CVF conference on computer vision and pattern recognition. pp. 17853– 17862 (2023) 22. Huang, Z., Karkus, P., Ivanovic, B., Chen, Y., Pavone, M., Lv, C.: Dtpp: Differ-entiable joint conditional prediction and cost evaluation for tree policy planning in autonomous driving. In: 2024 IEEE International Conference on Robotics and Automation (ICRA). pp. 6806–6812. IEEE (2024) 23. Huang, Z., Liu, H., Lv, C.: Gameformer: Game-theoretic modeling and learning of transformer-based interactive prediction and planning for autonomous driving. In: Proceedings of the IEEE/CVF International Conference on Computer Vision. pp. 3903–3913 (2023) 24. Jiang, C., Cornman, A., Park, C., Sapp, B., Zhou, Y., Anguelov, D., et al.: Motion-diffuser: Controllable multi-agent motion prediction using diffusion. In: Proceed-ings of the IEEE/CVF conference on computer vision and pattern recognition. pp. 9644–9653 (2023) 25. Karnchanachari, N., Geromichalos, D., Tan, K.S., Li, N., Eriksen, C., Yaghoubi, S., Mehdipour, N., Bernasconi, G., Fong, W.K., Guo, Y., et al.: Towards learning-based planning: The nuplan benchmark for real-world autonomous driving. In: 2024 IEEE International Conference on Robotics and Automation (ICRA). pp. 629–636. IEEE (2024) 26. Kocsis, L., Szepesvári, C.: Bandit based monte-carlo planning. In: European con-ference on machine learning. pp. 282–293. Springer (2006) 27. Niu, T., Zhang, K., Gan, Z., Ding, W.: Planning by simulation: Motion plan-ning with learning-based parallel scenario prediction for autonomous driving. arXiv preprint arXiv:2411.09887 (2024) 28. Peebles, W., Xie, S.: Scalable diffusion models with transformers. In: Proceedings of the IEEE/CVF international conference on computer vision. pp. 4195–4205 (2023) 29. Phan-Minh, T., Howington, F., Chu, T.S., Tomov, M.S., Beaudoin, R.E., Lee, S.U., Li, N., Dicle, C., Findler, S., Suarez-Ruiz, F., et al.: Driveirl: Drive in real life with inverse reinforcement learning. In: 2023 IEEE International Conference on Robotics and Automation (ICRA). pp. 1544–1550. IEEE (2023) 30. Renz, K., Chitta, K., Mercea, O.B., Koepke, A., Akata, Z., Geiger, A.: Plant: Explainable planning transformers via object-level representations. arXiv preprint arXiv:2210.14222 (2022) 31. Riekert, P., Schunck, T.E.: Zur fahrmechanik des gummibereiften kraftfahrzeugs. Ingenieur-Archiv 11 (3), 210–224 (1940) 32. Rosin, C.D.: Multi-armed bandits with episode context. Annals of Mathematics and Artificial Intelligence 61 (3), 203–230 (2011) 33. Sadat, A., Ren, M., Pokrovsky, A., Lin, Y.C., Yumer, E., Urtasun, R.: Jointly learn-able behavior and trajectory planning for self-driving vehicles. In: 2019 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS). pp. 3949– 3956. IEEE (2019) 34. Schrittwieser, J., Antonoglou, I., Hubert, T., Simonyan, K., Sifre, L., Schmitt, S., Guez, A., Lockhart, E., Hassabis, D., Graepel, T., et al.: Mastering atari, go, chess and shogi by planning with a learned model. Nature 588 (7839), 604–609 (2020) DiffuSearch 17 35. Silver, D., Huang, A., Maddison, C.J., Guez, A., Sifre, L., Van Den Driessche, G., Schrittwieser, J., Antonoglou, I., Panneershelvam, V., Lanctot, M., et al.: Master-ing the game of go with deep neural networks and tree search. nature 529 (7587), 484–489 (2016) 36. Song, Y., Sohl-Dickstein, J., Kingma, D.P., Kumar, A., Ermon, S., Poole, B.: Score-based generative modeling through stochastic differential equations. arXiv preprint arXiv:2011.13456 (2020) 37. Sun, Q., Wang, H., Zhan, J., Nie, F., Wen, X., Xu, L., Zhan, K., Jia, P., Lang, X., Zhao, H.: Generalizing motion planners with mixture of experts for autonomous driving. In: 2025 IEEE International Conference on Robotics and Automation (ICRA). pp. 6033–6039. IEEE (2025) 38. Sun, Q., Zhang, S., Ma, D., Shi, J., Li, D., Luo, S., Wang, Y., Xu, N., Cao, G., Zhao, H.: Large trajectory models are scalable motion predictors and planners. arXiv preprint arXiv:2310.19620 (2023) 39. Treiber, M., Hennecke, A., Helbing, D.: Congested traffic states in empirical ob-servations and microscopic simulations. Physical review E 62 (2), 1805 (2000) 40. Vitelli, M., Chang, Y., Ye, Y., Ferreira, A., Wołczyk, M., Osiński, B., Niendorf, M., Grimmett, H., Huang, Q., Jain, A., et al.: Safetynet: Safe planning for real-world self-driving vehicles using machine-learned policies. In: 2022 International Conference on Robotics and Automation (ICRA). pp. 897–904. IEEE (2022) 41. Wen, Q., Gong, Z., Zhou, L., Zhang, Z.: Monte carlo tree search for behavior planning in autonomous driving. In: 2024 IEEE International Symposium on Safety Security Rescue Robotics (SSRR). pp. 117–124. IEEE (2024) 42. Wu, W., Feng, X., Gao, Z., Kan, Y.: Smart: Scalable multi-agent real-time motion generation via next-token prediction. Advances in Neural Information Processing Systems 37 , 114048–114071 (2024) 43. Xu, H., Gao, Y., Yu, F., Darrell, T.: End-to-end learning of driving models from large-scale video datasets. In: Proceedings of the IEEE conference on computer vision and pattern recognition. pp. 2174–2182 (2017) 44. Yu, H., Jordan, J., Schmidt, J., Lindner, S., Canevaro, A., Stork, W.: Hype: Hybrid planning with ego proposal-conditioned predictions. arXiv preprint arXiv:2510.12733 (2025) 45. Zeng, W., Luo, W., Suo, S., Sadat, A., Yang, B., Casas, S., Urtasun, R.: End-to-end interpretable neural motion planner. In: Proceedings of the IEEE/CVF conference on computer vision and pattern recognition. pp. 8660–8669 (2019) 46. Zheng, W., Song, R., Guo, X., Zhang, C., Chen, L.: Genad: Generative end-to-end autonomous driving. In: European Conference on Computer Vision. pp. 87–104. Springer (2024) 47. Zheng, Y., Liang, R., Zheng, K., Zheng, J., Mao, L., Li, J., Gu, W., Ai, R., Li, S.E., Zhan, X., et al.: Diffusion-based planning for autonomous driving with flexible guidance. arXiv preprint arXiv:2501.15564 (2025) 48. Zhong, Z., Rempe, D., Xu, D., Chen, Y., Veer, S., Che, T., Ray, B., Pavone, M.: Guided conditional diffusion for controllable traffic simulation. arXiv preprint arXiv:2210.17366 (2022) 49. Ziegler, C., Adamy, J.: Anytime tree-based trajectory planning for urban driving. IEEE Open Journal of Intelligent Transportation Systems 4, 48–57 (2023)

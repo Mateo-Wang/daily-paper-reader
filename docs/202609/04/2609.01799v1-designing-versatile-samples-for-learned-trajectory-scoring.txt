@@ -1,0 +1,556 @@
+Title: Designing Versatile Samples for Learned Trajectory Scoring
+
+URL Source: https://arxiv.org/pdf/2609.01799v1
+
+Published Time: Thu, 03 Sep 2026 00:14:35 GMT
+
+Number of Pages: 10
+
+Markdown Content:
+# Designing Versatile Samples for Learned Trajectory Scoring 
+
+## Yaguang Li 1, Jiaru Zhang 1* , Chuheng Wei 1, Can Cui 2, Ziran Wang 1
+
+## Purdue University 1, Bosch Artifical Intelligence Center 2
+
+{yaguangl, jiaru }@purdue.edu 
+
+## Abstract 
+
+Many current end-to-end driving policies emit a pool of candidate trajectories and select one, which makes selec-tion a separable component: a scorer can be retrained while the planner, its backbone, and its trajectory gener-ator all stay frozen. However, many strong planners con-centrate their proposals around safe mode, providing lim-ited supervision near decision boundaries. In this work, we design a training dataset that provides more informative supervision for the scorer. In particular, we construct two generators that perturb the logged human trajectory along the two axes a vehicle can be displaced: laterally toward the drivable boundary and longitudinally toward a leading vehicle. The designed dataset produces more informative positive and negative samples than the base planner’s pro-posal pool. We attach a transformer-based scorer to two frozen generative planners, DiffusionDrive and MeanFuser, and train it on the NAVSIM navtrain dataset. The results of the experiments show that we achieve 90.1 EPDMS on Dif-fusionDrive and 90.4 EPDMS on MeanFuser when using ResNet-34, with 0.4 and 0.3 EPDMS respectively, from the designed training dataset. 
+
+## 1. Introduction 
+
+Early end-to-end driving policies typically regress a single trajectory from sensor inputs [13, 15]. However, a single output cannot express the multimodality of driving; there-fore, recent policies instead emit a set of candidates and select one from it [6, 22, 26, 35]. This splits the policy into two stages: a planner maps sensor inputs and ego status to a pool of candidate trajectories, and a scorer consumes the same scene context together with each candidate, ranks the pool, and emits one trajectory as the final output. The two stages are separable. A scorer can be retrained while the planner stays frozen, so the same scoring framework can be applied to different policies that expose candidate trajecto-ries, at a fraction of the cost of retraining the entire policy.  
+
+> *Corresponding author: Jiaru Zhang. (a) Proposal pool clusters
+> around safe trajectories
+> (b) Planner proposals +
+> designed training samples
+> longitudinal
+> samples
+> lateral
+> samples
+> violation
+> near-miss near-miss
+> violation
+> near-miss
+> violation
+
+Figure 1. Previous selection-based methods (a) are supervised only on the planner’s own proposal pool (blue), whose candi-dates overlap heavily and are mostly collision-free. We augment each scene with synthetic trajectories (b) from lateral (orange) and longitudinal (green) displacement generators, which induce near-misses and true violations. 
+
+Decomposing the policy into a planner and a scorer opens two possible routes to better driving performance: building a powerful planner or a powerful scorer. Recent work [26, 35] has already produced strong generative plan-ners, but comparable progress on the scorer has lagged. In fact, evidence from nuPlan [2] shows a substantial gap be-tween the trajectory a policy selects and the best trajectory in the pool that the same policy has already proposed [8]. Therefore, our objective is to close the gap in the scorer module. Two main challenges remain to close the gap. The first challenge is that candidates near the decision boundaries are rare. A competent planner produces few boundary or failure cases, providing limited supervision for learning the boundary region. As illustrated in Fig. 1 (a), the base plan-1arXiv:2609.01799v1 [cs.RO] 1 Sep 2026 ner’s proposals concentrate in a narrow region of trajectory space, which makes it difficult for the scoring module to select the best trajectory candidate from the proposal pool. The second challenge is that many components of driv-ing performance are binary-labeled, such as collision with other objects and compliance with traffic rules. The com-ponents are also cascaded, meaning a single violation zeros the entire driving performance. Two trajectories separated by centimeters therefore receive opposite targets, and the scorer must resolve that discontinuity from nearly identi-cal inputs. Previous work primarily addresses this issue by increasing the vocabulary of trajectory candidates. Hydra-MDP [22] distills several rule-based teachers into a multi-head scorer over a fixed trajectory vocabulary. But the vocabulary in Hydra-MDP is fixed and scene-independent, which leaves it to chance whether any entry falls near this scene’s decision boundary, so enlarging it mostly adds irrel-evant candidates rather than informative ones. GTRS [25] pairs a diffusion-based proposal generator with a scorer trained on super-dense trajectory sets under dropout regular-ization. However, both offline labeling and the scoring pass scale with vocabulary size, putting an increasingly heavy burden on computational resources. We address these limitations in two ways. First, we de-velop a transformer-based scorer that sits on top of frozen generative base planners, predicting each component of driving performance with independent decoders and com-posing them through the metric’s own formula rather than regressing the scalar directly. The weights of the planner network stay frozen during the scorer’s training, and one scorer trains in under an hour on a single GPU. Second, we design more data samples on top of the trajectory pool the base planner emits. Two generators are anchored on the recorded human trajectory and displace it along the two axes along which a vehicle can actually move: laterally to-ward the drivable-area boundary, and longitudinally along its own path toward a lead vehicle, as shown in Fig. 1. The samples inside the boundary are near-misses that still pass, whereas those outside are violations. Our contributions are as follows: • We develop a lightweight transformer-based scoring module on top of DiffusionDrive [26] and Mean-Fuser [35] and train it separately while the planning mod-ule remains frozen. • We design a versatile training dataset along the boundary region to study the scorer’s training pool as a design vari-able and show that synthetic trajectories improve driving performance further. • We demonstrate consistent gains on the NAVSIM [9] benchmark across two planners with different sensor con-figurations and pool sizes, and give a component-wise account showing that the gain concentrates in the mul-tiplicative safety terms that the metric’s structure makes decisive. 
+
+## 2. Related Work 
+
+2.1. End-to-End Autonomous Driving Planning 
+
+Classical driving stacks separate perception, prediction and planning into independently trained modules, which in-curs information loss and lets errors propagate across in-terfaces. UniAD [13] unified the stack into a single opti-mizable network, and a large body of end-to-end work has followed [5, 6, 15, 26, 32, 35, 39]. Almost all of it is trained by imitation from logged expert demonstrations, since in-teraction with a simulator of sufficient fidelity remains ex-pensive. Early end-to-end policies regressed a single trajec-tory, either directly from sensors or through an explicit perception-prediction stack [13, 15]. A single regressed output has two weaknesses. It cannot express the multi-modality of driving and it exposes no alternative against which the chosen behavior can be assessed. A policy can score well on open-loop benchmarks by extrapolating ego status alone [23] and end-to-end models easily rely on short-cut features of the training distribution [14]. Recent policies therefore emit a set of candidates instead of one. VADv2 learns a distribution over a discrete planning vocabulary [5]; Hydra-MDP ranks a fixed trajectory vocabulary [22]; Dif-fusionDrive truncates a diffusion process into a handful of diverse modes [26]; GoalFlow conditions flow matching on predicted goal points [36]; and MeanFuser generates its candidates in a single step from a mean-flow formula-tion [35]. Others condition generation on a learned world model [21, 39, 40]. We evaluate on NAVSIM [9], which scores a policy in a non-reactive simulation with the ex-tended PDM score (EPDMS), and whose scenario distribu-tion is drawn from nuPlan [2, 16]. 
+
+2.2. The Generate-Select Pipeline 
+
+The generate-select pipeline shares a common structure: a generator produces a pool of candidate trajectories from the scene, and a scorer assigns each candidate a value. Hydra-MDP [22] and Hydra-MDP++ [20] rank a vocabulary of clustered trajectories, and GTRS [25] pushes the vocabu-lary to an extreme density so that the decision boundary is populated by sheer volume, paired with a diffusion-based proposal generator and dropout regularization. Another line lets a generative planner produce a small, scene-conditioned pool (e.g., twenty modes for DiffusionDrive [26], eight for MeanFuser [35]), which is far cheaper but leaves the scorer with very few candidates to learn from. In terms of scoring, Hydra-MDP distills several rule-based teachers into a multi-head scorer, trading exactness for lower inference cost [22]. DriveSuprim [38] keeps the dense vocabulary but rescores it in two stages, filtering 8192 
+
+2candidates to 256 before a refinement decoder separates them. ZTRS [24] removes imitation from the objective and trains a scorer directly on simulator returns. DrivoR [17] compresses multi-camera ViT features into camera-aware register tokens that drive two lightweight decoders, one gen-erating candidates and one scoring them. We develop our scoring module differently: our scorer predicts the nine EPDMS components of Eq. (1) and is trained standalone over a planner that is frozen end to end, including its per-ception backbone, so no gradient from the scoring objective reaches any part of the generator and the same scorer design can be attached to planners it was not co-designed with. 
+
+2.3. Dataset Augmentation for Driving 
+
+Behavior cloning is limited by the states its demonstrator visits: an expert policy rarely approaches a rule boundary, so a model trained on its logs is never shown what approach-ing one looks like, and cannot recover from states the expert never entered [7, 10, 31]. Fitting a value or reward model has the same requirement in sharper form, since a value function must see examples on both sides of a decision boundary to place it, and offline RL has long noted that a be-havior policy’s own data does not supply them [18, 19, 28]. Perturbing expert trajectories is the established response. ChauffeurNet [1] deviates from the logged path and synthe-sizes collisions and off-road excursions so the policy learns to recover from them; DAgger-style aggregation collects corrective labels along the learner’s own distribution [4, 30]; and KING [11] optimizes other agents’ trajectories through a kinematics model to manufacture collisions. A parallel line in reinforcement learning generates counterfactual tran-sitions from factored dynamics for the same reason [29]. Recent work scales trajectory perturbation with modern ren-dering: neural sensor simulators reconstruct a scene and re-render it from deviated poses [34, 37, 41], and Sim-Scale [33] perturbs the ego trajectory, renders the multi-view observations the ego would have seen at the deviated state, and co-trains the planner on real and simulated data. 
+
+## 3. Preliminaries 
+
+3.1. EPDMS Metric 
+
+On NAVSIM [9], a policy observes a scene and emits candidates {τ1, . . . , τ N }, each a sequence of 8 waypoints 
+
+(x, y, θ ) over a 4 s horizon at 2 Hz. The benchmark scores a trajectory with the extended PDM score, a product of four rule terms and a weighted average of five quality terms: EPDMS = NC · DAC · DDC · TLC 
+
+× (5 EP + 5 TTC + 2 LK + 2 HC + 2 EC )/16 .
+
+(1) The multiplicative block is the reason NC and DAC domi-nate: a single violation zeros the score regardless of comfort or progress. 
+
+3.2. System Architecture 
+
+Figure 2 shows the overall architecture. A planner maps sensor inputs and ego status to a pool of candidate trajec-tories. On navtrain, 8.4% of MeanFuser’s [35] proposals and 16 .6% of DiffusionDrive’s [26] proposals fail NC, and 
+
+8.9% of MeanFuser’s [35] proposals and 15 .8% of Diffu-sionDrive’s [26] proposals fail DAC. A scorer then ranks that pool and emits one trajectory as the final output. The two stages are separable, which means the scorer can be retrained without touching the planner, its backbone, or its candidate generator, and any improvement transfers to ev-ery policy that exposes its candidates. Note that the scorer receives the scene context directly rather than through the planner’s decision, so it is free to disagree with the plan-ner’s own ranking. 
+
+Scorer Module. We score candidates by predicting the metric’s components separately with small transformer de-coders, rather than regressing the scalar directly. Our mod-ule consists of nine independent transformer networks that predict components of EPDMS in Eq. (1) and is trained standalone over a frozen planner. We train our scoring network based on each of the nine EPDMS components, sharing no weights. Each network takes two inputs: the frozen planner’s scene context (a short sequence of feature tokens of width 128 for the Mean-Fuser [35] and 256 for DiffusionDrive [26]) and a candi-date trajectory. The trajectory is flattened and lifted to a single query by a two-layer MLP; the queries of a scene pass through a three-layer transformer decoder that cross-attends to the context; and a two-layer MLP head reduces each decoded query to one number. 
+
+Training Objective. Let ˆyj be the predicted value of component j, and let yj be the simulator’s label. NAVSIM leaves a component unlabeled when the rule does not apply to the particular scene, so not every component is labeled for every candidate. Let Cj denote the candidates in the batch whose j-th label is defined. The eight binary compo-nents use a focal BCE [27] that emphasizes the rare failures, 
+
+ℓfoc  
+
+> j
+
+= − (1 −pj )γ log pj , pj = ˆ yj yj +(1 − ˆyj )(1 −yj ),
+
+(2) with γ = 2 , while ego progress is a continuous ratio and uses a squared error. The scoring loss is their masked mean, summed over components with weights λj :
+
+L = X 
+
+> j̸=EP
+
+λj
+
+|C j |
+
+X
+
+> Cj
+
+ℓfoc  
+
+> j
+
++ λEP 
+
+|C EP |
+
+X
+
+> CEP
+
+(ˆ yEP − yEP )2. (3) We set every λj = 1 ; the networks are independent, so no re-weighting was needed to keep them from competing. The undefined label produces no gradients to the network. 3(1) Scene context 
+
+Multi-camera images 
+
+Ego status 
+
+speed, heading, 
+
+accel., etc. 
+
+(2) Frozen base planner 
+
+Generative base model 
+
+(DiffusionDrive, MeanFuser, etc.) 
+
+(weights frozen) 
+
+(3) Planner proposal pool 
+
+(training candidates) 
+
+Few boundary cases 
+
+NC violations ~8 –
+
+17% 
+
+DAC violations ~9 –
+
+16% 
+
+(4) Learned Transformer-based scorer module 
+
+Predict EPDMS components 
+
+• NC (collision) 
+
+• DAC (drivable area) 
+
+• TTC 
+
+• Comfort 
+
+argmax 
+
+> ⇒
+
+selected trajectory 
+
+(3a) Training augmentation 
+
+(design around the human trajectory) 
+
+(i) Lateral generator 
+
+Shift toward drivable boundary (graded steps) 
+
+outside  inside  outside 
+
+Target: DAC boundary (drivable-area compliance) 
+
+(ii) Longitudinal 
+
+generator 
+
+Advance along path toward lead vehicle (graded steps) 
+
+outside 
+
+boundary 
+
+inside 
+
+Target: NC boundary (collision with lead vehicle) 
+
+(iii) Simulator / tracker in the loop 
+
+Roll out each designed trajectory with the benchmark tracker 
+
+Compute EPDMS & assign labels 
+
+(3b) Rich training pool 
+
+(planner + designed samples) 
+
+Outcome 
+
+Same planner 
+
++
+
+same scorer architecture; 
+
+only training data changes. 
+
+More boundary-adjacent positives 
+
++
+
+graded violations 
+
+(5) Final Trajectory Output 
+
+Augmented training data 
+
+set for richer supervision 
+
+near the decision boundary 
+
+Candidates generated 
+
+from the base planner 
+
+1
+
+2
+
+Plain scorer 
+
+training pipeline 
+
+Designed versatile 
+
+training pipeline 
+
+Logged human 
+
+trajectory 
+
+Base planner 
+
+proposals 
+
+Designed lateral samples 
+
+Designed longitudinal samples 
+
+Designed samples (lateral violation) 
+
+Drivable-area 
+
+boundary  
+
+> Lead vehicle
+
+Ego vehicle 
+
+Designed samples 
+
+(longitudinal violation) 
+
+Final trajectory selection  stronger scorer 
+
+> ⇒
+
+Figure Legend 
+
+• … Figure 2. Overall architecture. Sensor inputs and ego status drive a frozen generative planner, which emits a pool of candidate trajectories. A learned scorer consumes the same scene context together with each candidate, predicts the metric’s components, composes them into an EPDMS estimate and deploys the argmax. What we change is the pool the scorer is trained on (shown in orange), which at training time carries designed samples alongside the planner’s own candidates, and at inference reverts to the planner’s candidates alone. 
+
+Deployment. At inference, the nine predictions for a can-didate are composed into a single score through Eq. (1), and the candidate with the highest composed EPDMS is driven. Checkpoints are selected on the best realized EPDMS over a held-out validation split of whole logs. 
+
+## 4. Designing Versatile Trajectory Samples 
+
+Let τh be the logged human trajectory of a scene and 
+
+{τi}Ni=1 be the N candidates the frozen planner proposes for it. From these we build K rungs : perturbed copies of τh
+
+whose margins sit at prescribed distances from violating a rule. Figure 3 shows the designs of our trajectories: each is anchored on the human trajectory and walks toward one rule in graded steps, so the ladder straddles the boundary rather than landing on one side of it. The two designs differ only in the direction of that walk, which is what makes them share the construction below. We build the training set in five steps: 1. Measure the human’s own margin M (τh) under the rule m4: violation          
+
+> m3: violation
+> m2: small violation
+> m1: near-miss
+> Human (anchor)
+> Outside
+> Inside
+> (a) Designed Lateral Trajectory Family
+> Drivable-area boundary
+> Human (anchor)
+> m1(near-miss)
+> m2(small violation)
+> m3(violation)
+> m4(violation)
+> Human
+> (anchor)
+> m1: near-
+> miss
+> m2: small violation
+> (contact)
+> m3: violation
+> (contact)
+> m4: violation
+> (overlap)
+> (b) Designed Longitudinal Trajectory Family
+> Human (anchor)
+> m1(near-miss)
+> m2(small violation)
+> m3(violation)
+> m4(violation) Lead vehicle Ego vehicle
+
+Figure 3. The designs of the trajectory samples. (a) Our lateral design displaces the human path toward the nearest boundary in graded steps. (b) Our longitudinal design advances the ego along its own path toward the lead vehicle. 
+
+in question (Sec. 4.1). 2. Weight each waypoint by a ramp w(si) fixed by the hu-man path alone (Sec. 4.2). 3. Build a one-parameter family {τδ } by displacing τh lat-erally and longitudinally (Sec. 4.3). 44. Set K target margins m1 > · · · > m K , corresponding to one near-miss and K−1 graded violations (Sec. 4.4). 5. Solve for the smallest δ reaching each target, with the simulator inside the loop (Sec. 4.5). The human margin M (τh) ∈ R is a signed scalar such that M < 0 means violation, and δ is the displacement from the human baseline. 
+
+4.1. Measure the Margin 
+
+Lateral. Mlat (τ ) is the signed distance from the swept footprint of τ to the drivable-area boundary (positive in-side), evaluated on all four corners at all eight waypoints rather than on the centerline. 
+
+Longitudinal. Mlon (τ ) is the minimum gap over the hori-zon from the ego’s front bumper line to a chosen lead vehi-cle, counting only steps where that vehicle is ahead. 
+
+4.2. Weight the Ramp 
+
+All perturbations use a polynomial smooth step ramp over arc length s, zero at the ego pose: 
+
+w(s) = ¯ s2(3 − 2¯ s), ¯s = clip( s/s 0, 0, 1) , (4) where the ramp scale is s0 = 10 m. Writing si for the arc length of waypoint i along τh, both designs displace waypoint i by the fraction w(si) of δ. The eight values 
+
+w(s1), . . . , w (s8) are therefore fixed once the human path is known, and are shared by both geometries. 
+
+4.3. Build the Perturbation Family 
+
+Lateral. A lateral offset along the unit normal n pointing away from the nearest boundary, with n computed once per scene at the point of closest approach: 
+
+τδ [i] = τh[i] + δ w (si) n, (5) where τh[i] is waypoint i of the human trajectory, so a nega-tive δ carries the ego toward the boundary. Because w grows along the path, the rung bends into a lane change rather than sliding sideways; headings are recomputed from the offset path, not copied from τh.
+
+Longitudinal. The ego advances along its own path 
+
+rather than sideways: 
+
+τδ [i] = τh
+
+ si + δ w (si), δ ≥ 0, (6) where τh(·) reads the human path at a given arc length: the station advances, the path itself does not. While a rung stays on the logged path, this leaves DAC , LK and DDC unchanged by construction; past its end the ego continues along its final heading. 
+
+Algorithm 1 Rung solving for one scene                                                                                               
+
+> Require: human trajectory τh, proposals {τi}, targets m1: K,margin M, family δ7→τδ, evaluator E
+> Ensure: Krungs {τδ1, . . . , τ δK}, each emitted or masked
+> 1: R←max ilen( τi)−len( τh)▷on-manifold headroom
+> 2: if R < 0.5mthen return Kmasked rungs
+> 3: end if
+> 4: ∆←N∆magnitudes spanning the design’s range, capped by
+> min( δmax , R )
+> 5: {ˆτδ}δ∈∆←E({τδ})▷states to score: E= sim (batched) or identity
+> 6: mδ←M(ˆ τδ)for all δ∈∆
+> 7: for k= 1 . . . K do
+> 8: H ← { δ∈∆ : mδ≤mk}▷magnitudes reaching target
+> k
+> 9: if H=∅then mask rung k
+> 10: else
+> 11: δk←arg min δ∈H |δ|
+> 12: refine δkby bisection between δkand its neighbour in
+> ∆that misses mk
+> 13: emit τδk
+> 14: end if
+> 15: end for
+
+Staying inside the planner’s envelope. Both families are capped so that a rung is never longer than a trajectory the planner itself proposes: with {τi} the planner’s N propos-als, the headroom is R = max i len( τi) − len( τh), and scenes with R < 0.5 m emit masked rungs. 
+
+4.4. Set the Target Schedule 
+
+Lateral. The lateral targets are set relative to the human’s own clearance mh ≡ Mlat (τh):
+
+m1 = + min(0 .30 mh, 0.80) ,mk+1 = −clip( αkmh, ℓ k, u k), k = 1 , 2, 3, (7) with α = (0 .10 , 0.25 , 0.50) , ℓ = (0 .15 , 0.35 , 0.60) and 
+
+u = (0 .40 , 0.80 , 1.40) meters. Fixed percentages would give 7 cm excursions in tight scenes, which the tracker erases, and > 2 m excursions in open ones, which are triv-ially separable. The floors keep a target far enough out to survive tracking; the caps keep it close enough to hug the boundary. 
+
+Longitudinal. The longitudinal targets are set at 
+
+(+0 .5, −0.2, −0.6, −1.0) m of bumper gap: one near-miss and three graded contacts. 
+
+4.5. Solve for Displacement 
+
+After the targets are set, we recover the smallest δ in dis-placement space that reaches each target. It is recovered by inverting the map δ 7 → M (τδ ), taking the smallest displace-ment that reaches the target so the rung stays as close to the 5boundary as it can: 
+
+δk = min  δ ∈ ∆ : M (τδ ) ≤ mk , (8) where ∆ is a grid of N∆ trial magnitudes spanning the de-sign’s admissible range. The inversion is numerical: evalu-ate M (τδ ) over a grid of trial displacements, find where the resulting curve crosses mk, and take that crossing. One δ
+
+is solved per rung, and each of K rungs is either emitted or masked. The perturbations are solved using simulation: NAVSIM does not apply its evaluation metrics to waypoints. It con-verts a trajectory to a reference and tracks that reference with a batch LQR controller driving a kinematic bicycle model. The candidate trajectories are measured on the roll-out rather than on the waypoints, so there is a difference between the designed waypoints and the trajectory actually tracked by the simulator. 
+
+## 5. Experiments 
+
+5.1. Setup 
+
+We evaluate on the NAVSIM navtest split ( 12 ,146 scenes) over two frozen planners chosen for their contrasting candi-date pools: DiffusionDrive [26], a camera and LiDAR plan-ner emitting N = 20 proposals, and MeanFuser [35], a camera-only planner emitting N = 8 . Both planners are held fixed throughout the training process and the trans-former scorers are trained separately and attached to the base planners. We use our own designed augmented dataset to train the scorer instead of directly adopting the output trajectories of the base planners. Each configuration is trained for 100 epochs. Training one scorer takes approximately 50 minutes on a single RTX 5090 and the deployed checkpoint is the epoch with the best realized EPDMS on the held-out validation split, which ac-counts for approximately 5% of the entire NAVSIM training dataset. 
+
+5.2. NAVSIM Navtest Result 
+
+Tables 1 and 2 compare our approach with published NAVSIM entries under both metric versions. All the base-line methods and our base planners use the same ResNet-34 backbone for training and evaluation. The baseline num-bers are quoted from [35], except where a caption notes a different source. Re-ranking a frozen planner’s own pro-posals with a scorer trained on the augmented dataset raises DiffusionDrive from 88 .1 to 89 .5 PDMS and from 88 .3 to 
+
+90 .1 EPDMS, and MeanFuser from 89 .0 to 89 .9 PDMS and from 89 .5 to 90 .4 EPDMS. Neither planner, backbone, nor candidate generator is modified. Both tables also list the same scorer trained on the plan-ner’s own proposals alone, so the two sources of improve-ment can therefore be separated directly. The gain over (a) recovers NC: 0 1 (b) recovers NC: 0 1       
+
+> (c) recovers DAC: 0 1(d) recovers DAC: 0 1
+> plain scorer pick ours (designed set) pick logged human
+> ego at t = 0
+> Figure 4. Recovered gates on MeanFuser [35]. Four navtest scenes in which the two scorers deploy different candidates from the same
+> frozen 8-proposal pool: the plain scorer’s pick (magenta) is scored
+> 0on a multiplicative gate and ours (blue) is scored 1.
+
+the base planner is large: up to 1.8 EPDMS on Diffu-sionDrive [26] and the plain scorer accounts for 1.4, since the planner’s own pick is far from the best candidate it al-ready proposed. The gain attributable to our augmentation ,measured against the base scorer trained on the planner’s proposals alone, is 0.4 EPDMS on DiffusionDrive and 0.3
+
+EPDMS on MeanFuser. The sub-scores also show what the gain costs. Drivable-area compliance rises on both planners and most of all on MeanFuser, while ego progress and lane keeping fall slightly on both. The scorer is not uniformly better, which Sec. 5.3 examines in more detail. Figure 4 shows what that improvement looks like on individual scenes. Over all 12 ,146 scenes, the designed set cuts the rate at which a gate-failing candidate is de-ployed from 3.70% to 3.35% (DAC 2.05% → 1.73% , NC 
+
+1.70% → 1.65% ). 
+
+5.3. Ablation Study 
+
+Component Score Analysis. Table 3 reports every EPDMS component under the deployed pick, together with 6Method Venue Input Backbone NC ↑ DAC ↑ TTC ↑ COMFORT ↑ EP ↑ PDMS ↑
+
+TransFuser [6] IEEE TPAMI C & L ResNet-34 97.7 92.8 92.8 100 79.2 84.0 VADv2 [5] arXiv 2024 C & L ResNet-34 97.2 89.1 91.6 100 76.0 80.9 Hydra-MDP [22] arXiv 2024 C & L ResNet-34 98.3 96.0 94.6 100 78.7 86.5 GoalFlow [36] CVPR 2025 C & L ResNet-34 98.3 93.8 94.3 100 79.8 85.7 DiffusionDrive [26] CVPR 2025 C & L ResNet-34 98.2 96.2 94.7 100 82.2 88.1 WoTE [21] ICCV 2025 C & L ResNet-34 98.5 96.8 94.9 99.9 81.9 88.3 UniAD [13] CVPR 2023 C ResNet-34 97.8 91.9 92.9 100 78.8 83.4 World4Drive [40] ICCV 2025 C ResNet-34 97.4 94.3 92.8 100 79.9 85.1 MeanFuser [35] CVPR 2026 C ResNet-34 98.6 97.0 95.0 100 82.8 89.0 DiffusionDrive + plain scorer – C & L ResNet-34 98.4 97.5 94.2 100 84.1 89.3 DiffusionDrive + augmented scorer – C & L ResNet-34 98.6 97.7 94.3 100 84.2 89.5 MeanFuser + plain scorer – C ResNet-34 98.2 98.0 93.8 100 84.8 89.7 
+
+MeanFuser + augmented scorer – C ResNet-34 98.3 98.3 93.7 100 85.1 89.9 
+
+Table 1. Performance on the NAVSIM-v1 [9] navtest benchmark. “C” denotes camera, “L” LiDAR. All rows share the ResNet-34 [12] image backbone, so the comparison is at equal perception capacity. Our checkpoints are selected on the held-out validation split and every row of ours is the mean over three seeds. The baseline results are taken from [35]. Method Backbone NC ↑ DAC ↑ DDC ↑ TLC ↑ EP ↑ TTC ↑ LK ↑ HC ↑ EC ↑ EPDMS ↑
+
+Ego Status MLP [9] – 93.1 77.9 92.7 99.6 86.0 91.5 89.4 98.3 85.4 64.0 TransFuser [6] ResNet-34 96.9 89.9 97.8 99.7 87.1 95.4 92.7 98.3 87.2 76.7 Hydra-MDP++ [20] ResNet-34 97.2 97.5 99.4 99.6 83.1 96.5 94.4 98.2 70.9 81.4 GTRS-Dense † [25] ResNet-34 97.6 97.5 99.0 99.9 87.9 97.0 95.9 97.5 55.9 82.3 DriveSuprim [38] ResNet-34 97.5 96.5 99.4 99.6 88.4 96.6 95.5 98.3 77.0 83.1 DiffusionDrive [26] ResNet-34 98.2 96.3 99.4 99.8 87.4 97.4 97.0 98.3 87.7 88.3 MeanFuser [35] ResNet-34 98.3 97.2 99.6 99.8 87.6 97.4 97.3 98.3 88.2 89.5 DiffusionDrive + plain scorer ResNet-34 98.4 97.5 99.5 99.8 88.2 97.6 96.3 98.3 87.7 89.7 DiffusionDrive + augmented scorer ResNet-34 98.6 97.7 99.5 99.9 88.0 97.9 96.2 98.3 87.5 90.1 MeanFuser + plain scorer ResNet-34 98.2 98.0 99.6 99.8 88.7 97.5 96.8 98.3 87.0 90.1 
+
+MeanFuser + augmented scorer ResNet-34 98.3 98.3 99.6 99.8 88.6 97.4 96.6 98.3 87.2 90.4 
+
+Table 2. Performance on the NAVSIM-v2 [3] navtest benchmark. Every entry except the sensor-free Ego Status MLP uses a ResNet-34 [12] image backbone. Our checkpoints are selected on the held-out validation split, and every row of ours is the mean over three seeds. The baseline results are taken from [35]. † Result is reported by [33]. 
+
+its oracle ceiling (best-of-N) and the fraction of that gap the design closes. The split follows the metric’s own struc-ture on both planners. Every safety gate improves or holds: all four close 10 .0–29 .4% of their headroom on Diffu-sionDrive, and on MeanFuser three close 4.8–26 .7% while driving-direction compliance ( DDC ) is unchanged. Lane keeping ( LK ) and ego progress ( EP ) are worse, at −4.0% 
+
+and −1.9% on DiffusionDrive and −9.1% and −0.6% on MeanFuser, and time-to-collision ( TTC ) adds 11 .8% on Dif-fusionDrive but is flat on MeanFuser. History comfort ( HC )starts close to its ceiling, so the change is small. The over-all EPDMS gain is positive on both: 5.52% of the dis-tance to the oracle on DiffusionDrive and 6.89% on Mean-Fuser, which shows the effectiveness of our designed train-ing dataset. 
+
+Designed Against Random Samples. In order to iden-tify whether the augmentation of the dataset or the design itself contributes to the overall improvement, we pair the designed set with a randomly sampled set matched for the number of supervised rows and delivered to the same heads in the same numbers. Tab. 4 shows that the random samples contribute very little to the performance improvement. On DiffusionDrive it moves DAC only from 97 .52 to 97 .54 , and on MeanFuser only from 97 .95 to 97 .98 , while the design reaches 97 .70 and 98 .27 . The resulting EPDMS values are: 7DiffusionDrive [26] MeanFuser [35] Component plain our design gap closed ceiling plain our design gap closed ceiling  
+
+> NC
+
+98.39 98.56 +12 .4% 99.76 98.22 98.27 +4 .8% 99.26  
+
+> DAC
+
+97.52 97.70 +10 .0% 99.32 97.95 98.27 +26 .7% 99.15  
+
+> DDC
+
+99.50 99.54 +10 .5% 99.88 99.61 99.61 +0 .0% 99.84  
+
+> TLC
+
+99.83 99.88 +29 .4% 100.00 99.81 99.83 +25 .0% 99.89  
+
+> EP
+
+88.15 87.96 −1.9% 98.15 88.68 88.65 −0.6% 94.13  
+
+> TTC
+
+97.63 97.87 +11 .8% 99.66 97.45 97.43 −1.6% 98.74  
+
+> LK
+
+96.33 96.20 −4.0% 99.54 96.77 96.56 −9.1% 99.07  
+
+> HC
+
+98.33 98.32 −5.3% 98.52 98.28 98.28 +0 .0% 98.36  
+
+> EC
+
+87.70 87.51 −2.2% 96.38 87.05 87.22 +2 .1% 95.05 EPDMS 89.71 90.05 +5 .52 % 95.87 90.12 90.41 +6 .89 % 94.33 Table 3. Realised component scores on DiffusionDrive [26] and MeanFuser [35] over the deployed pick, averaged over three seeds. Ceiling indicates best-of-N. % of gap closed is (ours − plain )/(ceiling − plain ), the fraction of the available headroom the augmentation recovers. Every term that gates the product improves or holds on both planners, and what pays for them is ego progress, lane keeping, and comfort, with EPDMS closing 5.52% and 6.89% of the gap to the best-of-N ceiling. Plain scorer Random samples Design samples 
+
+DiffusionDrive [26] EPDMS 89 .71 ±.03 89 .72 ±.06 90 .05 ±.01  
+
+> NC
+
+98 .39 ±.03 98 .37 ±.06 98 .56 ±.05  
+
+> DAC
+
+97 .52 ±.02 97 .54 ±.09 97 .70 ±.05 
+
+MeanFuser [35] EPDMS 90 .12 ±.01 90 .22 ±.02 90 .41 ±.05  
+
+> NC
+
+98 .22 ±.05 98 .24 ±.01 98 .27 ±.07  
+
+> DAC
+
+97 .95 ±.06 97 .98 ±.10 98 .27 ±.03 
+
+Table 4. Designed dataset against its random samples. We do an ablation on random samples with the same amount of data added to the plain scorer dataset ( 437 k). Every entry is the mean ± standard deviation over three seeds. The results on DiffusionDrive [26] and MeanFuser [35] indicate that the majority of the improvement is due to the design itself rather than plain augmentation. 
+
+89 .72 and 90 .22 for the random, against 90 .05 and 90 .41 
+
+for the design. 
+
+Decomposition of the Longitudinal and Lateral Designs. 
+
+We study the contribution for each of the designs, and sum-marize in Tab. 5. The results show that either design alone already improves on the plain scorer: 89 .96 and 89 .89 
+
+against 89 .71 on DiffusionDrive, 90 .24 and 90 .36 against 
+
+90 .12 on MeanFuser. With both designs, the score is even better, at 90 .05 and 90 .41 . Neither dominates, and each shows up in the component it supervises: the lateral design alone already recovers the full DAC gain, 97 .72 and 98 .26 
+
+against the full design’s 97 .70 and 98 .27 , while the longitu-dinal design alone does the same for NC , 98 .54 and 98 .28 
+
+against 98 .56 and 98 .27 . Each generator contributes to the gain of the corresponding component, and their combina-
+
+Plain Lon. only Lat. only Both 
+
+DiffusionDrive [26] EPDMS 89 .71 ±.03 89 .96 ±.09 89 .89 ±.09 90 .05 ±.01  
+
+> NC
+
+98 .39 ±.03 98 .54 ±.09 98 .47 ±.09 98 .56 ±.05  
+
+> DAC
+
+97 .52 ±.02 97 .62 ±.08 97 .72 ±.04 97 .70 ±.05 
+
+MeanFuser [35] EPDMS 90 .12 ±.01 90 .24 ±.08 90 .36 ±.04 90 .41 ±.05  
+
+> NC
+
+98 .22 ±.05 98 .28 ±.02 98 .26 ±.03 98 .27 ±.07  
+
+> DAC
+
+97 .95 ±.06 98 .01 ±.12 98 .26 ±.01 98 .27 ±.03 
+
+Table 5. Contribution of each generator, reported as mean ± std over three seeds. Each column keeps one generator and drops the other; the last column is the full designed set. Either design alone already recovers its own component’s gain on both planners. 
+
+tion attains the best overall driving performance. 
+
+## 6. Conclusion 
+
+We present a designed training set for learned trajectory scoring, built by perturbing the logged human trajectory laterally and longitudinally in steps graded against each scene’s own geometry and labeled through the benchmark’s own tracker. Our results highlight that the pool on which a scorer is trained is a design variable in its own right: a frozen planner, a transformer-based scorer, and a re-designed training set achieve better PDMS and EPDMS on NAVSIM navtest, with the gain concentrated in the product safety terms. Future work may explore better designs for the scorer training dataset and develop a better scoring module to capture the multi-modality of driving behavior. 8References 
+
+[1] Mayank Bansal, Alex Krizhevsky, and Abhijit Ogale. Chauf-feurNet: Learning to drive by imitating the best and synthe-sizing the worst. In Robotics: Science and Systems (RSS) ,2019. 3 [2] Holger Caesar, Juraj Kabzan, Kok Seang Tan, Whye Kit Fong, Eric Wolff, Alex Lang, Luke Fletcher, Oscar Beijbom, and Sammy Omari. nuPlan: A closed-loop ML-based plan-ning benchmark for autonomous vehicles. arXiv preprint arXiv:2106.11810 , 2021. 1, 2 [3] Wei Cao, Marcel Hallgarten, Tianyu Li, Daniel Dauner, Xunjiang Gu, Caojun Wang, Yakov Miron, Marco Aiello, Hongyang Li, Igor Gilitschenski, Boris Ivanovic, Marco Pavone, Andreas Geiger, and Kashyap Chitta. Pseudo-simulation for autonomous driving. In Conference on Robot Learning (CoRL) , 2025. 7 [4] Dian Chen, Brady Zhou, Vladlen Koltun, and Philipp Kr¨ ahenb¨ uhl. Learning by cheating. In Conference on Robot Learning (CoRL) , 2020. 3 [5] Shaoyu Chen, Bo Jiang, Hao Gao, Bencheng Liao, Qing Xu, Qian Zhang, Chang Huang, Wenyu Liu, and Xinggang Wang. VADv2: End-to-end vectorized autonomous driving via probabilistic planning. arXiv preprint arXiv:2402.13243 ,2024. 2, 7 [6] Kashyap Chitta, Aditya Prakash, Bernhard Jaeger, Zehao Yu, Katrin Renz, and Andreas Geiger. TransFuser: Imitation with transformer-based sensor fusion for autonomous driv-ing. IEEE TPAMI , 2023. 1, 2, 7 [7] Felipe Codevilla, Eder Santana, Antonio M. L´ opez, and Adrien Gaidon. Exploring the limitations of behavior cloning for autonomous driving. In ICCV , 2019. 3 [8] Daniel Dauner, Marcel Hallgarten, Andreas Geiger, and Kashyap Chitta. Parting with misconceptions about learning-based vehicle motion planning. In Conference on Robot Learning (CoRL) , 2023. 1 [9] Daniel Dauner, Marcel Hallgarten, Tianyu Li, Xinshuo Weng, Zhiyu Huang, Zetong Yang, Hongyang Li, Igor Gilitschenski, Boris Ivanovic, Marco Pavone, Andreas Geiger, and Kashyap Chitta. NAVSIM: Data-driven non-reactive autonomous vehicle simulation and benchmarking. In NeurIPS , 2024. 2, 3, 7 [10] Alexandre Galashov, Josh S Merel, and Nicolas Heess. Data augmentation for efficient learning from parametric experts. 
+
+NeurIPS , 2022. 3 [11] Niklas Hanselmann, Katrin Renz, Kashyap Chitta, Apra-tim Bhattacharyya, and Andreas Geiger. King: Generating safety-critical driving scenarios for robust imitation via kine-matics gradients. In ECCV , 2022. 3 [12] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition. In CVPR ,2016. 7 [13] Yihan Hu, Jiazhi Yang, Li Chen, Keyu Li, Chonghao Sima, Xizhou Zhu, Siqi Chai, Senyao Du, Tianwei Lin, Wenhai Wang, Lewei Lu, Xiaosong Jia, Qiang Liu, Jifeng Dai, Yu Qiao, and Hongyang Li. Planning-oriented autonomous driv-ing. In CVPR , 2023. 1, 2, 7 [14] Bernhard Jaeger, Kashyap Chitta, and Andreas Geiger. Hid-den biases of end-to-end driving models. In ICCV , 2023. 2 [15] Bo Jiang, Shaoyu Chen, Qing Xu, Bencheng Liao, Jiajie Chen, Helong Zhou, Qian Zhang, Wenyu Liu, Chang Huang, and Xinggang Wang. VAD: Vectorized scene representation for efficient autonomous driving. In ICCV , 2023. 1, 2 [16] Napat Karnchanachari, Dimitris Geromichalos, Kok Seang Tan, Nanxiang Li, Christopher Eriksen, Shakiba Yaghoubi, Noushin Mehdipour, Gianmarco Bernasconi, Whye Kit Fong, Yiluan Guo, and Holger Caesar. Towards learning-based planning: The nuplan benchmark for real-world au-tonomous driving. In IEEE International Conference on Robotics and Automation (ICRA) , 2024. 2 [17] Ellington Kirby, Alexandre Boulch, Yihong Xu, Yuan Yin, Gilles Puy, ´ Eloi Zablocki, Andrei Bursuc, Spyros Gidaris, Renaud Marlet, Florent Bartoccioni, Anh-Quan Cao, Ner-min Samet, Tuan-Hung Vu, and Matthieu Cord. Driving on registers. In CVPR , 2026. 3 [18] Ilya Kostrikov, Ashvin Nair, and Sergey Levine. Offline rein-forcement learning with implicit Q-learning. In ICLR , 2022. 3[19] Aviral Kumar, Aurick Zhou, George Tucker, and Sergey Levine. Conservative Q-learning for offline reinforcement learning. In NeurIPS , 2020. 3 [20] Kailin Li, Zhenxin Li, Shiyi Lan, Yuan Xie, Zhizhong Zhang, Jiayi Liu, Zuxuan Wu, Zhiding Yu, and Jose M. Alvarez. Hydra-MDP++: Advancing end-to-end driv-ing via expert-guided hydra-distillation. arXiv preprint arXiv:2503.12820 , 2025. 2, 7 [21] Yingyan Li, Yuqi Wang, Yang Liu, Jiawei He, Lue Fan, and Zhaoxiang Zhang. End-to-end driving with online trajectory evaluation via BEV world model. In ICCV , 2025. 2, 7 [22] Zhenxin Li, Kailin Li, Shihao Wang, Shiyi Lan, Zhiding Yu, Yishen Ji, Zhiqi Li, Ziyue Zhu, Jan Kautz, Zuxuan Wu, et al. Hydra-mdp: End-to-end multimodal planning with multi-target hydra-distillation. arXiv preprint arXiv:2406.06978 ,2024. 1, 2, 7 [23] Zhiqi Li, Zhiding Yu, Shiyi Lan, Jiahan Li, Jan Kautz, Tong Lu, and Jose M. Alvarez. Is ego status all you need for open-loop end-to-end autonomous driving? In CVPR , 2024. 2 [24] Zhenxin Li, Wenhao Yao, Zi Wang, Xinglong Sun, Jingde Chen, Nadine Chang, Maying Shen, Jingyu Song, Zuxuan Wu, Shiyi Lan, et al. Ztrs: Zero-imitation end-to-end au-tonomous driving with trajectory scoring. arXiv preprint arXiv:2510.24108 , 2025. 3 [25] Zhenxin Li, Wenhao Yao, Zi Wang, Xinglong Sun, Joshua Chen, Nadine Chang, Maying Shen, Zuxuan Wu, Shiyi Lan, and Jose M. Alvarez. Generalized trajectory scor-ing for end-to-end multimodal planning. arXiv preprint arXiv:2506.06664 , 2025. 2, 7 [26] Bencheng Liao, Shaoyu Chen, Haoran Yin, Bo Jiang, Cheng Wang, Sixu Yan, Xinbang Zhang, Xiangyu Li, Ying Zhang, Qian Zhang, and Xinggang Wang. DiffusionDrive: Trun-cated diffusion model for end-to-end autonomous driving. In 
+
+CVPR , 2025. 1, 2, 3, 6, 7, 8 [27] Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and Piotr Doll´ ar. Focal loss for dense object detection. In ICCV ,2017. 3 
+
+9[28] Seohong Park, Dibya Ghosh, Benjamin Eysenbach, and Sergey Levine. Hiql: Offline goal-conditioned rl with latent states as actions. NeurIPS , 2023. 3 [29] Silviu Pitis, Elliot Creager, and Animesh Garg. Counterfac-tual data augmentation using locally factored dynamics. In 
+
+NeurIPS , 2020. 3 [30] Aditya Prakash, Aseem Behl, Eshed Ohn-Bar, Kashyap Chitta, and Andreas Geiger. Exploring data aggregation in policy learning for vision-based urban autonomous driving. In CVPR , 2020. 3 [31] St´ ephane Ross, Geoffrey J. Gordon, and J. Andrew Bagnell. A reduction of imitation learning and structured prediction to no-regret online learning. In Proc. Int. Conf. Artificial Intelligence and Statistics (AISTATS) , 2011. 3 [32] Wenchao Sun, Xuewu Lin, Yining Shi, Chuang Zhang, Haoran Wu, and Sifa Zheng. Sparsedrive: End-to-end autonomous driving via sparse scene representation. In 
+
+IEEE International Conference on Robotics and Automation (ICRA) , 2025. 2 [33] Haochen Tian, Tianyu Li, Haochen Liu, Jiazhi Yang, Yihang Qiu, Guang Li, Junli Wang, Yinfeng Gao, Zhang Zhang, Liang Wang, Hangjun Ye, Tieniu Tan, Long Chen, and Hongyang Li. Simscale: Learning to drive via real-world simulation at scale. In CVPR , 2026. 3, 7 [34] Adam Tonderski, Carl Lindstr¨ om, Georg Hess, William Ljungbergh, Lennart Svensson, and Christoffer Petersson. Neurad: Neural rendering for autonomous driving. In CVPR ,2024. 3 [35] Junli Wang, Yinan Zheng, Xueyi Liu, Zebin Xing, Pengfei Li, Kun Ma, Hangjun Ye, Guang Chen, Guang Li, Long Chen, et al. Meanfuser: Fast one-step multi-modal trajec-tory generation and adaptive reconstruction via meanflow for end-to-end autonomous driving. In CVPR , 2026. 1, 2, 3, 6, 7, 8 [36] Zebin Xing, Xingyu Zhang, Yang Hu, Bo Jiang, Tong He, Qian Zhang, Xiaoxiao Long, and Wei Yin. GoalFlow: Goal-driven flow matching for multimodal trajectories generation in end-to-end autonomous driving. In CVPR , 2025. 2, 7 [37] Ze Yang, Yun Chen, Jingkang Wang, Sivabalan Mani-vasagam, Wei-Chiu Ma, Anqi Joyce Yang, and Raquel Ur-tasun. Unisim: A neural closed-loop sensor simulator. In 
+
+CVPR , 2023. 3 [38] Wenhao Yao, Zhenxin Li, Shiyi Lan, Zi Wang, Xinglong Sun, Jose M. Alvarez, and Zuxuan Wu. DriveSuprim: To-wards precise trajectory selection for end-to-end planning. In AAAI , 2026. 2, 7 [39] Kaiwen Zhang, Zhenyu Tang, Xiaotao Hu, Xingang Pan, Xiaoyang Guo, Yuan Liu, Jingwei Huang, Li Yuan, Qian Zhang, Xiao-Xiao Long, Xun Cao, and Wei Yin. Epona: Au-toregressive diffusion world model for autonomous driving. In ICCV , 2025. 2 [40] Yupeng Zheng, Pengxuan Yang, Zebin Xing, Qichao Zhang, Yuhang Zheng, Yinfeng Gao, Pengfei Li, Teng Zhang, Zhongpu Xia, Peng Jia, XianPeng Lang, and Dongbin Zhao. World4Drive: End-to-end autonomous driving via intention-aware physical latent world model. In ICCV , 2025. 2, 7 [41] Hongyu Zhou, Longzhong Lin, Jiabao Wang, Yichong Lu, Dongfeng Bai, Bingbing Liu, Yue Wang, Andreas Geiger, and Yiyi Liao. Hugsim: A real-time, photo-realistic and closed-loop simulator for autonomous driving. IEEE TPAMI ,2026. 3 
+
+10

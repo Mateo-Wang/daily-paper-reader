@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-03</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-04</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-03 23:01:06 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-04 22:56:45 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精选20篇论文，精读聚焦具身导航与驾驶预测两大方向。</p>
-<p>最值得关注：LightNav-0以9.0分领跑，探索VLM空间智能用于通用导航；CoLT-Drive用反事实长尾基准提升驾驶预测，同获9.0高分。</p>
-<p>若想快速跟进，可优先阅读这4篇高分论文，并结合软体机器人操控、语言驱动技能获取等关联方向深化理解。</p>
+<p>今日精读21篇，其中2篇高分聚焦生成式机器人规划与灵巧操作数据引擎；最值得关注DiffuSearch的扩散-动作空间联合目标优化，及RoboTok的互联网规模人演示检索方法。下一步建议关注多模态模型在无人机与自动驾驶中的行动推理趋势。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">8 篇</strong>
+    <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="LightNav-0: Eliciting VLM Spatial Intelligence for Generalist Embodied Navigation">LightNav-0: Eliciting VLM Spatial Intelligence for Generalist Embodied Navigation</span></li><li><span class="dpr-home-dashboard-paper-title" title="CoLT-Drive: Counterfactual Long-Tail Benchmarking and Knowledge-Preserving Adaptation for Driving Affordance Prediction">CoLT-Drive: Counterfactual Long-Tail Benchmarking and Knowledge-Preserving Adaptation for Driving Affordance Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="One Demonstration, Many Objects: Generalizing Manipulation via Local Contact Geometry">One Demonstration, Many Objects: Generalizing Manipulation via Local Contact Geometry</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DiffuSearch: How Hybrid Trajectory Planning Benefits from Aligned Objectives in Diffusion and Action Space">DiffuSearch: How Hybrid Trajectory Planning Benefits from Aligned Objectives in Diffusion and Action Space</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboTok: An Internet-Scale Data Engine for Human Demonstration Retrieval and Dexterous Manipulation Learning">RoboTok: An Internet-Scale Data Engine for Human Demonstration Retrieval and Dexterous Manipulation Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Long-Horizon Consistent and Interaction-Aware World Models for Multi-Style End-to-End Driving">Long-Horizon Consistent and Interaction-Aware World Models for Multi-Style End-to-End Driving</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -66,9 +64,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Learning to infer and manipulate through distributed whole-arm interaction in a soft robot">Learning to infer and manipulate through distributed whole-arm interaction in a soft robot</span></li><li><span class="dpr-home-dashboard-paper-title" title="Autonomously Acquiring Robot Manipulation Skills with Language-Driven Quality-Diversity">Autonomously Acquiring Robot Manipulation Skills with Language-Driven Quality-Diversity</span></li><li><span class="dpr-home-dashboard-paper-title" title="Driving on Memory">Driving on Memory</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Evaluating Multimodal LLMs as Generalist Vision-Language-Action Agents for Drone Control: Commanding, Approaching, Tracking and Searching">Evaluating Multimodal LLMs as Generalist Vision-Language-Action Agents for Drone Control: Commanding, Approaching, Tracking and Searching</span></li><li><span class="dpr-home-dashboard-paper-title" title="Beyond Textual Chain-of-Thought: A Survey on Action-Grounded Reasoning in Autonomous Driving">Beyond Textual Chain-of-Thought: A Survey on Action-Grounded Reasoning in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="CrashDiffuser: VLM-Guided Collision Intent Reasoning for Fine-Grained Safety-Critical Traffic Scenario Generation">CrashDiffuser: VLM-Guided Collision Intent Reasoning for Fine-Grained Safety-Critical Traffic Scenario Generation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>6</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span></div>
 </section>
 </div>
 
