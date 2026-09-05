@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-04</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-05</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 18 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-04 22:56:45 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-05 22:00:59 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读21篇，其中2篇高分聚焦生成式机器人规划与灵巧操作数据引擎；最值得关注DiffuSearch的扩散-动作空间联合目标优化，及RoboTok的互联网规模人演示检索方法。下一步建议关注多模态模型在无人机与自动驾驶中的行动推理趋势。</p>
+<p>今日18篇论文聚焦机器人学习，精读方向集中在世界模型与VLA后训练；最值得看的是《WISE》与《Does Latent Planning Survive Point Clouds?》均获9.0高分，分别探讨行动条件JEPA世界模型在几何观测下的规划能力及VLA后训练中的想象调度；速读可关注真实到仿真校准、小型化操作策略及力感知全身补偿等务实进展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DiffuSearch: How Hybrid Trajectory Planning Benefits from Aligned Objectives in Diffusion and Action Space">DiffuSearch: How Hybrid Trajectory Planning Benefits from Aligned Objectives in Diffusion and Action Space</span></li><li><span class="dpr-home-dashboard-paper-title" title="RoboTok: An Internet-Scale Data Engine for Human Demonstration Retrieval and Dexterous Manipulation Learning">RoboTok: An Internet-Scale Data Engine for Human Demonstration Retrieval and Dexterous Manipulation Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Long-Horizon Consistent and Interaction-Aware World Models for Multi-Style End-to-End Driving">Long-Horizon Consistent and Interaction-Aware World Models for Multi-Style End-to-End Driving</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Does Latent Planning Survive Point Clouds? Action-Conditioned JEPA World Models for Geometric Observations">Does Latent Planning Survive Point Clouds? Action-Conditioned JEPA World Models for Geometric Observations</span></li><li><span class="dpr-home-dashboard-paper-title" title="WISE: World-model-guided Imagination Scheduling for Efficient Post-training of Vision-Language-Action Models">WISE: World-model-guided Imagination Scheduling for Efficient Post-training of Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="A Low-Cost, Open Platform for End-to-End Autonomous Driving on a Miniature Ackermann Vehicle">A Low-Cost, Open Platform for End-to-End Autonomous Driving on a Miniature Ackermann Vehicle</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>3</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">11 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Evaluating Multimodal LLMs as Generalist Vision-Language-Action Agents for Drone Control: Commanding, Approaching, Tracking and Searching">Evaluating Multimodal LLMs as Generalist Vision-Language-Action Agents for Drone Control: Commanding, Approaching, Tracking and Searching</span></li><li><span class="dpr-home-dashboard-paper-title" title="Beyond Textual Chain-of-Thought: A Survey on Action-Grounded Reasoning in Autonomous Driving">Beyond Textual Chain-of-Thought: A Survey on Action-Grounded Reasoning in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="CrashDiffuser: VLM-Guided Collision Intent Reasoning for Fine-Grained Safety-Critical Traffic Scenario Generation">CrashDiffuser: VLM-Guided Collision Intent Reasoning for Fine-Grained Safety-Critical Traffic Scenario Generation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="R2S-Eval: Robot Evaluation with Real-to-Sim Calibration via Vision-Language Models">R2S-Eval: Robot Evaluation with Real-to-Sim Calibration via Vision-Language Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?">MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?</span></li><li><span class="dpr-home-dashboard-paper-title" title="FWBC-VLA: Force-Aware Whole-Body Compensation for Contact-Rich Loco-Manipulation">FWBC-VLA: Force-Aware Whole-Body Compensation for Contact-Rich Loco-Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>6</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span></div>
 </section>
 </div>
 
