@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-05</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-06</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 18 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 4 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>11</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-05 22:00:59 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-06 22:03:35 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日18篇论文聚焦机器人学习，精读方向集中在世界模型与VLA后训练；最值得看的是《WISE》与《Does Latent Planning Survive Point Clouds?》均获9.0高分，分别探讨行动条件JEPA世界模型在几何观测下的规划能力及VLA后训练中的想象调度；速读可关注真实到仿真校准、小型化操作策略及力感知全身补偿等务实进展。</p>
+<p>今日精读2篇、速读2篇，聚焦机器人操作与学习大框架。</p>
+<p>最值得看的是“纯本体感全身操控”与“机器人统一学习范式”两篇高分论文。</p>
+<p>建议读者优先扎根本体感知与多模态融合方向，若求广度再看空地协作导航与情境车辆。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Does Latent Planning Survive Point Clouds? Action-Conditioned JEPA World Models for Geometric Observations">Does Latent Planning Survive Point Clouds? Action-Conditioned JEPA World Models for Geometric Observations</span></li><li><span class="dpr-home-dashboard-paper-title" title="WISE: World-model-guided Imagination Scheduling for Efficient Post-training of Vision-Language-Action Models">WISE: World-model-guided Imagination Scheduling for Efficient Post-training of Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="A Low-Cost, Open Platform for End-to-End Autonomous Driving on a Miniature Ackermann Vehicle">A Low-Cost, Open Platform for End-to-End Autonomous Driving on a Miniature Ackermann Vehicle</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Blind Dexterity: Whole-Body Humanoid Manipulation via Pure Proprioception">Blind Dexterity: Whole-Body Humanoid Manipulation via Pure Proprioception</span></li><li><span class="dpr-home-dashboard-paper-title" title="Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models">Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +63,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">11 篇</strong>
+    <strong class="dpr-home-dashboard-count">2 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="R2S-Eval: Robot Evaluation with Real-to-Sim Calibration via Vision-Language Models">R2S-Eval: Robot Evaluation with Real-to-Sim Calibration via Vision-Language Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?">MINERVA: How Small Can a Manipulation Policy Be and Still Solve LIBERO?</span></li><li><span class="dpr-home-dashboard-paper-title" title="FWBC-VLA: Force-Aware Whole-Body Compensation for Contact-Rich Loco-Manipulation">FWBC-VLA: Force-Aware Whole-Body Compensation for Contact-Rich Loco-Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Air-Ground Collaborative Vision-and-Language Navigation via Shared Bird&#x27;s-Eye Maps">Air-Ground Collaborative Vision-and-Language Navigation via Shared Bird&#x27;s-Eye Maps</span></li><li><span class="dpr-home-dashboard-paper-title" title="Context-Aware Intelligent Vehicles">Context-Aware Intelligent Vehicles</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>1</strong></span></div>
 </section>
 </div>
 
