@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-06</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-07</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 4 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>2</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-06 22:03:35 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-07 23:16:26 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日精读2篇、速读2篇，聚焦机器人操作与学习大框架。</p>
-<p>最值得看的是“纯本体感全身操控”与“机器人统一学习范式”两篇高分论文。</p>
-<p>建议读者优先扎根本体感知与多模态融合方向，若求广度再看空地协作导航与情境车辆。</p>
+<p>今日19篇论文聚焦具身智能，精读重点锁定VLA模型的高效真实世界在线强化学习与推理成本优化。两篇9.0分工作——非对称协同启动的VLA-Precision和潜语义脚手架方法，分别打通了在线RL数据效率与免推理成本的决策瓶颈。建议优先精读这两篇，再结合LIBERO-RECOVER的失败恢复机制，构建对VLA落地的完整认知。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Blind Dexterity: Whole-Body Humanoid Manipulation via Pure Proprioception">Blind Dexterity: Whole-Body Humanoid Manipulation via Pure Proprioception</span></li><li><span class="dpr-home-dashboard-paper-title" title="Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models">Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VLA-Precision: Asymmetric Co-Bootstrapping for Efficient Real-World Online RL of Vision-Language-Action Models">VLA-Precision: Asymmetric Co-Bootstrapping for Efficient Real-World Online RL of Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Reasoning Without Inference Cost: Latent Semantic Scaffolding for Robot VLA Policies">Reasoning Without Inference Cost: Latent Semantic Scaffolding for Robot VLA Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="One Diffusion Model, Two Roles: Guided Trajectory Planning and Safety-Critical Scenario Generation in Closed-Loop Simulation">One Diffusion Model, Two Roles: Guided Trajectory Planning and Safety-Critical Scenario Generation in Closed-Loop Simulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -63,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Air-Ground Collaborative Vision-and-Language Navigation via Shared Bird&#x27;s-Eye Maps">Air-Ground Collaborative Vision-and-Language Navigation via Shared Bird&#x27;s-Eye Maps</span></li><li><span class="dpr-home-dashboard-paper-title" title="Context-Aware Intelligent Vehicles">Context-Aware Intelligent Vehicles</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MS-MEM: Multi-Skill Manipulation-Enhanced Mapping via Uncertainty- and Disturbance-Aware Action Selection">MS-MEM: Multi-Skill Manipulation-Enhanced Mapping via Uncertainty- and Disturbance-Aware Action Selection</span></li><li><span class="dpr-home-dashboard-paper-title" title="Linguistic Trajectory Encoding for Efficient Long-Horizon Spatial Memory in Embodied Agents">Linguistic Trajectory Encoding for Efficient Long-Horizon Spatial Memory in Embodied Agents</span></li><li><span class="dpr-home-dashboard-paper-title" title="LIBERO-RECOVER: Beyond Task Success Towards Failure Recovery in Robotic Manipulation Models">LIBERO-RECOVER: Beyond Task Success Towards Failure Recovery in Robotic Manipulation Models</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 </div>
 

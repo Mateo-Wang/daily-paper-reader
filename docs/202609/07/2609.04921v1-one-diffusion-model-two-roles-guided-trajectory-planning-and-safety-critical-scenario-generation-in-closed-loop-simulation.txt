@@ -1,0 +1,475 @@
+Title: One Diffusion Model, Two Roles: Guided Trajectory Planning and Safety-Critical Scenario Generation in Closed-Loop Simulation
+
+URL Source: https://arxiv.org/pdf/2609.04921v1
+
+Published Time: Mon, 07 Sep 2026 00:45:07 GMT
+
+Number of Pages: 19
+
+Markdown Content:
+# One Diffusion Model, Two Roles: Guided Trajectory Planning and Safety-Critical Scenario Generation in Closed-Loop Simulation 
+
+Arka Pal ∗,1 , Rajesh Kumar ∗,1 , Hannes Eriksson 2, Rémi Lacombe 2, Arvid Laveno Ling 2,3, Ankit Gupta 2 , and Maciej Wozniak 1,2 
+
+> 1
+
+KTH Royal Institute of Technology, Sweden 
+
+{arkap, rajeshk, maciejw}@kth.se  
+
+> 2
+
+Zenseact AB, Sweden 
+
+{hannes.eriksson, remi.lacombe, ankit.gupta}@zenseact.com  
+
+> 3
+
+Chalmers University of Technology, Sweden 
+
+laveno@chalmers.se 
+
+> ∗
+
+Equal contribution, Master’s thesis performed at Zenseact. 
+
+Abstract. Diffusion probabilistic models can capture the multi-modal, interaction-rich distribution of joint future trajectories in driving scenes. We show that a single pretrained diffusion traffic model can serve two complementary roles in the autonomous driving development loop: as an ego motion planner, and as a controllable generator of safety-critical sce-narios for stress-testing the planners. On the planning side, we introduce a Single-Stream Dual-Stream (SSDS) diffusion-transformer decoder that fuses scene context via joint attention rather than late cross-attention, improving closed-loop performance on nuPlan. We further propose De-coupled Annealing Posterior Sampling with Energy (DAPSE), a training-free guidance scheme that injects arbitrary energy functions (e.g., tar-get speed) at the clean-sample level, avoiding the first-order approxima-tion errors of diffusion posterior sampling while requiring no auxiliary networks. Beyond planning, we leverage the same diffusion model as a controllable scenario generator to create realistic long-tail driving in-teractions for closed-loop evaluation. Through inference-time guidance, selected agents are steered toward safety-critical behaviors, including ag-gressive cut-ins, lead-vehicle braking, and combined longitudinal-lateral interactions, while preserving realistic traffic behaviors. Evaluated in closed-loop nuPlan simulations with independent black-box planners, the generated scenarios expose failure modes that remain hidden un-der standard benchmarks. In particular, evaluated planners frequently rely on reactive braking responses rather than proactive evasive maneu-vers when facing complex multi-agent interactions, revealing a limitation of current learned planners. Although the SSDS-based planner achieves stronger nominal performance, it experiences larger degradation under these challenging scenarios, demonstrating that benchmark superiority does not necessarily translate to robustness. These results demonstrate that a single learned traffic prior can simultaneously improve motion planning and provide a realistic framework for systematic planner ro-bustness evaluation. arXiv:2609.04921v1 [cs.CV] 4 Sep 2026 2 A. Pal et al.  
+
+> Keywords: Diffusion models · Motion planning · Safety-critical scenario generation · Closed-loop simulation
+
+## 1 Introduction 
+
+Learning-based planners for autonomous vehicles must satisfy two requirements that are usually studied separately: they must produce safe, human-like trajec-tories in interactive traffic [22], and they must be evaluated against the rare, safety-critical interactions that the real world has to offer [8]. Imitation-based planners trained on expert demonstrations struggle with the first requirement because standard regression objectives tend to average over the multi-modal set of plausible behaviors [18,43]; standard benchmarks struggle with the second be-cause logged data is dominated by nominal driving, so strong benchmark scores do not imply robustness in long-tail interactions [13]. Diffusion Probabilistic Models (DPMs) [11] can address both problems with the same mechanism. By learning the joint distribution of future trajectories of the ego vehicle and its neighbors conditioned on scene context, a DPM (i) cap-tures multi-modality natively, and (ii) exposes an inference-time control surface: the reverse process can be steered by gradients of arbitrary energy functions without retraining. Steering the ego towards low-energy (safe, comfortable, rule-compliant) trajectories yields a planner; steering a neighbor towards high-risk interactions with the ego yields an adversarial scenario generator. This paper develops both directions, as presented in Figure 1, on top of a Diffusion Transformer (DiT)-based [25] traffic model trained on nuPlan [1], an autonomous driving planning benchmark with 1500 hours of human driving data, and makes the following contributions: 1. SSDS-DiT decoder for joint prediction and planning. We replace the standard DiT decoder with a Single-Stream Dual-Stream architecture adapted from latest video generation models. Dual-stream blocks process trajectory and context tokens in separate streams that interact through joint attention; a subsequent single-stream stage fuses the unified representation. 2. DAPSE: Training-free exact guidance for zero-shot trajectory steer-ing. To bypass the costly retraining of existing safety-steering methods, we propose Decoupled Annealing Posterior Sampling with Energy (DAPSE), enabling zero-shot enforcement of driving constraints on our pre-trained diffusion-based planner. 3. Controllable safety-critical scenario generation in closed loop. We repurpose the same pretrained diffusion model as a behavior generator for a designated adversary within a fully closed-loop nuPlan simulation. We gen-erate controllable and realistic safety-critical highway interactions, including aggressive cut-ins and sudden braking events, where the adversary challenges the ego planner through targeted driving behaviors. Guided Diffusion for Planning and Scenario Generation 3Static Obj Agent History 
+
+> Navigation
+
+Scene Encoder 
+
+> Lanes
+
+Trajectory Decoder (ego) Controller Controller 
+
+Trajectory Decoder (adversarial agent) 
+
+> Adversary History Ego History
+> Encoded Scene Condition
+> Scene
+> Ego and neighbor trajectories Adversarial agent trajectory
+> xN
+> Multi-Head Attention VKQ
+> MLP Mixer MLP Mixer MLP Layer Norm Feed Forward
+> ...
+> Ego Neighbors Ego Neighbors
+> Adversarial Guidance Function
+
+Fig. 1: The dual planner and scenario generator framework. A shared scene encoder produces a scene condition used by two trajectory decoders: the ego decoder and the adversarial decoder are sampled independently, with the adversarial decoder be-ing steered at each denoising step by the gradient of a scenario-specific energy (e.g. 
+
+ETTC , Elc , Ebrake ). Both trajectories are tracked by an LQR controller, and the resulting histories are fed back for the next timestep. 
+
+## 2 Related Work 
+
+Data-Driven Motion Planning Traditional local planners rely heavily on hand-crafted rules, sampling, or Model Predictive Control (MPC), which strug-gle to scale to dense, unpredictable urban environments due to local optima and rigid parameter tuning [24]. To scale motion planning to these complex set-tings, Imitation Learning (IL) has emerged as a highly effective paradigm [17], implicitly learning the rules of the road from large-scale expert datasets: either with end-to-end pipelines [12,39] or via object-level representations [3]. However, standard regression-based IL is plagued by mode averaging, where a single de-terministic output fails to capture the diverse, multi-modal behaviors inherent in human driving [43]. This limitation often necessitates large-scale, computation-ally expensive reinforcement learning rollouts [6] or rule-based fallback safety filters [36] to reject unsafe trajectories. 
+
+Diffusion models for trajectories. DPMs have emerged as a powerful paradigm for capturing highly multi-modal, complex trajectory distributions without the risks of mode averaging. Early frameworks introduced trajectory diffusion to robotic manipulation by directly synthesizing state-action sequences [15]. This was subsequently extended to autonomous driving for multi-agent motion fore-4 A. Pal et al. 
+
+casting tasks, demonstrating superior capability in predicting diverse future in-tents compared to traditional regression or generative adversarial models [16]. To unify upstream prediction with downstream planning, recent architectures scale this approach to joint trajectory generation. For instance, Gen-Drive [14] leverages a behavior diffusion model as a multi-agent scene generator to simulate interactive future scenarios. Furthermore, to capture true multi-agent interac-tions, Large Trajectory Models (LTMs) [30] unify prediction and planning within massive, data-intensive transformer structures. Most relevant to our work, Diffusion Planner [43] utilizes a Diffusion Trans-former (DiT) [25] decoder to model scene interactions natively within the gen-erative process. By jointly processing past agent histories to output both the ego-vehicle’s plan and neighboring agent trajectories, it serves as an expressive, interactive foundation for controllable driving behavior. 
+
+Safety-critical scenario generation. Automatically generating realistic driv-ing scenarios has become an important direction for scalable evaluation of motion planners. Recent generative approaches, including TrafficGen [9], LCTGen [32], and ProSim [31], demonstrate the ability to synthesize diverse and controllable traffic behaviors. However, evaluating planner robustness requires scenarios be-yond nominal traffic distributions, motivating adversarial scenario generation methods such as AdvSim [37], which optimizes adversary behaviors to induce planner failures but may produce unrealistic trajectories. To improve realism, STRIVE [28] introduces a learned traffic prior that captures joint multi-agent behavior. By constraining the optimization to the learned traffic manifold, the generated scenarios preserve more realistic interactions while remaining safety-critical. However, it provides limited control over the generated scenario and performs scenario generation in an open-loop setting. More recently, SafeSim [2] adopts a diffusion-based traffic model with inference-time guidance to enable controllable and reactive safety-critical scenario gener-ation in closed-loop simulation. However, it primarily focuses on intersection-based scenarios and relies on trajectory proposals to guide adversarial behav-iors. Building upon diffusion-based scenario generation, our work targets high-speed highway interactions, where limited reaction time makes aggressive cut-ins and sudden braking particularly challenging for motion planners. Instead of pre-scribing adversarial trajectories, the diffusion model itself generates multi-modal traffic behaviors, while interpretable energy-based guidance steers the generated trajectories toward realistic safety-critical interactions. In our work, we build directly upon the joint prediction-and-planning for-mulation, with a more expressive decoder that effectively fuses the scene con-dition during trajectory generation. To evaluate the above-mentioned planner under challenging long-tail scenarios, we leverage the same diffusion framework to generate controllable adversarial scenarios. Through energy-based guidance, generated agent behaviors are steered toward realistic safety-critical interactions. Guided Diffusion for Planning and Scenario Generation 5
+
+## 3 Preliminaries: Diffusion over Joint Trajectories 
+
+Let the scene condition Ef collect current and historical agent states, lane polylines with traffic-light status, static objects, and the ego navigation route. The generated trajectory representation is represented as a state tensor x(t) ∈
+
+R(M +1) ×τ ×4 at diffusion time step t ∈ [0 , 1] . An element of this tensor, x(t)
+
+> i,k
+
+, rep-resents the state of agent i ∈ { 0, 1, . . . , M } at trajectory time step k ∈ { 1, . . . , τ },where i = 0 denotes the ego vehicle and i > 0 denotes its M nearest neighbors. The clean target state ( t = 0 ) for agent i at trajectory step k is given by: 
+
+x(0)  
+
+> i,k
+
+=  pkx,i , p ky,i , cos θki , sin θki
+
+, (1) where pkx,i and pky,i denote the x and y coordinates, and θki is the heading angle. A variance-preserving forward process with a linear noise schedule corrupts the clean trajectory tensor x(0) to Gaussian noise x(1) . The model μθ (x(t), t, Ef )
+
+is trained to predict the clean sample from noisy data [27]. 
+
+## 4 Planner: SSDS Diffusion Planning with DAPSE Guidance 
+
+4.1 Scene encoder 
+
+The driving environment consists of various multi-modal data, namely lane infor-mation, traffic light status, navigation routes, agent history, static objects, etc. Fusing this spatio-temporal information is important for the downstream trajec-tory planning task. Inspired by the latest success of diffusion-based trajectory planning [43], we follow the below-mentioned scene encoder ( Scene Encoder block in Figure 1): agent histories and lane features are processed by per-modality MLP-Mixer [33] blocks to mix independently across feature and sequence di-mensions; static objects are processed by an MLP; the concatenated tokens pass through self-attention and feed-forward layers to yield the fused context Ef . The navigation route is encoded separately and added to the diffusion-time embed-ding to form the conditioning vector for adaptive layer norm (adaLN) [25]. 
+
+4.2 Single-Stream Dual-Stream (SSDS) decoder 
+
+To effectively fuse scene context and trajectories in the decoder, we take mo-tivation from multi-modal video-generation architectures [19, 42]. Our decoder treats trajectory tokens x(0) and context tokens Ef as two streams, as presented in Figure 2. In each dual-stream block, both streams receive independent adaLN modulation and QKV projections [35]; queries, keys, and values are concate-nated for a single joint attention operation. A subsequent single-stream stage concatenates the streams into a unified token set processed by parallel attention and MLP branches. All gates, scales, and shifts are conditioned on the naviga-tion and diffusion time-step embedding, so route information modulates every 6 A. Pal et al. 
+
+layer. With this setup, dual-stream blocks enable early, symmetric cross-stream interaction while preserving modality-specific processing, and the single-stream stage performs deep fusion—in contrast to the asymmetric, late fusion of cross-attention in standard DiT architecture [25]. Final Layer 
+
+Trajectory Decoder   
+
+> Navigation
+> ... Ego  Neighbors Ego  Neighbors
+> Single-stream DiT Block xN
+> Dual-stream DiT Block
+
+Single-stream DiT Block Dual-stream DiT Block   
+
+> xN
+> Encoded Scene Condition
+> ... ... ...
+> Navigation MLP Mixer
+> FFN Scale & Shift
+
+Final Layer 
+
+> Layer Norm Layer Norm Scale & Shift Scale & Shift Layer Norm QK-Norm Scale & Shift QK-Norm Layer Norm Attention Gate Gate FFN Scale & Shift Layer Norm Gate
+> t
+> Gate FFN FFN
+> ... ...
+> QK-Norm Layer Norm Scale & Shift Scale & Shift FFN Attention
+
+Fig. 2: The proposed Single-stream and Dual-stream based DiT architecture for plan-ning of ego and prediction of neighbors. 
+
+4.3 DAPSE: Decoupled Annealing Posterior Sampling with Energy 
+
+Once a diffusion model is trained to capture the trajectory distribution q0(x(0) ),it can be further utilized to draw samples from a target distribution p0(x(0) ) that minimizes a given energy function E0(x(0) ) via the following formulation [40]: 
+
+p0(x(0) ) ∝ q0(x(0) ) e−β E0(x(0) ). (2) 
+
+β ≥ 0 is the inverse temperature that controls the energy strength. Sampling from p0(x(0) ) requires the corresponding score function ∇x(t) log pt(x(t)). How-ever, we only have access to ∇x(t) log qt(x(t)) and the relation between the score functions is ∇x(t) log pt(x(t)) = ∇x(t) log qt(x(t)) − ∇x(t) Et(x(t)) [20]. Because the exact intermediate guidance ∇x(t) Et(x(t)) is intractable, existing methods typically follow one of two approaches. They either train auxiliary net-works [15,20], which violate the strict real-time latency constraints ( 10 –20 Hz) of vehicle planners, or rely on test-time approximations such as Diffusion Posterior Sampling (DPS) [5], which are typically reliable only near t ≈ 0. To address these limitations, we propose Decoupled Annealing Posterior Sampling with En-ergy (DAPSE ). Our method builds upon DAPS [41] by generalizing its consec-utive noise-level decoupling framework from standard measurement likelihoods to arbitrary, non-analytical energy functions. Guided Diffusion for Planning and Scenario Generation 7
+
+Following the non-Markovian forward process framework of DDIM [29] and decoupled sampling scheme of DAPS [41] ( x(t1) ⊥⊥ x(t2) | x(0) ) , we can express the transition probability by marginalizing over the clean data manifold: 
+
+pt2 (x(t2)) = 
+
+Z
+
+pt1 (x(t1))p(x(0) |x(t1))p(x(t2)|x(0) , x(t1))dx(0) dx(t1)
+
+=
+
+Z
+
+pt1 (x(t1))p(x(0) |x(t1))pt20(x(t2)|x(0) )dx(0) dx(t1)
+
+= Ex(0) ∼p(x(0) |x(t1))N (x(t2); x(0) , σ 2 
+
+> t2
+
+I) (3) The last line can be written as a known sample x(t1) from energy-conditioned 
+
+p(x(t1)) will be available from the previous iteration, and p(x(t1) | x(0) ) is de-fined by the standard forward Gaussian corruption process. To draw the energy-conditioned clean sample x(0) ∼ p(x(0) | x(t)), we factorize the posterior using Bayes’ rule and reuse the formulation in Eq. (2): 
+
+p(x(0) | x(t)) ∝ p(x(t) | x(0) ) p0(x(0) )= q(x(t) | x(0) ) q0(x(0) ) e−βE0(x(0) )
+
+∝ q(x(0) | x(t)) e−βE0(x(0) ), (4) where we exploit the fact that the forward corruption likelihood p(x(t) | x(0) ) is identical to the unguided q(x(t) | x(0) ) [20]. To sample from this unnormalized distribution, we utilize Langevin dynamics [38] over inner MCMC [10] iterations j = 0 , . . . , J − 1 with step size η:
+
+x(0 , j +1) = x(0 , j ) + η∇x(0 , j ) log p(x(0 , j ) | x(t)) + p2η ϵ(j). (5) By approximating the intractable unguided posterior as a Gaussian centered around the current reverse ODE trajectory estimate ˆx(0) (x(t)) with heuristic variance r2 
+
+> t
+
+I [41], i.e., q(x(0) | x(t)) ≈ N (x(0) ; ˆ x(0) (x(t)), r 2 
+
+> t
+
+I), the update step simplifies to our final DAPSE formulation: 
+
+x(0 , j +1) = x(0 , j ) − η∇
+
+x(0 , j ) − ˆx(0) (x(t)) 2
+
+2r 2
+
+> t
+
+| {z }
+
+> Reconstruction term
+
+− ηβ ∇E 0
+
+
+
+x(0 , j )| {z }
+
+> Energy guidance
+
++ p2η ϵ(j)
+
+| {z }
+
+> Langevin noise
+
+(6) This decoupling allows the sampler to correct global errors committed at early steps. Crucially, setting E0 = − log q0(y | x(0) ) recovers the original DAPS update [41], rendering Eq. (6) a strict generalization. 
+
+## 5 Scenario Generator: Adversarial Scenario Generation 
+
+While robust planning is essential for autonomous driving, its performance must also be evaluated under rare and safety-critical interactions that are underrep-resented in nominal driving datasets. To assess planner robustness beyond in-distribution scenarios, we repurpose the pretrained DiT decoder for adversar-ial scenario generation through guided sampling. While DAPSE is our primary 8 A. Pal et al. 
+
+contribution for high-precision ego planning, we adopt DPS [5] for adversarial scenario generation. This choice enables testing of diverse, composable adversar-ial energy functions without the added hyperparameter overhead of DAPSE’s annealing schedules. 
+
+5.1 Closed-loop pipeline 
+
+We integrate our guided diffusion framework into the nuPlan closed-loop sim-ulation environment for interactive adversarial driving evaluation (Figure 1). The simulation includes four agent categories: (1) the ego vehicle controlled by an independent black-box planner, (2) a manually designated adversary, whose behavior is generated by our guided diffusion model, (3) background vehicles following the Intelligent Driver Model (IDM) [34], and (4) non-vehicle agents following log playback. At each timestep, the framework receives HD map infor-mation and agent histories to generate joint predictions, enabling the adversary to adapt to ego behavior. Guidance is selectively applied to the adversary’s posi-tional trajectory during denoising, with headings recomputed from the resulting waypoints for geometric consistency. The guided trajectories are tracked using an LQR controller with a kinematic bicycle model [26] to generate executable con-trol commands. As the ego vehicle reacts dynamically, safety-critical scenarios emerge through closed-loop interaction rather than predefined collision scripts. 
+
+5.2 Guidance design principles 
+
+Following the DPS formulation, guidance is applied during the low-noise stage of the reverse diffusion process, where trajectory refinement is most effective. Prior work using DPS guidance [43] performs denoising with 10 diffusion steps, which limits the number of guidance updates. To provide more opportunities for trajectory refinement, we increase the denoising steps to 20 and adopt a logSNR-based timestep schedule [21] that allocates more steps to the low-noise region (t ∈ [8 ×10 −4, 0.1] ). To efficiently perform sampling, we use DPM-Solver ++ [21] as the reverse diffusion solver, enabling stable guided sampling with fewer solver evaluations while maintaining sample quality. The effectiveness of gradient-based guidance depends on the design of the guidance objective and the quality of the resulting gradients. Following the prin-ciples discussed in [43], we design energy functions that produce smooth and stable guidance signals for trajectory refinement. We apply guidance directly to the positional trajectory rather than higher-order states such as velocity or acceleration, as position-level guidance provides a more stable way to influence the resulting motion. This allows higher-order behaviors, such as braking and evasive maneuvers, to emerge naturally from the generated trajectory dynamics. 
+
+5.3 Guidance Function for long-tail scenarios Time-to-Collision (TTC) with temporal lead. We adopt the TTC objective used in prior safety-critical scenario generation methods such as STRIVE [28] Guided Diffusion for Planning and Scenario Generation 9
+
+and SafeSim [2]. Unlike purely distance-based objectives, TTC incorporates both the relative positions and velocities of interacting agents, providing a measure of future collision risk rather than instantaneous proximity alone. Following [23], the TTC energy is defined as 
+
+ETTC =
+
+> τ
+
+X
+
+> k=1
+
+− exp 
+
+
+
+− ¯tcol (k)2
+
+2λt
+
+− ¯dcol (k)2
+
+2λd
+
+
+
+, (7) where k denotes the predicted trajectory timestep over the planning horizon, and 
+
+¯tcol (k) and ¯dcol (k) represent the time and distance at closest approach under a constant-velocity assumption. The parameters λt and λd control the temporal and spatial sensitivity of the guidance. Directly minimizing this objective can encourage the adversary to target the ego vehicle’s current position, often re-sulting in abrupt or unavoidable collisions that leave little opportunity for the ego planner to react. To encourage more plausible interactions, we introduce a temporal lead parameter ℓ, whereby the TTC objective is evaluated between the adversary at trajectory timestep k and the ego vehicle at the future trajectory timestep k +ℓ, i.e., (padv (k), p ego (k +ℓ)) instead of (padv (k), p ego (k)) . This simple modification preserves the original TTC objective while shifting the interaction target from the ego vehicle’s current position to its anticipated future position. As a result, the adversary is encouraged to intercept the ego’s future trajectory, producing more temporally consistent and causally meaningful safety-critical interactions. 
+
+Lane change (cut-ins). To generate structured cut-in behaviors, we introduce a lane-change guidance objective. The guidance is activated through a one-shot trigger based on longitudinal distance. After activation, the adversary is encour-aged to align with the ego lane centerline by minimizing the lateral deviation 
+
+δlat (k) = padv  
+
+> y
+
+(k) − clat (k), where padv  
+
+> y
+
+(k) is the adversary’s lateral position and 
+
+clat (k) is the corresponding lane-centerline lateral position in the ego-anchor frame. The lane-change energy is defined as 
+
+Elc = 1
+
+τ
+
+> τ
+
+X
+
+> k=1
+
+δlat (k)2. (8) Minimizing Elc drives the adversary toward the lane centerline, producing a lateral maneuver that follows the underlying road structure. 
+
+Lead-vehicle braking. The braking guidance objective is designed to induce smooth longitudinal deceleration of the adversary. The guidance is activated using a one-shot trigger based on the target speed and remains active after activation. Let p(k) denote the predicted position of the adversary and ˆh =(cos θ, sin θ) its current heading direction. The longitudinal displacement is com-puted as s(k) = ( p(k) − p(0)) · ˆh, with the desired progress defined as s∗(k) = 
+
+kv ∗∆t , where v∗ is the target velocity. The braking energy is defined as 
+
+Ebrake = 1
+
+τ
+
+> τ
+
+X
+
+> k=1
+
+(max( s(k) − s∗(k), 0)) 2 . (9) 10 A. Pal et al. 
+
+This objective penalizes longitudinal progress beyond the desired braking profile, encouraging the agent to gradually reduce its forward motion while main-taining lane consistency. The target velocity v∗ is progressively updated using a predefined deceleration rate until the desired minimum speed is reached, result-ing in smooth and physically plausible braking behavior. 
+
+Drivable-area compliance. To maintain road compliance during guided tra-jectory generation, we incorporate a drivable-area constraint following the Eu-clidean Signed Distance Field (ESDF)-based formulation in PLUTO [3]. The road geometry is represented by D(p), where positive values indicate drivable regions. Similar to [3], vehicle coverage circles are used to evaluate the distance field along the agent body. The drivable-area compliance energy is defined as 
+
+EDA = 1
+
+τ N cτX
+
+> k=1
+> Nc
+
+X
+
+> i=1
+
+max(0 , R c − D (ci(k))) , (10) where ci(k) denotes the center of the i-th coverage circle, Rc is its radius, and Nc
+
+is the number of coverage circles used to approximate the vehicle footprint. Min-imizing EDA penalizes off-road trajectories and encourages generated behaviors to remain consistent with the road geometry. 
+
+Combined cut-in and braking . Individual guidance objectives can be com-posed sequentially to generate more challenging interactions. For example, a lead vehicle that is initially too far ahead to produce a conflict can first be guided to brake, reducing the gap to the ego vehicle, before executing a cut-in maneuver. Depending on the initial traffic configuration, the order can also be reversed (cut-in followed by braking). The transition between objectives is controlled by a distance threshold dcomb , enabling a wider range of coordinated longitudinal and lateral adversarial behaviors. 
+
+## 6 Experiments 
+
+6.1 Setup 
+
+All models are trained on nuPlan [1] using different amounts of training data: (i) 250 thousand (250K); (ii) 650 thousand (650K); and (iii) 1 million (1M) extracted scenarios, and evaluated in closed loop on the Val14 [7], Test14, and Test14-hard splits [4] in reactive (R) and non-reactive (NR) modes using the standard nu-Plan score. We compare the reproduced baseline Diffusion Planner [43] (DP) and our SSDS variant ( SSDS-DP ). For adversarial scenario generation, scenes and adversaries are mined from the Val14 split (1,118 scenarios across 14 types) to satisfy the geometric preconditions of each scenario type. Selection was manual but based on fixed agent-configuration criteria defined prior to and independent of either planner’s evaluation (e.g., a nearby agent, ahead or behind, in an ad-jacent lane for lane-change, or a lead agent in the ego lane for braking). This process predominantly yielded scenes from the "following lane with lead" and "high-magnitude speed" categories, from which 25 scenes were used for the ad-versarial evaluation. As this process was manual, we cannot fully rule out an Guided Diffusion for Planning and Scenario Generation 11 
+
+unintentional selection bias. Adversarial evaluation is performed only for the 1M-trained DP and SSDS-DP models using the proposed closed-loop pipeline. 
+
+6.2 Planning: SSDS DP vs. DP 
+
+Comparative performances of DP [43] and SSDS-DP (ours) are presented in Table 1, which reveals a few patterns. First, SSDS-DP improves most where interaction modeling matters: reactive, hard scenarios (Test14-hard Reactive: 
+
++6 .8 at 250K, +14 .4 at 650K). Second, the gap narrows in non-reactive settings, supporting the interpretation that joint attention chiefly benefits inter-agent de-pendency modeling rather than marginal trajectory accuracy. Third, SSDS-DP is more data efficient , i.e., it consistently outperforms the baseline when models are trained on limited data. Interestingly, with 1M training data, the baseline DP improves significantly and even outperforms SSDS-DP in some splits. Fur-thermore, one qualitative comparison for the 650K model is presented in Figure 3, where SSDS-DP respects the navigation route whereas the baseline goes out of the navigation, highlighting that scene fusion is more effective in SSDS-DP.                                                       
+
+> Table 1: Closed-loop nuPlan scores across training-set sizes. Reactive Non-Reactive Data Method Val14 ↑T14-hard ↑Test14 ↑Val14 ↑T14-hard ↑Test14 ↑
+> 250K DP 73.58 55.88 76.55 84.96 71.88 87.33 SSDS-DP 75.85 62.68 77.53 86.25 72.11 88.31
+> 650K DP 78.69 51.89 68.74 87.45 68.45 79.63 SSDS-DP 78.96 66.29 80.06 86.58 69.86 85.72
+> 1M DP 82.82 69.26 82.89 89.88 75.38 89.29 SSDS-DP 83.09 65.93 79.38 87.12 75.85 89.46
+
+6.3 Guidance: DAPSE 
+
+To highlight the effectiveness of the proposed DAPSE sampling method, we take a simple case of speed maintenance with the following guidance function: 
+
+Etarget_speed = max 
+
+ dxτ
+
+> ego
+
+dτ − vlow , 0
+
+2
+
++ max 
+
+
+
+vhigh − dxτ
+
+> ego
+
+dτ , 0
+
+2
+
+(11) The different steps of this method are presented in Figure 4. To elaborate, after performing the traditional reverse diffusion, the length of the trajectory of ego, in the top left of Figure 4 is very long, indicating high speed. After performing the energy update with Langevin dynamics [38], the trajectory is shrunk but becomes more jittery. In the next step, noise is added, and reverse diffusion is performed, and as expected in Figure 4 bottom right, the length of the trajectory is smaller compared to the original unconditional sample. 12 A. Pal et al. Diffusion Planner (Baseline) SSDS Diffusion Planner    
+
+> Ego: Ego trajectory: Agent: Agent trajectory:
+
+Fig. 3: Comparison between DP (baseline) and SSDS-DP (650K) in a Val14 Reactive simulation. Langevin Dynamics Forward Diffusion Reverse Diffusion Reverse Diffusion 
+
+Fig. 4: Speed maintenance with DAPSE. Guided Diffusion for Planning and Scenario Generation 13 
+
+6.4 Generation: stress-testing planners on adversarial scenarios 
+
+The generated scenarios cover four interaction types using different guidance combinations: (1) Cut-in , using lane-change guidance to encourage lateral merg-ing; (2) Lead-Agent brake , combining braking and keep-in-lane guidance to induce longitudinal conflicts while preventing unrealistic lateral deviations; (3) 
+
+Combined cut-in and braking , sequentially composing cut-in and lead-agent brake to create more challenging interactions; and (4) Intersection , combining TTC guidance with drivable-area compliance to encourage safety-critical inter-actions while maintaining road compliance.                         
+
+> Table 2: Closed-loop evaluation on 25 selected Val14 scenarios with combined cut-in and braking scenario. No-Adv: scenarios without any adversary; Adv: scenarios with one adversary.
+> Scenario Planner nuPlan Score
+> ↑
+> TTC Bound
+> (%) ↑
+> Ego-Fault Collision
+> (%) ↓
+> Ego Comfort
+> (%) ↑
+> Realism deviation
+> ↓
+> No-Adv DP 80.49 91 470 —SSDS-DP 84.65 96 483 —Adv DP 67.29 87 23 61 0.38 SSDS-DP 53.96 70 26 78 0.36
+
+Table 2 presents an evaluation of the two diffusion-based planners under the combined cut-in and braking scenario. Under adversarial guidance, both planners experience substantial degradation in closed-loop performance, with SSDS-DP showing a larger drop compared to DP. Both planners exhibit increased ego-at-fault collisions and reduced TTC-in-bound and comfort scores, indicating that the generated interactions effectively expose safety-critical weaknesses. Follow-ing [44], we additionally report the realism deviation for the adversarial scenario, which measures how closely the adversary’s speed, jerk and longitudinal/lateral accelerations match nominal driving behavior. The resulting values are compa-rable to those reported by SafeSim [2] under the same metric, suggesting the generated behaviors remain physically plausible despite substantially degrading planner performance. Although SSDS-DP performs better under nominal con-ditions, it degrades more under adversarial scenarios. Figure 5 shows a qualitative comparison of the closed-loop responses of DP and SSDS-DP across three different adversarial scenarios. In cut-in scenarios with a limited gap, SSDS-DP often fails to react sufficiently early, resulting in collisions, whereas DP occasionally performs stronger braking responses and avoids the collision. In braking scenarios, DP is able to delay the collision, indi-cating a more reactive longitudinal response, whereas SSDS-DP does not always apply timely deceleration when the lead vehicle slows, leading to front collisions. 14 A. Pal et al. Cut-In into Ego lane Lead Agent Brake Intersection Based Diffusion Planner SSDS Diffusion Planner    
+
+> Ego: Ego trajectory: Adversary: Adversary trajectory:
+
+Fig. 5: Comparison between DP and SSDS-DP (1M) on generated adversarial scenarios at the same simulation timesteps. 
+
+Across both scenario types, DP consistently reacts earlier and brakes more de-cisively than SSDS-DP, mirroring the gap observed in the quantitative results. Notably, in neither scenario type does either planner attempt a lateral evasive maneuver such as overtaking, relying purely on longitudinal deceleration. This limitation becomes decisive in intersection scenarios, where both planners strug-gle equally, since braking alone cannot resolve an imminent crossing conflict. The experimental results across planning and scenario generation validate the dual-use capability of our unified diffusion foundation and can be summarised as below: 
+
+– High-fidelity planning via SSDS-DP: Our SSDS-DP significantly im-proves context fusion, yielding massive performance leaps in highly interac-tive, reactive environments (up to +14 .4 points on Test14-hard) and demon-strating superior data efficiency. However, at 1M training scenarios, there is no clear winner, and we identify multi-seed benchmarking and scaling beyond 1M trajectories as valuable directions for future work. 
+
+– Closing the loop via adversarial generation: By leveraging guided dif-fusion for scenario generation, our approach enables controllable generation of safety-critical long-tail scenarios, including aggressive cut-ins and braking interactions. In closed-loop evaluation, these scenarios effectively challenge planners that perform strongly under nominal conditions, exposing failure Guided Diffusion for Planning and Scenario Generation 15 
+
+modes while maintaining realistic agent behaviors with low realism devia-tion. Crucially, the finding that the stronger planner (SSDS-DP) degrades more un-der generated long-tail scenarios highlights that standard-benchmark superiority does not guarantee adversarial robustness . By providing both the planner and the scenario generator within a unified diffusion framework, our work enables systematic identification and stress-testing of complex multi-agent edge cases. 
+
+## 7 Conclusion 
+
+This paper presented a unified, dual-use foundation for autonomous driving us-ing a single pretrained diffusion model. First, we introduced the SSDS-DP to improve interactive planning and proposed DAPSE, a training-free framework for zero-shot safety steering. Second, we extended the diffusion framework to con-trollable long-tail scenario generation, enabling realistic closed-loop evaluation scenarios that expose critical planner failure modes. Our analysis reveals that, despite strong nominal benchmark performance, learned planners can struggle with complex multi-agent interactions by relying primarily on reactive braking rather than proactive evasive maneuvers. These results demonstrate that a sin-gle learned traffic prior can simultaneously serve as an effective planner and a rigorous evaluator in the autonomous vehicle development loop. Future work will explore other energy functions (e.g., collision avoidance) with the DAPSE frame-work and quantitatively evaluate its effectiveness (e.g., collision rate, TTC). 
+
+## Acknowledgments 
+
+This work was partially supported by the Wallenberg AI, Autonomous Systems and Software Program (WASP) funded by the Knut and Alice Wallenberg Foun-dation. 
+
+## References  
+
+> 1. Caesar, H., Kabzan, J., Tan, K.S., Fong, W.K., Wolff, E., Lang, A., Fletcher, L., Beijbom, O., Omari, S.: nuplan: A closed-loop ml-based planning benchmark for autonomous vehicles. arXiv preprint arXiv:2106.11810 (2021) 2. Chang, W.J., Pittaluga, F., Tomizuka, M., Zhan, W., Chandraker, M.: Safe-sim: Safety-critical closed-loop traffic simulation with diffusion-controllable adversaries. In: Leonardis, A., Ricci, E., Roth, S., Russakovsky, O., Sattler, T., Varol, G. (eds.) Computer Vision – ECCV 2024. pp. 242–258. Springer Nature Switzerland, Cham (2025) 3. Cheng, J., Chen, Y., Chen, Q.: Pluto: Pushing the limit of imitation learning-based planning for autonomous driving. arXiv preprint arXiv:2404.14327 (2024) 4. Cheng, J., Chen, Y., Mei, X., Yang, B., Li, B., Liu, M.: Rethinking imitation-based planners for autonomous driving. In: 2024 IEEE International Conference on Robotics and Automation (ICRA). pp. 14123–14130 (2024). https://doi.org/ 10.1109/ICRA57147.2024.10611364
+
+16 A. Pal et al. 5. Chung, H., Kim, J., Mccann, M.T., Klasky, M.L., Ye, J.C.: Diffusion posterior sampling for general noisy inverse problems. In: The Eleventh International Con-ference on Learning Representations (2023), https://openreview.net/forum?id= OnD9zGAGT0k 
+
+6. Cusumano-Towner, M.F., Hafner, D., Hertzberg, A., Huval, B., Petrenko, A., Vinit-sky, E., Wijmans, E., Killian, T.W., Bowers, S., Sener, O., Kraehenbuehl, P., Koltun, V.: Robust autonomy emerges from self-play. In: Forty-second Interna-tional Conference on Machine Learning (2025), https://openreview.net/forum? id=yOXoJpG6Qy 
+
+7. Dauner, D., Hallgarten, M., Geiger, A., Chitta, K.: Parting with misconceptions about learning-based vehicle motion planning. In: Tan, J., Toussaint, M., Darvish, K. (eds.) Proceedings of The 7th Conference on Robot Learning. Proceedings of Machine Learning Research, vol. 229, pp. 1268–1281. PMLR (06–09 Nov 2023), 
+
+https://proceedings.mlr.press/v229/dauner23a.html 
+
+8. Ding, W., Xu, C., Arief, M., Lin, H., Li, B., Zhao, D.: A survey on safety-critical driving scenario generation—a methodological perspective. IEEE Transactions on Intelligent Transportation Systems 24 (7), 6971–6988 (2023). https://doi.org/ 10.1109/TITS.2023.3259322 
+
+9. Feng, L., Li, Q., Peng, Z., Tan, S., Zhou, B.: Trafficgen: Learning to generate diverse and realistic traffic scenarios. arXiv preprint arXiv:2210.06609 (2022) 10. Hastings, W.K.: Monte carlo sampling methods using markov chains and their applications. Biometrika 57 (1), 97–109 (04 1970). https://doi.org/10.1093/ biomet/57.1.97 , https://doi.org/10.1093/biomet/57.1.97 
+
+11. Ho, J., Jain, A., Abbeel, P.: Denoising diffusion probabilistic models. In: Larochelle, H., Ranzato, M., Hadsell, R., Balcan, M., Lin, H. (eds.) Advances in Neu-ral Information Processing Systems. vol. 33, pp. 6840–6851. Curran Associates, Inc. (2020), https://proceedings.neurips.cc/paper_files/paper/2020/file/ 4c5bcfec8584af0d967f1ab10179ca4b-Paper.pdf 
+
+12. Hu, Y., Yang, J., Chen, L., Li, K., Sima, C., Zhu, X., Chai, S., Du, S., Lin, T., Wang, W., Lu, L., Jia, X., Liu, Q., Dai, J., Qiao, Y., Li, H.: Planning-oriented autonomous driving. In: 2023 IEEE/CVF Conference on Computer Vision and Pattern Recog-nition (CVPR). pp. 17853–17862 (2023). https://doi.org/10.1109/CVPR52729. 2023.01712 
+
+13. Huang, Z., Liu, J., Song, R., Zhou, Z., Yang, R., Zhang, Y., Cai, T., Zhang, H., Gao, M., Xu, V., et al.: nureasoning: A reasoning-centric dataset and benchmark for long-tail autonomous driving. arXiv preprint arXiv:2605.31572 (2026) 14. Huang, Z., Weng, X., Igl, M., Chen, Y., Cao, Y., Ivanovic, B., Pavone, M., Lv, C.: Gen-drive: Enhancing diffusion generative driving policies with reward modeling and reinforcement learning fine-tuning. In: 2025 IEEE International Conference on Robotics and Automation (ICRA). pp. 3445–3451 (2025). https://doi.org/10. 1109/ICRA55743.2025.11127286 
+
+15. Janner, M., Du, Y., Tenenbaum, J., Levine, S.: Planning with diffusion for flexible behavior synthesis. In: Chaudhuri, K., Jegelka, S., Song, L., Szepesvari, C., Niu, G., Sabato, S. (eds.) Proceedings of the 39th International Conference on Machine Learning. Proceedings of Machine Learning Research, vol. 162, pp. 9902–9915. PMLR (17–23 Jul 2022), https://proceedings.mlr.press/v162/janner22a. html 
+
+16. Jiang, C., Cornman, A., Park, C., Sapp, B., Zhou, Y., Anguelov, D., et al.: Motion-diffuser: Controllable multi-agent motion prediction using diffusion. In: Proceed-ings of the IEEE/CVF conference on computer vision and pattern recognition. pp. 9644–9653 (2023) Guided Diffusion for Planning and Scenario Generation 17 17. Karkus, P., Igl, M., Chen, Y., Chitta, K., Packer, J., Douillard, B., Tian, R., Naumann, A., Garcia-Cobo, G., Tan, S., Degirmenci, A., Popov, A., Smolyanskiy, N., Muller, U., Ivanovic, B., Pavone, M.: Beyond behavior cloning in autonomous driving: a survey of closed-loop training techniques. TechRxiv 2025 (1216) (2025). 
+
+https://doi.org/10.36227/techrxiv.176591565.57674132/v1 , https://www. techrxiv.org/doi/abs/10.36227/techrxiv.176591565.57674132/v1 
+
+18. Ke, L., Choudhury, S., Barnes, M., Sun, W., Lee, G., Srinivasa, S.: Imitation learn-ing as f-divergence minimization. In: LaValle, S.M., Lin, M., Ojala, T., Shell, D., Yu, J. (eds.) Algorithmic Foundations of Robotics XIV. pp. 313–329. Springer International Publishing, Cham (2021) 19. Kong, W., Tian, Q., Zhang, Z., Min, R., Dai, Z., Zhou, J., Xiong, J., Li, X., Wu, B., Zhang, J., et al.: Hunyuanvideo: A systematic framework for large video generative models. arXiv preprint arXiv:2412.03603 (2024) 20. Lu, C., Chen, H., Chen, J., Su, H., Li, C., Zhu, J.: Contrastive energy prediction for exact energy-guided diffusion sampling in offline reinforcement learning. In: Krause, A., Brunskill, E., Cho, K., Engelhardt, B., Sabato, S., Scarlett, J. (eds.) Proceedings of the 40th International Conference on Machine Learning. Proceed-ings of Machine Learning Research, vol. 202, pp. 22825–22855. PMLR (23–29 Jul 2023), https://proceedings.mlr.press/v202/lu23d.html 
+
+21. Lu, C., Zhou, Y., Bao, F., Chen, J., Li, C., Zhu, J.: Dpm-solver++: Fast solver for guided sampling of diffusion probabilistic models. Machine Intelligence Research 
+
+22 (4), 730–751 (2025) 22. Muhammad, K., Ullah, A., Lloret, J., Ser, J.D., de Albuquerque, V.H.C.: Deep learning for safe autonomous driving: Current challenges and future directions. IEEE Transactions on Intelligent Transportation Systems 22 (7), 4316–4336 (2021). 
+
+https://doi.org/10.1109/TITS.2020.3032227 
+
+23. Nishimura, H., Mercat, J., Wulfe, B., McAllister, R.T., Gaidon, A.: Rap: Risk-aware prediction for robust planning. In: Liu, K., Kulic, D., Ichnowski, J. (eds.) Proceedings of The 6th Conference on Robot Learning. Proceedings of Machine Learning Research, vol. 205, pp. 381–392. PMLR (14–18 Dec 2023), https:// proceedings.mlr.press/v205/nishimura23a.html 
+
+24. Paden, B., Čáp, M., Yong, S.Z., Yershov, D., Frazzoli, E.: A survey of motion planning and control techniques for self-driving urban vehicles. IEEE Transactions on Intelligent Vehicles 1(1), 33–55 (2016). https://doi.org/10.1109/TIV.2016. 2578706 
+
+25. Peebles, W., Xie, S.: Scalable diffusion models with transformers. In: Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV). pp. 4195– 4205 (October 2023) 26. Polack, P., Altché, F., d’Andréa Novel, B., de La Fortelle, A.: The kinematic bi-cycle model: A consistent model for planning feasible trajectories for autonomous vehicles? In: 2017 IEEE Intelligent Vehicles Symposium (IV). pp. 812–818 (2017). 
+
+https://doi.org/10.1109/IVS.2017.7995816 
+
+27. Ramesh, A., Dhariwal, P., Nichol, A., Chu, C., Chen, M.: Hierarchical text-conditional image generation with clip latents. arXiv preprint arXiv:2204.06125 
+
+1(2), 3 (2022) 28. Rempe, D., Philion, J., Guibas, L.J., Fidler, S., Litany, O.: Generating useful accident-prone driving scenarios via a learned traffic prior. In: 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 17284– 17294 (2022). https://doi.org/10.1109/CVPR52688.2022.01679 18 A. Pal et al. 29. Song, J., Meng, C., Ermon, S.: Denoising diffusion implicit models. In: International Conference on Learning Representations (2021), https://openreview.net/forum? id=St1giarCHLP 
+
+30. Sun, Q., Zhang, S., Ma, D., Shi, J., Li, D., Luo, S., Wang, Y., Xu, N., Cao, G., Zhao, H.: Large trajectory models are scalable motion predictors and planners. arXiv preprint arXiv:2310.19620 (2023) 31. Tan, S., Ivanovic, B., Chen, Y., Li, B., Weng, X., Cao, Y., Kraehenbuehl, P., Pavone, M.: Promptable closed-loop traffic simulation. In: 8th Annual Conference on Robot Learning (2024), https://openreview.net/forum?id=5iXG6EgByK 
+
+32. Tan, S., Ivanovic, B., Weng, X., Pavone, M., Kraehenbuehl, P.: Language condi-tioned traffic generation. In: 7th Annual Conference on Robot Learning (2023), 
+
+https://openreview.net/forum?id=PK2debCKaG 
+
+33. Tolstikhin, I.O., Houlsby, N., Kolesnikov, A., Beyer, L., Zhai, X., Unterthiner, T., Yung, J., Steiner, A., Keysers, D., Uszkoreit, J., et al.: Mlp-mixer: An all-mlp architecture for vision. Advances in neural information processing systems 34 ,24261–24272 (2021) 34. Treiber, M., Hennecke, A., Helbing, D.: Congested traffic states in empirical ob-servations and microscopic simulations. Phys. Rev. E 62 , 1805–1824 (Aug 2000). 
+
+https://doi.org/10.1103/PhysRevE.62.1805 , https://link.aps.org/doi/10. 1103/PhysRevE.62.1805 
+
+35. Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A.N., Kaiser, L.u., Polosukhin, I.: Attention is all you need. In: Guyon, I., Luxburg, U.V., Bengio, S., Wallach, H., Fergus, R., Vishwanathan, S., Garnett, R. (eds.) Advances in Neural Information Processing Systems. vol. 30. Curran Associates, Inc. (2017), https://proceedings.neurips.cc/paper_files/paper/2017/file/ 3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf 
+
+36. Vitelli, M., Chang, Y., Ye, Y., Ferreira, A., Wołczyk, M., Osiński, B., Niendorf, M., Grimmett, H., Huang, Q., Jain, A., Ondruska, P.: Safetynet: Safe planning for real-world self-driving vehicles using machine-learned policies. In: 2022 International Conference on Robotics and Automation (ICRA). pp. 897–904 (2022). https: //doi.org/10.1109/ICRA46639.2022.9811576 
+
+37. Wang, J., Pun, A., Tu, J., Manivasagam, S., Sadat, A., Casas, S., Ren, M., Ur-tasun, R.: Advsim: Generating safety-critical scenarios for self-driving vehicles. In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) (2021) 38. Welling, M., Teh, Y.W.: Bayesian learning via stochastic gradient langevin dy-namics. In: Proceedings of the 28th international conference on machine learning (ICML-11). pp. 681–688 (2011) 39. Wozniak, M., Liu, L., Cai, Y., Jensfelt, P.: Prix: Learning to plan from raw pixels for end-to-end autonomous driving. IEEE Robotics and Automation Letters 11 (5), 6400–6407 (2026). https://doi.org/10.1109/LRA.2026.3678836 
+
+40. Xiao, Z., Yan, Q., Amit, Y.: Exponential tilting of generative models: Improv-ing sample quality by training and sampling from latent energy. arXiv preprint arXiv:2006.08100 (2020) 41. Zhang, B., Chu, W., Berner, J., Meng, C., Anandkumar, A., Song, Y.: Improv-ing diffusion inverse problem solving with decoupled noise annealing. In: 2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR). pp. 20895–20905 (2025). https://doi.org/10.1109/CVPR52734.2025.01946 
+
+42. Zhang, K., Tang, Z., Hu, X., Pan, X., Guo, X., Liu, Y., Huang, J., Yuan, L., Zhang, Q., Long, X.X., et al.: Epona: Autoregressive diffusion world model for autonomous Guided Diffusion for Planning and Scenario Generation 19 driving. In: Proceedings of the IEEE/CVF International Conference on Computer Vision. pp. 27220–27230 (2025) 43. Zheng, Y., Liang, R., Zheng, K., Zheng, J., Mao, L., Li, J., Gu, W., Ai, R., Li, S., Zhan, X., et al.: Diffusion-based planning for autonomous driving with flexible guidance. In: International conference on learning representations. vol. 2025, pp. 37207–37227 (2025) 44. Zhong, Z., Rempe, D., Xu, D., Chen, Y., Veer, S., Che, T., Ray, B., Pavone, M.: Guided conditional diffusion for controllable traffic simulation. In: 2023 IEEE international conference on robotics and automation (ICRA). pp. 3560–3566. IEEE (2023)
