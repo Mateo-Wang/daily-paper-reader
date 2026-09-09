@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-08</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-09</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 6 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 26 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>4</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>2</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>14</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-08 21:57:48 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-09 21:45:37 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日聚焦机器人学习与视觉语言模型，精读4篇、速读2篇，共6篇论文。最值得关注的是9.0分研究揭示视觉语言奖励模型在释义下的脆弱性，以及8.0分工作探讨表征、VLA与世界模型的统一方向。建议普通读者优先了解奖励模型的鲁棒性瓶颈，并关注机器人基础模型的整合趋势。</p>
+<p>今日26篇论文聚焦机器人操作，精读重点为世界模型驱动的动作生成与接触丰富的VLA控制。最值得关注GE-Act 2.0（世界动作模型预训练与扩展）和CR-VLA-Force（接触鲁棒合规控制）。下一步可沿“世界模型+VLA统一”方向，关注具身推理与闭环评估进展。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">4 篇</strong>
+    <strong class="dpr-home-dashboard-count">14 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Same Trajectory, Contradictory Rewards (ROBORMBENCH): Paraphrase Fragility in Vision Language Reward Models">Same Trajectory, Contradictory Rewards (ROBORMBENCH): Paraphrase Fragility in Vision Language Reward Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models">Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="FailureSpot: Label-Efficient Timestamp-Level Failure Detection for Vision-Language-Action Models">FailureSpot: Label-Efficient Timestamp-Level Failure Detection for Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="GE-Act 2.0: Pretraining and Scaling a World-Action Model for Robotic Manipulation">GE-Act 2.0: Pretraining and Scaling a World-Action Model for Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="CR-VLA-Force: Learning Control-aware Compliance VLA Model for Robust Contact-rich Robotic Manipulation">CR-VLA-Force: Learning Control-aware Compliance VLA Model for Robust Contact-rich Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="DriveZero: End-to-End Driving Beyond Human Demonstrations">DriveZero: End-to-End Driving Beyond Human Demonstrations</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>12</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">2 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="One Word, Different Action: A Real-Robot Benchmark for Language-Conditioned Embodied Reasoning">One Word, Different Action: A Real-Robot Benchmark for Language-Conditioned Embodied Reasoning</span></li><li><span class="dpr-home-dashboard-paper-title" title="MINT: A Unified Model for World-Space Camera and Hand Motion Estimation from Scalable Egocentric Pipeline Supervision">MINT: A Unified Model for World-Space Camera and Hand Motion Estimation from Scalable Egocentric Pipeline Supervision</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models">Toward Unified Robot Learning: Bridging Representation, Vision-Language-Action, and World Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Closed-Loop Evaluation of Bird&#x27;s-Eye-View Maps from Cross-View Transformers as Inputs to Behavior-Cloning Policies">Closed-Loop Evaluation of Bird&#x27;s-Eye-View Maps from Cross-View Transformers as Inputs to Behavior-Cloning Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Learning Counterfactual World Models for Embodied Reasoning under Partial Observability">Learning Counterfactual World Models for Embodied Reasoning under Partial Observability</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>9</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
 </div>
 
