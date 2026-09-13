@@ -3,6 +3,8 @@
 
 <!-- dpr-frontier-sidebar:start -->
 * AI 前沿
+  * 2026 第 37 周 <!--dpr-frontier:2026-W37-->
+    * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/frontier/2026-W37/deepseek-ai-deepseek-v4-flash-vision-exp" data-sidebar-item="{&quot;title&quot;:&quot;deepseek-ai/DeepSeek-V4-Flash-Vision-Exp&quot;,&quot;link&quot;:&quot;https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp&quot;,&quot;score&quot;:&quot;10.0&quot;,&quot;tags&quot;:[{&quot;kind&quot;:&quot;query&quot;,&quot;label&quot;:&quot;frontier&quot;},{&quot;kind&quot;:&quot;other&quot;,&quot;label&quot;:&quot;模型发布&quot;}],&quot;evidence&quot;:&quot;&quot;,&quot;published&quot;:&quot;2026-08-31&quot;,&quot;selection_source&quot;:&quot;frontier&quot;}">deepseek-ai/DeepSeek-V4-Flash-Vision-Exp</a>
   * 2026 第 35 周 <!--dpr-frontier:2026-W35-->
     * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="#/frontier/2026-W35/qwen-qwen3-8-27b" data-sidebar-item="{&quot;title&quot;:&quot;Qwen/Qwen3.8-27B&quot;,&quot;link&quot;:&quot;https://huggingface.co/Qwen/Qwen3.8-27B&quot;,&quot;score&quot;:&quot;9.0&quot;,&quot;tags&quot;:[{&quot;kind&quot;:&quot;query&quot;,&quot;label&quot;:&quot;frontier&quot;},{&quot;kind&quot;:&quot;other&quot;,&quot;label&quot;:&quot;模型发布&quot;}],&quot;evidence&quot;:&quot;&quot;,&quot;published&quot;:&quot;2026-08-05&quot;,&quot;selection_source&quot;:&quot;frontier&quot;}">Qwen/Qwen3.8-27B</a>
   * 2026 第 34 周 <!--dpr-frontier:2026-W34-->
