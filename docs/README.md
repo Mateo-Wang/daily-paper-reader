@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-13</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-14</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 17 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>5</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>10</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-13 21:29:36 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-14 22:20:47 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日筛出17篇机器人学习论文，精读5篇、速读12篇。最值得看的是两篇8分工作：用真实世界强化学习让世界模型学会规避人类会避开的动作，以及评估机器人能否通过观察学会技能。普通读者可先关注“观察学习”这条线，想想机器人模仿人类时到底缺了什么。</p>
+<p>2026-09-14日报：17篇中精读7篇、速读10篇，自动驾驶与VLA机器人是今天主线。</p>
+<p>最值得看两篇9.0分精读：READ用风险信息场做端到端自动驾驶，Dynin-Robotics做全模态统一扩散VLA。</p>
+<p>普通读者建议先读这两篇</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">5 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="How to Learn from What a Human Would Avoid? Intervention-Aware World Models with Real-World RL for Dexterous Manipulation">How to Learn from What a Human Would Avoid? Intervention-Aware World Models with Real-World RL for Dexterous Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Monkey See, Can Monkey Do? A Benchmark for Evaluating Robot Skill Learning by Observation">Monkey See, Can Monkey Do? A Benchmark for Evaluating Robot Skill Learning by Observation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Time-Frequency Geometric Cross-Attention for Chunked Vision-Language-Action Models">Time-Frequency Geometric Cross-Attention for Chunked Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="READ: Learning Risk-Informed Fields for End-to-End Autonomous Driving">READ: Learning Risk-Informed Fields for End-to-End Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Dynin-Robotics: Omnimodal Unified Diffusion Vision-Language-Action Model">Dynin-Robotics: Omnimodal Unified Diffusion Vision-Language-Action Model</span></li><li><span class="dpr-home-dashboard-paper-title" title="Pelican-Sim 1.0: A General World Model Simulator for Embodied Intelligence">Pelican-Sim 1.0: A General World Model Simulator for Embodied Intelligence</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +63,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Diagnosing and Dynamically Filtering Occupancy World Models for Active Mapping">Diagnosing and Dynamically Filtering Occupancy World Models for Active Mapping</span></li><li><span class="dpr-home-dashboard-paper-title" title="ObstaDiff: Generalizable Diffusion Policy Learning via Obstacle-aware Representations">ObstaDiff: Generalizable Diffusion Policy Learning via Obstacle-aware Representations</span></li><li><span class="dpr-home-dashboard-paper-title" title="LTLDiff: Finite Linear Temporal Logic-Guided Data Generation and Diffusion Policies for Multi-agent Robotic Manipulation">LTLDiff: Finite Linear Temporal Logic-Guided Data Generation and Diffusion Policies for Multi-agent Robotic Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DATAFARM: Distribution-Aligned Task and Motion Planning for Fine-Tuning Vision-Language-Action Models">DATAFARM: Distribution-Aligned Task and Motion Planning for Fine-Tuning Vision-Language-Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="DWMP: Leveraging Dual World Models for Humanoid Obstacle Traversal">DWMP: Leveraging Dual World Models for Humanoid Obstacle Traversal</span></li><li><span class="dpr-home-dashboard-paper-title" title="STAR: Sparse Tactile Representation Learning in Vision-Tactile-Language-Action Models for Dexterous Manipulation">STAR: Sparse Tactile Representation Learning in Vision-Tactile-Language-Action Models for Dexterous Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>8</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 </div>
 
