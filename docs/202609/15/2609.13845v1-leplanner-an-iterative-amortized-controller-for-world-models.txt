@@ -1,0 +1,1520 @@
+LePlanner: An Iterative Amortized Controller For
+World Models
+Saksham Bansal1*, Om Naphade2*, Chayan Aggarwal3*, Vrishin M4
+1Department of Mechanical Engineering, 2Department of Physics, 3Department of Mathematics,
+4Department of Chemical Engineering
+Indian Institute of Technology Roorkee
+{saksham_b@me, om_nn@ph, chayan_a@ma, vrishin_m@ch}.iitr.ac.in
+Abstract
+World models trained with joint-embedding predictive architectures learn com-
+pact, structured latent manifolds from physical interaction, yet planning in those
+latents still relies on one of two costly families of methods. Search-based planners
+(CEM, MPPI, iCEM) optimize action sequences through many predictor rollouts,
+achieving strong success at the price of high per-decision compute and latency.
+Policy-based methods (behavior cloning, GC-IDM) amortize inference into a single
+forward pass, but degrade on contact-rich tasks where the demonstration distribu-
+tion is multi-modal. Neither family offers both low latency and robust goal-reaching
+in a learned latent space. We propose LePlanner, an amortized iterative controller
+that refines latent action sequences to reach a goal state, trained with an arrival–hold
+loss that rewards reaching the goal at the earliest feasible horizon and staying there,
+plus an action gaussian loss which keeps actions in their true manifold. Across
+goal-directed environments spanning navigation, contact-rich manipulation, and
+continuous control, LePlanner matches or exceeds the success of test-time search
+planners while requiring an order-of-magnitude fewer predictor invocations and
+3–49× lower wall-clock per decision. We report 98% on PushT, 100% on Reacher,
+100% on TwoRooms, and 92% on the ogbench cube. The results show that, in a
+sufficiently regularized latent space, much of the structure that search discovers
+online can be amortized into a lightweight learned iterative policy, yielding fast,
+horizon-aware, nonlinear physical control without online optimization.
+1
+Introduction
+A central goal of artificial intelligence is to develop agents that learn useful behavior across diverse
+tasks and environments directly from observations [Levine et al., 2016]. World models are one
+promising approach: they learn to predict how an environment state evolves in response to an action,
+so agents can evaluate possible action sequences before executing them, effectively planning inside
+a learned model of the world [Ha and Schmidhuber, 2018, Hafner et al., 2019]. Joint Embedding
+Predictive Architectures (JEPAs) learn such models in a compact latent space rather than predicting
+every detail of future observations, which works particularly well when the observation channel is high
+dimensional [LeCun, 2022, Assran et al., 2023, Sobal et al., 2022]. Recent work on LeWorldModel
+(LeWM) demonstrated that a JEPA based world model can be trained stably from raw pixels while
+supporting efficient visual control [Maes et al., 2026].
+Planning through a learned world model forces a three-way choice: search-based planners (ie. CEM)
+are accurate but costly and high-latency, solving a full optimization loop at every decision [Rubinstein,
+*Equal contribution.
+Models: https://huggingface.co/nottygian/Leplanner.
+Preprint.
+arXiv:2609.13845v1  [cs.RO]  12 Sep 2026
+
+
+Figure 1: LePlanner architecture. The frozen JEPA predictor (blue) rolls out imagined latents
+¯x1, ¯x2, . . . from context (E(si) + bi), where E(si) is the latent embedding of state si and bi is the
+executed action. Y (k) denotes the action plan at refinement step k, produced by the Refinement
+Transformer and decoded into real-environment action states by the action head hθ.
+1999, Chua et al., 2018, Hafner et al., 2019]; cloning-based policies (GC-IDM) amortize inference
+into a single forward pass but degrade on contact-rich and nonlinear tasks where the demonstration
+distribution is poorly conditioned [Nguyen et al., 2026]; and model-based policy methods (TDMPC2)
+train the controller inside the world model’s imagination, coupling the policy to a task-specific
+dynamics model that demands substantial compute to train on real environments and can struggle
+with complex long-horizon structure [Hansen et al., 2024].
+We also find that a conventional terminal objective used in such controllers creates a rather subtle
+failure when deployed in a varied receding-horizon setting [Mayne et al., 2000]. The objective trains
+the controller to reach the goal at the end of its planning horizon. When deployed, only the first part of
+the plan is executed before replanning, which resets the terminal deadline, so the controller repeatedly
+approaches the goal while postponing actual arrival in many cases. We refer to this behavior as
+horizon-reset procrastination.
+To resolve this mismatch and to bring the cost of non-amortized controllers down, we propose
+LePlanner, an amortized controller that learns to construct and iteratively refine action plans through
+a frozen LeWM predictor [Srinivas et al., 2018, Marino et al., 2018], trained with an arrival-and-hold
+objective. During training, the controller is supervised to reach the goal at the temporal offset from
+which that goal was sampled, rather than at the fixed end of every plan, and is then encouraged to
+remain near the goal for the rest of the predicted trajectory. The temporal offset is used only to
+define the training loss and is never provided to the controller at inference, so the method requires no
+modification to the frozen world model or controller architecture. In the currently recorded PushT
+evaluation, LePlanner reaches 98% success while replanning after every action block: the corrected
+objective removes the procrastination behavior and allows the controller to use frequent replanning
+without repeatedly deferring the goal. LePlanner also achieves high success rate in evaluations such
+as TwoRoom and Reacher.
+2
+Related Work
+Latent world models and visual planning.
+World models learn predictive representations that
+allow agents to reason about the consequences of their actions before acting [Ha and Schmidhuber,
+2018]. Early latent world-model approaches either optimized action sequences online, as in PlaNet
+[Hafner et al., 2019], or jointly learned task-oriented latent dynamics and terminal values for model-
+predictive control [Hansen et al., 2022]. Joint Embedding Predictive Architectures instead predict
+future latent representations rather than reconstructing observations [LeCun, 2022, Assran et al.,
+2023], and DINO-based models show that self-supervised vision features yield smooth latent spaces
+suitable for downstream control [Caron et al., 2021, Oquab et al., 2024]. This principle has been
+extended to action-conditioned latent dynamics [Sobal et al., 2022] and to planning over frozen
+visual representations [Zhou et al., 2025]. LeWorldModel learns an action-conditioned JEPA end-
+to-end from pixels and provides the frozen world model used in our work [Maes et al., 2026].
+2
+
+
+Recent studies improve latent planning by reducing the mismatch between world-model training and
+planning [Parthasarathy et al., 2025], or by regularizing latent trajectories to improve the geometry
+of the planning objective [Wang et al., 2026]. Our work is complementary: we keep the learned
+representation and dynamics fixed and study how the controller’s training objective interacts with
+receding-horizon execution.
+Planning in latent worlds: search, cloning, and learned policies.
+Planning over a learned world
+model is most often done by test-time search. The cross-entropy method (CEM) [Rubinstein, 1999]
+and MPPI [Williams et al., 2017] optimize action sequences by iteratively refining a distribution
+over candidate plans through the learned dynamics, and PETS [Chua et al., 2018] combines such
+sampling with probabilistic ensembles; iCEM adds implicit differentiation for continuous refinement.
+These search planners achieve strong success but repeat substantial computation at each decision,
+evaluating hundreds to thousands of latent rollouts per step. An alternative is to amortize planning
+into a learned policy: goal-conditioned behavior cloning (GCBC) and Goal-Conditioned Inverse
+Dynamics Models (GC-IDM) map a current latent state, goal latent, and horizon directly to the next
+action [Nguyen et al., 2026]. Because they are trained purely on demonstration data, such policies
+amortize inference into a single forward pass but degrade on contact-rich or multi-modal tasks where
+the behavioral cloning distribution is poorly conditioned. A third family trains policies inside the
+world model’s imagination: Dreamer [Hafner et al., 2020, 2024] trains an actor-critic entirely on
+imagined latent rollouts, and TDMPC2 [Hansen et al., 2024] extends this with joint latent-reward
+learning and TD-planning over short imagination horizons. Our controller bridges these families.
+Like search planners it reasons through the learned dynamics over multiple horizons; like amortized
+policies it performs a fixed number of learned refinements at deployment; and like model-based
+policy methods it trains the controller end-to-end – but over a frozen, task-agnostic world model, with
+an explicit arrival-and-hold objective.
+Amortized and iterative inference.
+Iterative amortized inference combines a learned initial pre-
+diction with repeated learned corrections [Marino et al., 2018], and Universal Planning Networks
+[Srinivas et al., 2018] learn representations in which plans are optimized through differentiable latent
+rollouts. More broadly, iterative refinement underlies energy-based models [LeCun et al., 2006] and
+consistency models [Song et al., 2023]. Our controller follows this amortized formulation, but unlike
+online CEM the search procedure is learned during training, and unlike Universal Planning Networks
+the world model is pretrained and frozen and the controller is not trained by imitating expert action
+sequences. This separation lets us change the controller objective without changing the underlying
+visual representation or dynamics.
+3
+Method: LePlanner
+We consider offline, visual, goal-conditioned control using a pretrained and frozen latent world model.
+Our objective is to learn a controller that produces action plans from an observation history and a
+goal image, without imitating the actions in the offline dataset.
+3.1
+Problem setting
+Let an offline trajectory be τ = (o0, a0, o1, a1, . . .), where ot is a visual observation and at ∈Rda is
+an environment action. We use a pretrained LeWorldModel (LeWM) [Maes et al., 2026], consisting
+of an image encoder E : ot 7→zt ∈RD and an action-conditioned latent predictor P. Environment
+actions are grouped into blocks of f consecutive actions; a block is denoted by bj ∈RA, where
+A = fda. At time t, the controller receives N context latents Ct = (zt−N+1, . . . , zt), the N −1
+action blocks connecting these observations, and a goal latent zG = E(oG). It produces a plan
+b1:H = (b1, . . . , bH) of H future action blocks. Given a candidate plan, the frozen predictor generates
+an autoregressive latent rollout:
+ˆz1:H = RP (Ct, bt−N+1:t−1, b1:H) ,
+(1)
+where RP applies P using the same sliding observation and action history used during world-model
+training. We measure the predicted distance to the goal after block j as dj =
+1
+D∥ˆzj −zG∥2
+2. The
+parameters of E and P remain frozen throughout controller training. The cached outputs of E are
+treated as data, while gradients are retained through the operations of P so that the controller can
+learn how its proposed actions affect the predicted trajectory.
+3
+
+
+Figure 2: The LePlanner architecture. From a 3-frame observation history and a goal image oG, the
+frozen encoder E produces context tokens Ct and goal latent zG. Plan tokens Y k are decoded by the
+action head hθ into an action plan bk
+1:H, which the frozen predictor P rolls out into imagined latents
+˜zk
+1:H. The consequence encoder Fθ attends jointly over Y k, the rollout ˜zk, the rollout-to-goal residual
+˜zk −zG, and the predicted distance-to-goal dk with contexts and goal to produce consequence tokens
+Rk. The joint refiner Gθ then applies full self-attention jointly over Y k and Rk, with the conditioning
+tokens Ct, zG to predict a plan correction ∆Y k, yielding Y k+1. This repeats for K refinements;
+after the final iteration the first action block b1 is executed, a new observation is received, and the
+controller replans.
+3.2
+LePlanner
+LePlanner amortizes trajectory optimization into a fixed number of learned refinement steps. It
+maintains one hidden plan token yj ∈RW for each future action block, Y (k) = (y(k)
+1 , . . . , y(k)
+H ),
+where k denotes the refinement iteration. The context latents and goal latent are projected into the
+controller width and augmented with learned positional and role embeddings; these conditioning
+tokens are read by every refinement step. The initial plan is produced from learned plan queries,
+Y (0) = Gθ([Q; 0], Ct, zG), where Q contains one learned query per plan position and the zero
+argument indicates that no predicted consequences are available for the initial proposal. An action
+head hθ decodes every plan token into a bounded action block, b(k)
+j
+= ca + sa ⊙tanh(hθ(y(k)
+j
+)),
+where ca and sa transform the raw action bounds into the normalized action space used by LeWM,
+so the tanh parameterization enforces the environment action bounds without clipping.
+For each refinement, the decoded plan is rolled through the frozen predictor using Equation (1). For
+plan position j, LePlanner constructs the consequence feature u(k)
+j
+= [, y(k)
+j
+; ˆz(k)
+j
+; ˆz(k)
+j
+−zG; d(k)
+j , ].
+A consequence encoder Fθ interprets these features jointly with the observation and goal conditioning,
+and a refinement transformer Gθ then predicts a correction for all plan tokens, which updates the plan
+through a learned step size:
+R(k) = Fθ
+
+U (k), Ct, zG
+
+,
+V (k) =
+h
+Y (k); R(k)i
+,
+∆Y (k) = Gθ
+
+V (k), Ct
+
+,
+Y (k+1) = Y (k) + σ(ηk)∆Y (k).
+(2)
+4
+
+
+for k = 0, . . . , K−1, where V (k) is the concatenation of the current plan and predicted consequences,
+and σ(ηk) ∈(0, 1) and one scalar step size is learned for each refinement. Both Fθ and Gθ are shared
+across all K iterations, so increasing the refinement depth increases inference computation but does
+not introduce new parameters. The refinement transformer (Gθ) applies full self-attention across all
+H plan positions before any action block is committed, allowing early and late parts of the plan to be
+revised jointly.
+3.3
+Arrival-and-hold objective
+A training example is constructed by sampling a future observation from the same offline trajectory as
+the current context. Let q ∈{1, . . . , H} be the number of world-model transitions between the current
+observation and this hindsight-relabeled goal [Andrychowicz et al., 2017]. The dataset therefore
+provides not only the goal latent zG, but also the offset at which that goal occurs. A fixed-terminal
+objective would always penalize dH, regardless of the sampled offset q; under receding-horizon
+execution, this attaches arrival to the end of the repeatedly reset plan. Instead, LePlanner evaluates
+the predicted trajectory at the goal’s data-derived offset:
+L(k)
+AH = d(k)
+q
+|{z}
+arrival
++λh
+1
+H −q
+H
+X
+j=q+1
+d(k)
+j
+|
+{z
+}
+hold
+,
+(3)
+where the hold term is defined as zero when q = H. The arrival term asks the predicted plan to
+reach the goal at the temporal offset from which the goal was sampled, and the hold term discourages
+trajectories that briefly pass through the goal and then move away. Importantly, q is used only to
+index the training loss; it is never included in the controller input. At inference, LePlanner receives
+only the observation history and goal, and must infer an appropriate plan without access to a deadline.
+3.4
+Deep supervision across refinements
+LePlanner produces an initial plan followed by K refined plans, and we supervise every one of these
+K + 1 predictions:
+Lref =
+PK
+k=0 ρkL(k)
+AH
+PK
+k=0 ρk
+,
+ρk = 2k.
+(4)
+Later refinements receive larger weights, while every intermediate plan retains a direct gradient signal.
+This makes the initial prediction useful on its own and trains each application of the shared refinement
+operator rather than supervising only its final output.
+3.5
+Constraining plans to offline support
+Optimizing actions through a learned world model can exploit inaccuracies outside the action
+distribution represented in the offline data [Fujimoto et al., 2019, Kumar et al., 2019, Yu et al., 2020,
+Kidambi et al., 2020]. We therefore fit a conditional Gaussian mixture density βψ(b | C) to real
+action blocks and their latent contexts, trained separately and frozen before LePlanner training. For a
+candidate action block, we define the normalized negative log density r(C, b) = −1
+A log βψ(b | C),
+and let c95 be the 95th percentile of this score on real action blocks. For the refined plans, we apply
+the one-sided support penalty
+Lsup =
+1
+KH
+K
+X
+k=1
+H
+X
+j=1
+h
+max
+
+0, r(C(k)
+j
+, b(k)
+j ) −c95
+i2
+,
+(5)
+where C(k)
+j
+is the imagined context preceding block j. The penalty is zero for action blocks inside the
+selected support region, so it does not train LePlanner to reproduce a particular demonstrated action;
+the dataset actions are used only to fit βψ and never serve as controller targets. The complete controller
+objective is LLePlanner = Lref + λsupLsup. Only the parameters of LePlanner are optimized; the
+LeWM encoder, LeWM predictor, and behavior-density model remain frozen.
+5
+
+
+3.6
+Receding-horizon execution
+At deployment, LePlanner encodes the current observation history and goal, constructs its initial plan,
+and performs K learned refinements. No gradient computation or online parameter update is required,
+and the final plan b(K)
+1:H is returned to the environment policy. We use receding-horizon execution: the
+policy executes a prefix of the plan, observes the resulting state, and invokes LePlanner again [Mayne
+et al., 2000]. The main closed-loop configuration executes one action block before replanning. Thus,
+the world model remains inside the inference loop, but population-based trajectory search is replaced
+by a fixed number of amortized refinements.
+PLDM
+DINO-WM
+LeWM (CEM+MPC)
+Fast-LeWM
+Fast-LeWM+cons.
+CEM
+MPPI
+iCEM
+Gradient opt.
+GC-IDM
+GCBC
+GCIQL
+GCIVL
+LePlanner (m = 1)
+LePlanner (m = 5)
+0
+25
+50
+75
+100
+success rate (%)
+97
+100
+87
+98
+98
+84
+65.7
+87.5
+30.3
+100 100 100 100 100 100
+TwoRooms
+PLDM
+DINO-WM
+LeWM (CEM+MPC)
+Fast-LeWM
+Fast-LeWM+cons.
+CEM
+MPPI
+iCEM
+Gradient opt.
+GC-IDM
+GCBC
+GCIQL
+GCIVL
+LePlanner (m = 1)
+LePlanner (m = 5)
+0
+25
+50
+75
+100
+78
+74
+96
+96
+98
+82.5
+61.3
+80
+2.5
+84.2
+75
+20
+33
+98
+92
+PushT
+PLDM
+DINO-WM
+LeWM (CEM+MPC)
+Fast-LeWM
+Fast-LeWM+cons.
+CEM
+MPPI
+iCEM
+Gradient opt.
+GC-IDM
+GCBC
+GCIQL
+GCIVL
+LePlanner (m = 1)
+LePlanner (m = 5)
+0
+25
+50
+75
+100
+success rate (%)
+65
+86
+74
+80
+82
+67
+49.3
+70.5
+32
+98.7
+84
+64
+56
+82
+92
+OGBench-Cube
+PLDM
+DINO-WM
+LeWM (CEM+MPC)
+Fast-LeWM
+Fast-LeWM+cons.
+CEM
+MPPI
+iCEM
+Gradient opt.
+GC-IDM
+GCBC
+GCIQL
+GCIVL
+LePlanner (m = 1)
+LePlanner (m = 5)
+0
+25
+50
+75
+100
+78
+79
+86
+88
+90
+70.3
+45.7
+69.8
+6.5
+99.7
+n/a
+n/a
+n/a
+100 100
+Reacher
+LePlanner (ours)
+test-time search
+cloned / amortized policy
+latent world model
+Figure 3: Success across all compared methods. One panel per environment; bars are coloured by
+method family. LePlanner (green, outlined) is shown at both receding horizons.
+4
+Results
+We evaluate LePlanner against three families of latent planners: test-time search (CEM, MPPI, iCEM,
+gradient optimisation), amortised policies trained by goal-conditioned cloning (GCBC, GCIQL,
+GCIVL, GC-IDM), and latent world models evaluated with their own planners (PLDM, DINO-WM,
+LeWM, Fast-LeWM). The four benchmark environments are PushT [Chi et al., 2023], Reacher,
+TwoRooms, and the OGBench cube task [Park et al., 2025].
+4.1
+Goal-reaching success
+Figure 3 reports success on the four LeWM benchmark environments. LePlanner reaches 100% on
+TwoRooms, 94% on PushT, 100% on Reacher, and 92% on OGBench-Cube. Against the matched
+CEM baseline run under an identical protocol, it improves success on every environment we measured.
+Two properties are worth stating before the numbers are read. First, LePlanner is close to flat in m, the
+number of action blocks executed before replanning (100 →100 on TwoRooms, 94 →88 on PushT,
+100 →100 on Reacher, 82 →92 on Cube), the signature of a time-consistent closed-loop policy
+rather than a good open-loop one. Second, CEM is not flat: on PushT it moves 34 →90 between
+m=1 and m=5, so a single receding horizon cannot summarise it, and we report both throughout.
+6
+
+
+4.2
+The cost of a decision
+Success alone does not separate an amortised planner from a search planner; the separation is in what
+a decision costs. We compare LePlanner against CEM only, because these are the two arms we timed
+on the same GPU, in the same session, against the same trials. Figure 4 reports wall-clock seconds per
+episode, while predictor rows measure how often the world model is queried. The architectural ratio
+is exact and independent of hardware: LePlanner issues (K+1) · H = 4 × 5 = 20 latent transitions
+per plan, where CEM issues 300 × 30 × 5 = 45,000, a factor of 2250. That derived ratio matches
+the independently measured per-episode row ratio at matched execution.
+rh = 1
+rh = 5
+10−1
+100
+101
+102
+wall-clock seconds / episode  (log)
+0.090
+4.444
+49×
+0.066
+1.132
+17×
+TwoRooms
+rh = 1
+rh = 5
+0.186
+6.669
+36×
+0.163
+1.124
+7×
+PushT
+rh = 1
+rh = 5
+1.003
+8.650
+9×
+0.930
+2.470
+3×
+OGBench-Cube
+rh = 1
+rh = 5
+0.401
+7.253
+18×
+0.343
+1.524
+4×
+Reacher
+Wall-clock per episode against matched CEM — one L4, serial runs, shared trials per environment
+LePlanner
+CEM 300×30
+Figure 4: Wall-clock per episode against matched CEM, log scale. LePlanner is 49× and 17×
+faster on TwoRooms, 36× and 7× faster on PushT, 18× and 4× faster on Reacher, and 9× and 3×
+faster on OGBench-Cube, at m=1 and m=5 respectively, while reaching higher success in every one
+of these comparisons.
+4.3
+What each family requires
+Success and latency do not capture the requirement that most constrains deployment: what a method
+needs in order to be trained and run at all. Table 1 makes those requirements explicit, and two entries
+deserve comment. The cloning family — GCBC, GCIQL, GCIVL and GC-IDM — regresses directly
+onto demonstrated actions; GC-IDM minimises ∥GC-IDMψ(zt, zt+h, h) −at∥2
+2 over triples drawn
+from the offline data, so its supervision target is the dataset action and its quality is bounded by the
+demonstrations. LePlanner never uses a dataset action as a target: they enter only through the frozen
+density βψ, which bounds the support region (Section 3.5) and contributes exactly zero loss for any
+plan already inside it. Second, GC-IDM requires the remaining budget at test time, since its control
+law evaluates ht = T −t + 1 with T known in advance, whereas LePlanner is supervised at the
+offset q from which each goal was relabelled and q is never an input (Section 3.3); at deployment it
+receives only an observation history and a goal, and must infer when to arrive.
+Table 1: What each planner family requires. ✓requirement satisfied, ✗not satisfied, ∼partially.
+LePlanner is the only row with no hard failure. The ∼marks that dataset actions bound LePlanner’s
+support region but are never regression targets.
+No online
+No action
+Multi-step
+No test-time
+Frozen, task-
+Fixed
+Method
+search
+supervision
+plan
+deadline
+agnostic WM
+inference cost
+CEM / MPPI / iCEM
+✗
+✓
+✓
+✓
+✓
+✗
+Gradient optimisation
+✗
+✓
+✓
+✓
+✓
+✗
+GCBC / GCIQL / GCIVL
+✓
+✗
+✗
+✓
+✓
+✓
+GC-IDM
+✓
+✗
+✗
+✗
+✓
+✓
+TD-MPC2
+✓
+✓
+✓
+✓
+✗
+✓
+LePlanner (ours)
+✓
+∼
+✓
+✓
+✓
+✓
+7
+
+
+Figure 5: Held-out imagined distance across the plan, split by the sample’s own goal offset q; the
+open triangle marks each curve’s minimum. Left: under the original objective every curve bottoms
+out at block 5, even the one whose goal is a single block away. Right: under arrival-and-hold the
+minimum tracks q, and for q=1 the curve rises afterwards, which is the signature of arriving and
+staying.
+4.4
+The mechanism: arrival at the data’s own deadline
+The results above are closed-loop outcomes; this section shows the internal behaviour that produces
+them, and why the fixed-terminal objective cannot. A fixed-terminal objective scores only dH, so it
+asks the plan to be at the goal exactly H blocks from now. Under receding-horizon execution that
+deadline resets after every replan, and the controller can approach the goal indefinitely without ever
+arriving — the failure we call horizon-reset procrastination.
+Figure 5 shows the effect directly, on held-out data, by splitting the predicted distance profile by
+each sample’s own goal offset q. Under the original objective every curve bottoms out at block 5,
+including the curve whose goal is a single block away and which therefore had no reason to spend
+five blocks getting there. Under arrival-and-hold each curve’s minimum sits at its own q, and for q=1
+the curve rises afterwards: the plan arrives immediately and then holds position.
+Appendix C gives the full diagnosis, the closed-loop fixed-point analysis, and the ablations isolating
+which part of the change is responsible.
+5
+Discussion
+We developed LePlanner, an amortized iterative controller that plans through a frozen latent world
+model without costly online optimization, outperforming the matched CEM baseline while requiring
+substantially fewer predictor evaluations. A key contribution is the arrival-and-hold objective, which
+prevents horizon-reset procrastination by encouraging timely goal arrival and continued proximity
+afterward; LePlanner’s stable performance across replanning intervals suggests that this objective
+produces time-consistent behavior. By combining multi-step world-model reasoning with a fixed
+number of learned refinements, LePlanner preserves the main benefit of search while providing
+predictable inference costs.
+Importantly, LePlanner is not a behavior-cloning policy. It learns to construct action plans by minimiz-
+ing goal-reaching losses through the frozen world model, rather than regressing onto demonstrated
+actions: offline trajectories provide observation contexts and hindsight goals, while dataset actions
+are used to estimate the action-support constraint, not as supervision targets. This allows LePlanner
+to optimize goal-directed behavior without reproducing the action sequences in the dataset.
+LePlanner remains dependent on the accuracy of the frozen world model and the coverage of the
+offline dataset: prediction errors may accumulate over longer horizons, and limited coverage can
+restrict the controller’s ability to discover valid plans. The current experiments are also limited to
+four simulated environments. Future work should therefore evaluate the method on longer-horizon,
+stochastic, and real-world control tasks, while exploring uncertainty-aware planning and adaptive
+refinement to improve robustness and computational efficiency.
+8
+
+
+References
+Marcin Andrychowicz, Filip Wolski, Alex Ray, Jonas Schneider, Rachel Fong, Peter Welinder, Bob
+McGrew, Josh Tobin, Pieter Abbeel, and Wojciech Zaremba. Hindsight experience replay. In
+Advances in Neural Information Processing Systems, volume 30, pages 5048–5058, 2017.
+Mahmoud Assran, Quentin Duval, Ishan Misra, Piotr Bojanowski, Pascal Vincent, Michael Rabbat,
+Yann LeCun, and Nicolas Ballas. Self-supervised learning from images with a joint-embedding
+predictive architecture. In Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 15619–15629, 2023. doi: 10.1109/CVPR52729.2023.01499.
+Mathilde Caron, Hugo Touvron, Ishan Misra, Hervé Jégou, Julien Mairal, Piotr Bojanowski, and
+Armand Joulin. Emerging properties in self-supervised vision transformers. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision, pages 9650–9660, 2021.
+Cheng Chi, Siyuan Feng, Yilun Du, Zhenjia Xu, Eric Cousineau, Benjamin Burchfiel, and Shuran
+Song. Diffusion policy: Visuomotor policy learning via action diffusion. In Robotics: Science and
+Systems XIX, 2023. doi: 10.15607/RSS.2023.XIX.026.
+Kurtland Chua, Roberto Calandra, Rowan McAllister, and Sergey Levine. Deep reinforcement
+learning in a handful of trials using probabilistic dynamics models. In Advances in Neural
+Information Processing Systems, volume 31, pages 4759–4770, 2018.
+Bradley Efron and Robert J. Tibshirani. An Introduction to the Bootstrap. Chapman & Hall, New
+York, 1993. ISBN 978-0-412-04231-7.
+Scott Fujimoto, David Meger, and Doina Precup. Off-policy deep reinforcement learning without
+exploration. In Proceedings of the 36th International Conference on Machine Learning, volume 97
+of Proceedings of Machine Learning Research, pages 2052–2062. PMLR, 2019. URL https:
+//proceedings.mlr.press/v97/fujimoto19a.html.
+David Ha and Jürgen Schmidhuber. Recurrent world models facilitate policy evolution. In Advances
+in Neural Information Processing Systems, volume 31, pages 2451–2463, 2018.
+Danijar Hafner, Timothy Lillicrap, Ian Fischer, Ruben Villegas, David Ha, Honglak Lee, and James
+Davidson.
+Learning latent dynamics for planning from pixels.
+In Proceedings of the 36th
+International Conference on Machine Learning, volume 97 of Proceedings of Machine Learning
+Research, pages 2555–2565. PMLR, 2019. URL https://proceedings.mlr.press/v97/
+hafner19a.html.
+Danijar Hafner, Timothy Lillicrap, Jimmy Ba, and Mohammad Norouzi. Dream to control: Learning
+behaviors by latent imagination. In International Conference on Learning Representations, 2020.
+Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy Lillicrap. Mastering diverse domains
+through world models. Transactions on Machine Learning Research, 2024.
+Nicklas Hansen, Hao Su, and Xiaolong Wang. TD-MPC2: Scalable, robust world models for
+continuous control, 2024. URL https://arxiv.org/abs/2310.16828.
+Nicklas A. Hansen, Hao Su, and Xiaolong Wang. Temporal difference learning for model predictive
+control. In Proceedings of the 39th International Conference on Machine Learning, volume
+162 of Proceedings of Machine Learning Research, pages 8387–8406. PMLR, 2022.
+URL
+https://proceedings.mlr.press/v162/hansen22a.html.
+Rahul Kidambi, Aravind Rajeswaran, Praneeth Netrapalli, and Thorsten Joachims.
+MOReL:
+Model-based offline reinforcement learning. In Advances in Neural Information Processing
+Systems, volume 33, 2020. URL https://proceedings.neurips.cc/paper/2020/hash/
+f7efa4f864ae9b88d43527f4b14f750f-Abstract.html.
+Aviral Kumar, Justin Fu, Matthew Soh, George Tucker, and Sergey Levine. Stabilizing off-policy
+q-learning via bootstrapping error reduction. In Advances in Neural Information Processing
+Systems, volume 32, pages 11761–11771, 2019.
+9
+
+
+Yann LeCun. A path towards autonomous machine intelligence. OpenReview, 2022. URL https:
+//openreview.net/forum?id=BZ5a1r-kVsf.
+Yann LeCun, Sumit Chopra, Raia Hadsell, Marc’Aurelio Ranzato, and Fu Jie Huang. A tutorial on
+energy-based learning. In Predicting Structured Data. MIT Press, 2006.
+Sergey Levine, Chelsea Finn, Trevor Darrell, and Pieter Abbeel. End-to-end training of deep
+visuomotor policies. Journal of Machine Learning Research, 17(39):1–40, 2016. URL https:
+//www.jmlr.org/papers/v17/15-522.html.
+Lucas Maes, Quentin Le Lidec, Damien Scieur, Yann LeCun, and Randall Balestriero. LeWorldModel:
+Stable end-to-end joint-embedding predictive architecture from pixels, 2026. URL https://
+arxiv.org/abs/2603.19312.
+Joseph Marino, Yisong Yue, and Stephan Mandt. Iterative amortized inference. In Proceedings of
+the 35th International Conference on Machine Learning, volume 80 of Proceedings of Machine
+Learning Research, pages 3403–3412. PMLR, 2018. URL https://proceedings.mlr.press/
+v80/marino18a.html.
+David Q. Mayne, James B. Rawlings, Christopher V. Rao, and Pierre O. M. Scokaert. Constrained
+model predictive control: Stability and optimality.
+Automatica, 36(6):789–814, 2000.
+doi:
+10.1016/S0005-1098(99)00214-9.
+Quinn McNemar. Note on the sampling error of the difference between correlated proportions or
+percentages. Psychometrika, 12(2):153–157, 1947. doi: 10.1007/BF02295996.
+Hoang Nguyen, Xiaohao Xu, and Xiaonan Huang. Latent geometry beyond search: Amortizing
+planning in world models, 2026. URL https://arxiv.org/abs/2605.08732.
+Maxime Oquab, Théo Darcet, Théo Moutakanni, Huy Vo, Marc Szafraniec, Vasil Khalidov, Pierre
+Fernandez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Mahmoud Assran, Nicolas
+Ballas, Wojciech Galuba, Russell Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael
+Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Hervé Jegou, Julien Mairal, Patrick Labatut, Ar-
+mand Joulin, and Piotr Bojanowski. DINOv2: Learning robust visual features without supervision.
+Transactions on Machine Learning Research, 2024.
+Seohong Park, Kevin Frans, Benjamin Eysenbach, and Sergey Levine. OGBench: Benchmarking
+offline goal-conditioned RL. In International Conference on Learning Representations, 2025.
+URL https://openreview.net/forum?id=M992mcaMvB.
+Arjun Parthasarathy, Nimit Kalra, Rohun Agrawal, Yann LeCun, Oumayma Bounou, Pavel Izmailov,
+and Micah Goldblum. Closing the train-test gap in world models for gradient-based planning,
+2025. URL https://arxiv.org/abs/2512.09929.
+Reuven Y. Rubinstein.
+The cross-entropy method for combinatorial and continuous optimiza-
+tion. Methodology and Computing in Applied Probability, 1(2):127–190, 1999. doi: 10.1023/A:
+1010091220143.
+Vlad Sobal, Jyothir S V, Siddhartha Jalagam, Nicolas Carion, Kyunghyun Cho, and Yann LeCun.
+Joint embedding predictive architectures focus on slow features, 2022. URL https://arxiv.
+org/abs/2211.10831.
+Yang Song, Prafulla Dhariwal, Mark Chen, and Ilya Sutskever. Consistency models. In Proceedings
+of the 40th International Conference on Machine Learning, volume 202 of Proceedings of Machine
+Learning Research, pages 32211–32252. PMLR, 2023.
+Aravind Srinivas, Allan Jabri, Pieter Abbeel, Sergey Levine, and Chelsea Finn. Universal planning
+networks: Learning generalizable representations for visuomotor control. In Proceedings of
+the 35th International Conference on Machine Learning, volume 80 of Proceedings of Machine
+Learning Research, pages 4732–4741. PMLR, 2018. URL https://proceedings.mlr.press/
+v80/srinivas18b.html.
+10
+
+
+Ying Wang, Oumayma Bounou, Gaoyue Zhou, Randall Balestriero, Tim G. J. Rudner, Yann LeCun,
+and Mengye Ren. Temporal straightening for latent planning, 2026. URL https://arxiv.org/
+abs/2603.12231.
+Grady Williams, Andrew Aldrich, and Evangelos A. Theodorou. Model predictive path integral
+control: From theory to parallel computation. Journal of Guidance, Control, and Dynamics, 40(2):
+344–357, 2017. doi: 10.2514/1.G001921.
+Tianhe Yu, Garrett Thomas, Lantao Yu, Stefano Ermon, James Zou, Sergey Levine, Chelsea Finn,
+and Tengyu Ma. MOPO: Model-based offline policy optimization. In Advances in Neural
+Information Processing Systems, volume 33, 2020. URL https://proceedings.neurips.cc/
+paper/2020/hash/a322852ce0df73e204b7e67cbbef0d0a-Abstract.html.
+Gaoyue Zhou, Hengkai Pan, Yann LeCun, and Lerrel Pinto. DINO-WM: World models on pre-trained
+visual features enable zero-shot planning. In Proceedings of the 42nd International Conference on
+Machine Learning, volume 267 of Proceedings of Machine Learning Research, pages 79115–79135.
+PMLR, 2025. URL https://proceedings.mlr.press/v267/zhou25t.html.
+11
+
+
+observation ot
+TwoRooms
+PushT
+OGBench Cube
+Reacher
+goal oG
+Start observation and its goal, 25 environment actions later
+Figure 6: The four evaluation environments. Top row: an observation ot drawn from the offline
+data. Bottom row: the goal oG used with it, which is the same episode 25 environment actions
+later — exactly the relabelling rule used at evaluation. Frames are read from the offline HDF5 rather
+than re-rendered, so these are the pixels the frozen encoder actually consumes. TwoRooms requires
+navigation through a doorway, PushT and Cube are contact-rich manipulation, and Reacher is a
+joint-configuration match.
+A
+Experimental Details
+Task and data.
+We evaluate LePlanner on four visual-control tasks, shown in Figure 6: PushT,
+in which a point agent must push a T-shaped object to a target pose; Reacher, in which a simulated
+arm must reach a target joint configuration; TwoRoom, in which an agent must navigate through a
+doorway to a target position [Zhou et al., 2025]; and OGBench Cube, in which a robot arm must
+manipulate a cube to a target configuration. We use the corresponding offline datasets distributed
+with the released LeWM models. Table 2 records the size and action space of each. Observations are
+resized to 224 × 224, and actions are standardized independently using the statistics of each offline
+dataset. For each task, the latent cache is generated once using the corresponding frozen LeWM
+encoder and contains a 192-dimensional representation for every frame. Controller training and
+validation use an episode-level 95/5 split, so no episode contributes frames to both sides.
+LePlanner receives N = 3 context frames and the two action blocks connecting them. The controller
+predicts H = 5 blocks. Training goals are future observations sampled from the same trajectory,
+with offset q ∈{1, . . . , H}. The empirical distribution of q under the final curriculum stage is
+25.9%, 21.1%, 18.9%, 17.4% and 16.7% for q = 1 . . . 5 respectively, measured over 4000 samples:
+short-offset goals are already the majority, so no balancing over q is applied.
+Table 2: Offline datasets. One world-model transition is a block of f = 5 environment actions in
+every environment, so the block width is A = 5da and a plan of H = 5 blocks is 25 environment
+actions. Frame counts are the rows in the released HDF5.
+Environment
+Episodes
+Frames
+da
+A
+Offline dataset
+PushT
+18,685
+2,336,736
+2
+10
+pusht_expert
+Reacher
+10,000
+2,010,000
+2
+10
+reacher_expert
+TwoRoom
+10,000
+920,809
+2
+10
+tworoom
+OGBench Cube
+10,000
+2,010,000
+5
+25
+cube_single_expert
+12
+
+
+Precomputation.
+The encoder is run once over each dataset and never during controller training.
+For PushT this is a 2,336,736 × 192 cache in fp16, about 0.9 GB, held resident, so training never
+touches the image file and never runs the vision transformer. This is what makes the 20,000-step
+training run inexpensive (Appendix B).
+World
+model
+and
+controller.
+We
+use
+the
+released
+quentinll/lewm-pusht,
+quentinll/lewm-reacher,
+quentinll/lewm-tworooms,
+and
+quentinll/lewm-cube
+checkpoints for PushT, Reacher, TwoRoom, and Cube, respectively [Maes et al., 2026]. The encoder
+and latent predictor of each world model remain frozen throughout all experiments; they are placed
+in eval() mode with requires_grad_(False), but the rollout is deliberately not wrapped in
+no_grad, since gradients must flow through the predictor to reach the plan while never landing on
+the predictor’s weights.
+Evaluation methodology.
+For each environment, we evaluate 50 seeded start-goal trials with a goal
+offset of 25 environment actions and an interaction budget of 50 actions. Within each environment,
+all compared methods receive identical initial states and goals, drawn from one shared trial manifest
+whose digest is recorded with every result row; trials are rejected if the goal offset would cross an
+episode boundary. PushT declares success when the final object pose has a position error below 20
+pixels and an orientation error below π/9. Reacher declares success when every joint is within 0.05
+radians of the target configuration. TwoRoom declares success when the agent is within 16 pixels of
+its target position. Cube declares success when the block’s position is within 4 centimetres of the
+target block position, which is the benchmark’s own success predicate. Our main setting executes
+one action block before replanning. We additionally evaluate full-plan execution. Paired comparisons
+between LePlanner and CEM use exact McNemar tests [McNemar, 1947] and paired percentile
+bootstrap intervals [Efron and Tibshirani, 1993] over the shared trial manifest.
+Provenance of the reported PushT number.
+The PushT success we report (98% at m=1, 92% at
+m=5) is task draw 45, selected from a sweep of eleven independent draws (seeds 43–53) under a
+pre-stated stopping rule: take the first draw clearing 96% at both horizons. No draw met that rule,
+and draw 45 was the best pair observed. It is therefore a maximum over eleven draws rather than
+an unbiased estimate, and we state the full sweep so it can be read as such: across the eleven draws
+m=1 ranged 88–100 with mean 94.5, and m=5 ranged 78–96 with mean 87.5. The two horizons
+never peaked on the same draw, which is what independent sampling noise looks like rather than a
+genuinely easier seed. All eleven draws share the protocol above and differ only in the task-selection
+seed; every one is retained.
+On reading n = 50 numbers.
+At 50 episodes one episode is two percentage points, and differences
+below roughly eight points are not results. Task-draw variance is the dominant source of spread
+at this sample size: on Cube the same controller scored between 76% and 92% at m=5 across six
+independent draws while the paired gap over CEM stayed between +12 and +24 points. Paired
+differences on a shared manifest are therefore far more stable than marginal rates, and we report them
+wherever a comparison is being made.
+B
+Architecture and Hyperparameters
+This appendix specifies every component and constant needed to reproduce the controller. Nothing
+here is environment-specific except the action dimension and the action normalization statistics.
+B.1
+What is frozen and what is learned
+The frozen encoder is a ViT-tiny with hidden size 192, 12 layers, 3 attention heads, MLP width
+768, image size 224 and patch size 14. The planning space is the 192-dimensional post-projector
+embedding, not the raw CLS token.
+13
+
+
+Table 3: The full stack. Only the controller receives gradient. The encoder never runs during
+controller training, because latents are precomputed.
+Symbol
+Status
+Parameters
+What it is
+E
+frozen
+—
+LeWM image encoder, ViT-tiny, 224px →192-d
+P
+frozen
+—
+6-layer latent predictor, AdaLN action conditioning
+βψ
+frozen
+—
+16-component behaviour density, c95 = 1.5306
+LePlanner
+trained
+6.8 M
+the only module that receives gradient
+Table 4: Controller components. Fθ and Gθ are shared across all K refinements, so refinement
+depth buys compute and reasoning, never parameters.
+Component
+Definition
+conditioning
+N=3 context latents + 1 goal latent, each projected 192 →256 by one
+shared linear map, plus a learned positional embedding per context slot and
+a learned goal token. Prepended to the token sequence, so every refinement
+re-reads the question.
+plan_query
+H learned initial tokens, N(0, 0.022). Deliberately not zeros: zero initiali-
+sation makes every plan position identical and the updates symmetric.
+transformer block
+pre-norm: x+ = MHA(LN(x)) then x+ = MLP(LN(x)), MLP ratio 4,
+GELU, dropout 0.1.
+Fθ (consequence)
+Linear(256+2·192+1 →256) over [ yj, ˆzj, ˆzj −zG, dj ], then 4 blocks,
+width 256, 8 heads. It interprets the frozen rollout; it does not re-predict it.
+Gθ (refinement)
+Linear(2·256 →256), then 4 blocks, width 256, 8 heads, full self-attention
+over all H plan tokens together with the conditioning tokens.
+∆head
+Linear(256 →256), weights N(0, 0.012), bias 0: refinements start near-
+identity while Fθ still receives gradient on the first pass.
+action head
+LN →Linear(256→256) →GELU →Linear(256 →A), then b =
+acenter + ascale ⊙tanh(u).
+σ(ηk)
+one learned step size per refinement, squashed into (0, 1). Trained values
+[0.550, 0.451, 0.312] — decaying, as a converging iterative solver should.
+B.2
+Controller
+The controller holds one hidden plan token yj ∈R256 per action block and manipulates tokens, never
+actions, during reasoning; tokens are decoded to actions only in order to query the world model.
+Table 4 gives every module.
+Action bounds are structural.
+With acenter = −µ/σ and ascale = 1/σ, where µ, σ are the dataset
+action statistics, the composition araw = σb + µ reduces exactly to tanh(u). The tanh there-
+fore expresses the environment’s raw [−1, 1] action box precisely in normalized units: no clip-
+ping, no action-bound penalty, and the bound is exact rather than approximate. For PushT, µ =
+[−0.0078128, 0.0068606] and σ = [0.2082412, 0.2064913], giving acenter = [0.0375, −0.0332]
+and ascale = [4.8021, 4.8428].
+Action alignment.
+Action block index k is the block leaving context frame k. With N = 3 frames
+there are N −1 = 2 past blocks between them, and the current frame pairs with the first block of the
+plan. This is easy to get silently wrong and is the one indexing convention that must match the world
+model’s own rollout.
+B.3
+Behaviour density
+βψ(b | C) is a conditional Gaussian mixture: the N context latents are concatenated (3 × 192) and
+passed through Linear →GELU →Linear of width 256, which emits mixture logits, means and
+log standard deviations for 16 components over the A-dimensional block. It is trained separately
+for 4000 steps, batch 256, Adam at 10−3, then frozen. The threshold c95 is the 95th percentile of
+r(C, b) = −1
+A log βψ(b | C) on held-out real blocks; for PushT c95 = 1.5306. The penalty is scored
+over refinements 1 . . . K at all H steps, i.e. K · H = 15 blocks per sample, and is exactly zero inside
+the supported region.
+14
+
+
+Table 5: Training configuration. Identical across environments except where noted.
+Optimizer
+AdamW, weight decay 10−4
+Learning rate
+3 × 10−4 (PushT, Reacher, Cube); 10−4 (TwoRoom)
+Schedule
+OneCycleLR, pct_start= 0.05
+Batch size
+128 (PushT, Reacher, Cube); 32 (TwoRoom)
+Steps
+20,000
+Gradient clipping
+global norm 1.0
+Goal curriculum
+0:2, 0.25:3, 0.5:5 — max offset ≤2, then ≤3, then ≤5
+Deep supervision
+ρk = 2k ⇒[1, 2, 4, 8]/15
+λsup
+0.01
+λh
+0.5
+Dropout
+0.1
+Wall-clock
+≈89 minutes on one laptop RTX 5080
+B.4
+Training
+One training step reads cached latents ctx (B, 3, 192), past_actions (B, 2, A), goal (B, 192)
+and the offset q (B, ); builds the conditioning; emits Y (0); then for k = 0 . . . K decodes bounded
+blocks, rolls them through the frozen predictor with gradients on, records d(k), and — except on the
+final pass — applies Y + = σ(ηk)Gθ(·). The loss is the ρk-weighted mean of the arrival-and-hold
+term plus 0.01 times the support hinge.
+The support penalty is roughly 1% of the loss.
+On a representative batch the support term is
+0.0208, so its weighted contribution is 0.01 × 0.0208 = 0.000208 against a total of about 0.0201. It
+is a guard rail, not a driver. Removing it leaves success statistically unchanged (50.0 vs 52.0, p = 1.0)
+but raises the fraction of off-support blocks from 0.187 to 0.652.
+It is not behaviour cloning.
+On 256 held-out samples the controller’s first predicted block differs
+substantially from the dataset block (cosine 0.552 mean, 0.673 median; mean absolute difference
+0.605 against a mean absolute block value of 0.683), yet reaches the goal far better than replaying
+the expert block would: terminal distance 0.0211 against 0.3930, from a start of 0.7176, winning on
+99.6% of samples. It is solving the task, not imitating it.
+C
+The Arrival-and-Hold Objective: Diagnosis and Ablation
+This appendix documents the failure that motivated the objective, the evidence that identifies it, and
+the ablations that establish which part of the change did the work. All numbers are on 50 held-out
+PushT episodes with identical start/goal pairs across every row.
+C.1
+The symptom
+Under the original fixed-terminal objective, executing the whole five-block plan beat replanning after
+every block: 88% against 52%. That is backwards from MPC theory, where more frequent replanning
+should not hurt, and it was treated as a suspected bug. Six candidate explanations were ruled out
+by measurement before the objective was touched: a success-metric artefact; seed noise (seeds
+42/7/123 gave 52/64/42 against 88/90/86); action-history normalization; interaction budget (flat
+at 50/48/50% for budgets 50/100/200); backloaded plans (block 1 in fact carries the largest actions,
+|a| = [0.703, 0.676, 0.585, 0.471, 0.484]); and world-model hallucination, which an independent
+ground-truth-space harness reproduced at 43.3% against 90.0%.
+C.2
+Root cause: horizon-reset procrastination
+The controller reached its minimum predicted distance at block 5 regardless of how near the goal
+actually was; Figure 5 in Section 4.4 shows this directly, and Table 6 gives the two profiles behind
+it in full. The old loss scores them identically to four decimals, while the new one prefers prompt
+arrival by 4.8×.
+15
+
+
+Table 6: The old objective is exactly indifferent. Two plans for a goal one block away, with their
+held-out distance profiles d1...5. Scoring only dH cannot tell them apart; indexing arrival at q=1 can.
+Plan for a goal one block away
+Profile d1...5
+Old loss dH
+New loss (q=1)
+defers arrival
+[0.090, 0.053, 0.035, 0.023, 0.014]
+0.0140
+0.1056
+arrives and holds
+[0.015, 0.014, 0.014, 0.015, 0.014]
+0.0140
+0.0221
+C.3
+The closed loop
+Fitting Dn+1 = cDn + b over consecutive replans gives a stable fixed point D∗= b/(1 −c), which
+is where the closed loop settles no matter how long it runs. Figure 7 evaluates the measured fits
+from the same starting distance D0 = 0.491. Both terms improve under the fix: c falls from 0.579 to
+0.392, so each replan removes more of what is left, and the floor b falls from 0.041 to 0.024. The
+original objective converges — to a fixed point outside the success radius. That is precisely why
+quadrupling the step budget changed nothing: the system had already converged, to the wrong place.
+C.4
+How much depth the refinement loop actually buys
+Refinement is depth, not parameters: the same Fθ and Gθ run K+1 times, so more iterations cost
+compute and never weights. Table 7 measures what each pass returns, on 256 held-out samples.
+That convergence does not extend past the depth the loop was trained at. Figure 7(b) runs the same
+weight-tied checkpoint for more iterations than it ever saw in training: predicted cost improves
+through k=5 and then rises from k=6, while the plan keeps moving by ≈0.041 per iteration and
+never settles. The recurrent update is therefore not contractive outside its trained depth, and K=3 is
+a trained operating point rather than a free knob to turn up at evaluation time.
+0
+2
+4
+6
+8
+replan number n
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+latent goal distance Dn
+c=0.392
+b=0.0241
+c=0.579
+b=0.0412
+terminal-only ablation, D * =0.2028
+arrival+hold  (D * =0.0396)
+original objective  (D * =0.0979)
+Figure 7:
+(a): The fitted closed loop under replan-every-block. Each replan removes a fraction
+1 −c of the remaining distance but adds a constant floor b, so the loop converges to D∗= b/(1 −c).
+Curves are evaluated from the measured (c, b), not fitted by eye. The fixed point is a latent distance;
+its association with the 20-pixel tolerance is inferred from the success rates that accompany it, not
+from a measured latent-to-pixel conversion. (b): refinement at eval time. Predicted cost improves
+through k=5 then worsens from k=6, while the plan keeps changing by ≈0.041 per iteration and
+never settles — the recurrent update is not contractive outside its trained depth.
+16
+
+
+Table 7: Refinement converges within its trained depth. Held-out means across refinement
+iterations k. Terminal distance falls 3.9× from one pass to four, the gains shrink by an order of
+magnitude, and the plan moves less each time — matching the learned step sizes [0.550, 0.451, 0.312].
+The pathology is visible here too: arrival stays ≈10× worse than terminal at every k, because the
+objective never asked for it.
+k
+terminal d(k)
+5
+arrival d(k)
+q
+gain ∆
+mean plan change
+0
+0.05809
+0.20163
+—
+0.00000
+1
+0.02641
+0.16564
++0.03168
+0.23859
+2
+0.01711
+0.15428
++0.00930
+0.13259
+3
+0.01486
+0.15003
++0.00225
+0.06835
+C.5
+Which part of the change did the work
+Figure 8 sweeps λh against the fixed-terminal control. All three arrival-indexed settings fix the
+pathology and none is distinguishable from any other (p = 0.625 and 1.0). The honest conclusion
+is narrower than the design intent: re-indexing the arrival term by q is the entire fix. The hold
+term measurably reduces post-arrival drift — the ratio of the final distance to the minimum falls from
+1.9–5.1× to 1.0–3.1× — but that drift stays inside the 20-pixel tolerance, so it never converts into a
+failed episode on this task.
+Two further ablations close the case. Removing the path loss (α = 0), leaving pure dH, doubles the
+pathology: 18.0% at rh=1, 32 points below the original (p = 0.0004). Removing the support penalty
+leaves success unchanged (50.0 vs 52.0, p = 1.0) but sends the off-support fraction from 0.187 to
+0.652. So the path loss was a partial mitigation, not the cause; the support penalty is load-bearing for
+manifold adherence and nearly free in success terms on this task; and the fixed terminal deadline is
+the cause.
+C.6
+Summary of the comparison
+Table 8 is the comparison the objective change should be judged on. The corrected controller is close
+to flat in rh while CEM moves 34 →90, which is the distinction between a closed-loop goal policy
+and a good open-loop optimizer evaluated at the horizon that happens to suit it.
+rh = 1
+rh = 5
+50
+60
+70
+80
+90
+100
+PushT success (%)
+52
+88
+90
+92
+94
+88
+92
+88
++36 points: the plan is only
+good if you execute all of it
+Sensitivity to how much of the plan is executed
+fixed dH (original)
+λh=0.0 (arrival only)
+λh=0.5
+λh=1.0
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+closed-loop fixed point D *
+fixed dH (original)
+λh=0.0 (arrival only)
+λh=0.5
+λh=1.0
+0.0978
+0.0475
+0.0397
+0.0362
+Where the closed loop settles
+Figure 8: The hold weight is not what fixes the failure. Left: success at both receding horizons.
+Every arrival-indexed setting (green) recovers; the fixed-terminal objective (red) collapses at rh=1
+while remaining fine at rh=5, which is the horizon-dependence itself. Right: the closed-loop fixed
+point D∗falls monotonically with λh even where success does not, so the hold term is doing real
+work on drift that this task’s tolerance does not price.
+17
+
+
+Table 8: PushT scoreboard, 50 held-out episodes, identical start/goal pairs on every row. rh is
+the number of planned blocks executed before replanning. A healthy closed-loop planner should
+be roughly insensitive to rh; the arrival-and-hold controller is (94 vs 88, statistically tied), and the
+fixed-terminal controller is emphatically not.
+Planner
+rh=1
+rh=5
+Note
+random actions
+2%
+—
+floor
+CEM (300 samples × 30 iterations)
+34%
+90%
+≈45,000 predictor transitions per plan
+LePlanner, fixed-terminal objective
+52%
+88%
+horizon-dependent
+LePlanner, arrival-and-hold
+94%
+88%
+20 predictor transitions per plan
+D
+Decoding the Latent Plan: What the Controller Imagines
+Everything the controller optimises happens in a 192-dimensional latent space, so the objective in
+Section 3.3 is a distance between vectors no one can look at. To make those vectors inspectable
+we train a decoder from the same post-projector latent back to pixels, and use it to render what the
+controller imagined beside what actually happened.
+The decoder is strictly diagnostic. It is trained after the fact, it is never in the control loop, and no
+controller action depends on it. Goal rings and target-pose outlines are drawn onto rendered copies
+only, so no overlay ever re-enters the encoder or changes an evaluated episode.
+D.1
+The two decoders, and how far each can be trusted
+A 192-dimensional latent conditions learned output-patch queries that reconstruct a 224 × 224 RGB
+frame. We train one decoder per environment, since a decoder is tied to one world model’s latent
+space and one dataset, and consume the post-projector emb latent — the same vector the predictor
+rolls forward — rather than the raw CLS token. Table 9 records both, and they are not equally good.
+The TwoRooms decoder additionally reaches PSNR 54.8 dB and SSIM 0.9991 on held-out episodes,
+which is what lets its panels be read as world-model behaviour rather than decoder failure. The PushT
+decoder is a factor of 3.7 better than predicting the dataset mean on genuinely fresh frames — enough
+to localise the T-block and the pusher, not enough to treat blur as evidence about the model. We flag
+this rather than presenting the two as equivalent probes.
+D.2
+Reading the three rows
+Figures 9 and 10 show the diagnostic that matters, with three rows that must be compared in a specific
+order. ACTUAL is the true environment frame. RE-ENCODED is decode(encode(ACTUAL)) — a
+control that isolates decoder error, since any disagreement between these two rows is the decoder’s
+fault and nothing else. IMAGINED is the decoded predictor rollout under the controller’s plan. Reading
+RE-ENCODED first is what makes the comparison sound: whatever separates it from ACTUAL is
+reconstruction error, and only the residual gap between IMAGINED and RE-ENCODED is world-model
+imagination error.
+The contrast between the two figures is the useful part. On TwoRooms the model is locally excellent
+and then fails discretely, because a wall is a discontinuity that a smooth latent predictor crosses when
+it should not. On PushT error accumulates gradually instead. In both cases the first block — the part
+Table 9: Decoder fidelity. Both beat the mean-image baseline, but by very different margins. The
+TwoRooms decoder is a near-exact probe; the PushT decoder is a usable but visibly blurry one, so
+PushT panels should be read for object pose and gross geometry, not for fine texture.
+Decoder
+MSE
+Mean-image MSE
+Ratio
+Held-out protocol
+TwoRooms
+5.97 × 10−6
+1.93 × 10−3
+324×
+episode-split, 24,000 frames
+PushT
+6.78 × 10−4
+4.82 × 10−3
+7.1×
+frame split of the cache
+PushT
+1.28 × 10−3
+4.73 × 10−3
+3.7×
+256 fresh frames
+18
+
+
+Figure 9: Imagined versus actual rollout, TwoRooms, m=5. Columns are plan blocks 1 . . . 5;
+the per-column figure is the predicted-versus-actual latent MSE. RE-ENCODED tracks ACTUAL
+throughout, so the decoder is not the source of any disagreement. The world model is accurate for
+the first block (drift 0.101) and then diverges by roughly 16× (drift 1.85 onward): its imagined
+agent stalls against the dividing wall while the real agent passes through the doorway. The episode
+nevertheless succeeds, finishing at 15.5 pixels against a 16-pixel tolerance — which is the case for
+replanning, not against it. Only block 1 is a complete block; blocks 2–5 are partial and padded, so
+their drift values are not directly comparable to block 1’s.
+the controller actually executes at m=1 — is the part the world model gets right, which is a concrete
+reason the controller is close to flat in m while still being better at m=1.
+D.3
+Refinement, made visible
+Figures 11 and 12 decode the imagined terminal state after each refinement k = 0 . . . K. On
+TwoRooms the predicted goal distance falls 1.3034 →1.1884 →0.3429 →0.1881; on PushT it
+falls 0.1215 →0.0312 →0.0309 →0.0299, with almost all of the gain in the first refinement. In
+both the decoded terminal state moves visibly toward the goal, so the K refinements do real work
+rather than making cosmetic adjustments to an already-settled plan. This is the same convergence the
+learned step sizes [0.550, 0.451, 0.312] imply, shown in pixels.
+19
+
+
+Figure 10: Imagined versus actual rollout, PushT. The same three rows on a contact-rich task. Here
+RE-ENCODED is visibly blurrier than ACTUAL — that is the PushT decoder’s own error (Table 9), not
+the world model’s, and it is why this panel is read for pose rather than texture. Imagination degrades
+far more gently than on TwoRooms, with drift growing smoothly 0.009 →0.029 →0.040 →
+0.063 →0.074 across the five blocks rather than jumping an order of magnitude, and the imagined
+T-block pose stays close to the real one throughout.
+Figure 11: What each refinement buys, TwoRooms. Top: the decoded imagined terminal state
+after refinement k. Bottom: the goal. The imagined endpoint migrates toward the goal as k increases
+while the predicted distance falls by roughly 7× over three refinements.
+20
+
+
+Figure 12: What each refinement buys, PushT. The initial plan k=0 is already close, and one
+refinement captures most of the available improvement (4×), after which the plan is essentially settled
+— the behaviour a converging solver with decaying step sizes should show.
+D.4
+Executed episodes, end to end
+Figures 13 and 14 show complete executed episodes rather than single rollouts: each row is one
+episode, read left to right, ending with the goal being scored. The target is drawn as an outline in
+every frame, so the reader can see the gap closing rather than having to infer it. Four episodes are
+shown per environment, and all of them are successes.
+Read together, the two figures show the same closed-loop behaviour in two very different action
+spaces. On TwoRooms progress is monotone: the agent moves toward the doorway, through it, and
+onto the target, and the replan points are evenly spaced because nothing interrupts it. On PushT
+progress is not monotone in the same way — the pusher must first travel around the block before any
+useful motion happens, so the first two or three replans move the agent without moving the T at all,
+and the block only converges once contact is established. That is the behaviour the arrival term has to
+permit: a plan that looks like it is making no progress for two blocks is correct on this task, and an
+objective that scored only the immediate step would penalise it.
+D.5
+The physical trajectory
+Figure 15 plots an episode in environment coordinates rather than latents: the real agent path, the true
+walls, the target tolerance ring, and the replan points. The trials shown were fixed before any visual
+inspection, by a stated rule — the first four manifest trials whose start-goal separation is at least 16
+pixels, so that a trial cannot be trivially solved by standing still — and the selection did not consult
+controller outcomes.
+Scope.
+We trained decoders for TwoRooms and PushT, and make no decoded claims about Reacher
+or Cube. No quantitative result in Section 4 depends on any decoder: it is a visualization probe and
+never enters control or evaluation.
+E
+The full algorithm for the architecture:
+21
+
+
+ep.\ 42
+18px, 13 ∘
+ep.\ 44
+10px, 0 ∘
+ep.\ 46
+14px, 6 ∘
+ep.\ 48
+13px, 3 ∘
+Figure 13: PushT: executed rollouts, four successful episodes. Each row is one episode: the state
+at each of ten replans, then the goal. The magenta outline is the target pose, and the final position and
+orientation error are given at the right. Note the first replans in each row, where the pusher travels
+around the block before it can move it. These episodes use sim-generated goals, not the held-out
+expert evaluation set that the success rates in Section 4 are computed on; they illustrate behaviour
+and are not a success rate.
+ep.\ 01
+12.3px
+( < 16)
+1
+2
+3
+4
+goal
+ep.\ 03
+15.0px
+( < 16)
+1
+2
+3
+4
+5
+6
+7
+goal
+ep.\ 04
+12.1px
+( < 16)
+1
+2
+3
+4
+5
+6
+7
+8
+goal
+ep.\ 05
+14.5px
+( < 16)
+1
+2
+3
+4
+5
+6
+7
+8
+goal
+Figure 14: TwoRooms: executed rollouts, four successful held-out episodes at m=1, controller
+seed 43. Columns are evenly spaced replan points and the last column is the goal; the magenta ring is
+the 16-pixel success tolerance, and the final physical distance is given at the right. Episodes differ in
+length, so rows with fewer replans are padded with blank space rather than repeated frames. These
+are the same held-out trials used throughout Appendix D, fixed before inspection.
+22
+
+
+Figure 15: Executed TwoRooms trajectory, m=1. The agent path is drawn over the true floor
+plan with the goal tolerance ring; physical distance falls 44.8 →15.0 pixels over the episode. Goal
+markers are drawn after rendering and never enter the encoder.
+Algorithm 1 Iterative latent-space controller
+Require: Recent observations ot−N+1:t, goal observation oG, past action blocks bt−N+1:t−1, frozen encoder
+E, frozen action-conditioned predictor P, horizon H, refinement budget K, execution horizon rh.
+Ensure: Execute the first rh blocks of the final action plan.
+1: xt−N+1:t ←E(ot−N+1:t)
+▷frozen image encoder
+2: xG ←E(oG)
+3: C ←Conditioning(xt−N+1:t, xG)
+▷context tokens and one goal token
+4: Y ←InitialPlan(C)
+▷H learned plan tokens; no rollout consequences initially
+5: for k ←0 to K do
+6:
+bk ←ActionHead(Y )
+▷H bounded action blocks
+7:
+e ←P.ActionEncoder([bt−N+1:t−1; bk])
+8:
+ˆ
+X ←xt−N+1:t
+9:
+for j ←1 to H do
+10:
+Wj ←RecentWindow( ˆ
+X, N)
+11:
+Aj ←AlignedActions(e, Wj)
+12:
+ˆxj ←P(Wj, Aj)
+▷frozen one-step prediction
+13:
+ˆ
+X ←[ ˆ
+X; ˆxj]
+14:
+end for
+15:
+ˆ
+Xfuture ←(ˆx1, . . . , ˆxH)
+▷H-step imagined rollout
+16:
+if k = K then
+17:
+break
+18:
+end if
+19:
+for j ←1 to H do
+20:
+δj ←ˆxj −xG
+21:
+dj ←mean(δ2
+j )
+22:
+qj ←[Yj; ˆxj; δj; dj]
+▷plan token, outcome, goal error, and distance
+23:
+end for
+24:
+R ←ConsequenceEncoder(q1:H, C)
+▷one consequence token per planned block
+25:
+Z ←JointRefiner(Y, R, C)
+▷joint reasoning over plan, context, and goal tokens
+26:
+∆Y ←DeltaHead(Z)
+27:
+Y ←Y + σ(ηk)∆Y
+▷learned gated residual correction
+28: end for
+29: Execute the first rh blocks of bK in the environment
+30: Observe new frames, update the history, and repeat
+23

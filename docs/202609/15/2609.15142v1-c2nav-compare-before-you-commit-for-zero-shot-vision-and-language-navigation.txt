@@ -1,0 +1,1026 @@
+C2Nav: Compare Before You Commit for Zero-Shot
+Vision-and-Language Navigation
+Runtian Zheng1, Congpeng Zhang1,†, Ying Liu1
+Abstract— Zero-shot vision-and-language navigation in con-
+tinuous environments (VLN-CE) increasingly places foundation
+vision-language models (VLMs) inside the navigation loop.
+Existing systems commonly request cardinal outputs such
+as waypoints, pixels, headings, progress values, or absolute
+arrival decisions, coupling a generative response to geomet-
+ric magnitude or an irreversible commitment. We study a
+complementary model–robot interface: the VLM compares
+controller-constructed alternatives, while geometry, thresholds,
+action magnitude, and execution remain on the physical side.
+We instantiate this idea in C2Nav, a training-free framework
+with three coordinated faculties. Seeing performs ordinal Gaze
+Election over physically vetted candidate views; Remembering
+maintains a compact route sketch and compares adjacent
+instruction-leg hypotheses; and Arriving combines a hesitation
+ladder, look-back comparison, and revocable walk-back for
+reliable stopping. On the public OpenNav R2R-CE 100 protocol,
+C2Nav with Qwen3-VL-8B-Instruct obtains 41.0% OSR, 31.0%
+SR, and 16.7% SPL, while the same interface with the standard
+GPT-5.5 model reaches 54.0% OSR, 44.0% SR, and 29.0% SPL.
+Whole-faculty ablations reduce SR to 14.0% without Seeing,
+25.0% without Remembering, and 29.0% without Arriving.
+Matched role inversions that replace only the comparative
+answer form with cardinal/absolute questions reduce SR to
+12.0%, 28.0%, and 21.0% in the spatial, transition, and terminal
+slots, respectively. The results indicate that a constrained decision
+interface and stronger VLM reasoning are complementary rather
+than interchangeable.
+I. INTRODUCTION
+Vision-and-Language Navigation (VLN) requires an em-
+bodied agent to ground a natural-language route description
+in visual observations and execute the implied motion in an
+unseen environment [1]. VLN in Continuous Environments
+(VLN-CE) removes the predefined navigation graph and
+exposes the agent to partial observability, collision avoidance,
+fine-grained motor control, and explicit stopping [2]. The
+central difficulty is therefore not only understanding an
+instruction, but translating semantic judgment into reliable
+physical commitment over a long horizon.
+Learning-based VLN has progressed through stronger cross-
+modal representations, history modeling, topological planning,
+and bird’s-eye-view spatial reasoning [3], [4], [5], [6], [7],
+[8]. Foundation models enable a complementary zero-shot
+regime in which the navigation policy can be assembled from
+pretrained reasoning and perception without VLN-specific
+optimization. NavGPT and DiscussNav demonstrate explicit
+language reasoning and deliberation; MapGPT introduces
+map-guided prompting; Open-Nav studies zero-shot VLN-CE
+†Corresponding Author.
+1Runtian Zheng, Congpeng Zhang and Ying Liu are with North China
+University of Technology, Beijing, China. Email: zcp@ncut.edu.cn
+with foundation models; InstructNav and CA-Nav organize
+progress through value or constraint structures; and SmartWay
+augments waypoint navigation with history-aware reasoning
+and backtracking [9], [10], [11], [12], [13], [14], [15].
+Recent systems make the model–controller boundary still
+more explicit. LaViRA translates a language-level direction
+into a grounded visual target and robot action, and Uni-
+LaViRA extends this translation across navigation tasks and
+embodiments [16], [17]. P2DNav separates panoramic direc-
+tion selection from down-view pixel grounding; LightZeroNav
+separates local action execution from route-stage transition for
+lightweight VLMs; and AgenticNav expands model agency
+through callable action, depth, and memory tools [18], [19],
+[20]. These systems establish interface design as a central
+issue, but their online semantic outputs can still be a direction,
+pixel, action, progress state, or tool call. Our complementary
+question is narrower and directly testable: what is gained
+when model authority is deliberately restricted to ordering
+controller-generated alternatives before physical commitment?
+A recurring design choice in these systems is the answer
+type requested from the model. A VLM may be asked for a co-
+ordinate, waypoint, heading, progress magnitude, confidence,
+or binary arrival verdict. Such outputs are convenient because
+they can be consumed directly by a controller, but they
+also couple an uncalibrated generative model to geometric
+magnitude or an irreversible decision. A small heading error
+can create a long deviation; an optimistic progress estimate
+can switch sub-goals too early; and a permissive arrival
+criterion can terminate an otherwise recoverable episode.
+Human wayfinding suggests a different abstraction. Land-
+mark and route knowledge can be useful before precise
+metric survey knowledge is available [21], [22]: a traveler can
+decide which corridor better matches an instruction without
+estimating its bearing, or recognize that the current scene
+is more compatible with the next route segment without
+reporting a completion percentage. Comparative judgment
+has a related measurement advantage. In a simple signal-
+detection model, an absolute response depends jointly on
+evidence sensitivity and a movable response criterion, whereas
+a forced comparison depends primarily on evidence ordering
+[23], [24]. Pairwise foundation-model judgments can still
+exhibit presentation-order effects [25]; the point is not that
+comparison is unbiased, but that its authority can be bounded
+and audited.
+We therefore formulate a Compare-Then-Commit ordinal
+interface. At decision-critical points, the VLM sees a finite set
+of alternatives and returns only a preference or ranking. Depth,
+odometry, traversability, thresholds, and motion magnitude
+arXiv:2609.15142v1  [cs.RO]  14 Sep 2026
+
+
+Fig. 1.
+Cardinal asking versus the proposed ordinal interface. The VLM
+returns an ordering over controlled alternatives; metric state, bounded motion,
+and terminal commitment remain on the physical side.
+are computed by deterministic modules. A short physical
+action is committed only after the semantic alternative has
+been selected, after which the agent re-observes and reasons
+again. This separation creates a natural experimental control:
+keep perception, history, and execution fixed, but replace the
+comparative question by a cardinal or absolute one in the
+same decision slot.
+We instantiate the interface in C2Nav through three faculties
+corresponding to three recurrent VLN-CE questions. Seeing
+asks where should I move next? and elects among physically
+valid views. Remembering asks has the route entered the next
+instruction stage? and compares neighboring route hypotheses
+against an episodic sketch. Arriving asks is the current place
+sufficiently better supported than recently passed alternatives
+to stop? and uses staged evidence, look-back comparison,
+and walk-back recovery before commitment. The design is
+hierarchical, but our emphasis is the message crossing the
+model–robot boundary rather than hierarchy alone.
+Our contributions are threefold:
+• We introduce a practical ordinal model–robot interface
+that restricts VLM decisions to controlled comparisons
+while retaining geometry and execution on the physical
+side.
+• We develop C2Nav, a zero-shot navigation framework
+that integrates Gaze Election, route-sketch transition
+reasoning, and revocable terminal commitment into a
+unified closed loop.
+• We evaluate the design with whole-faculty ablations
+and matched role inversions, showing that comparative
+decision form is especially important for spatial selection
+and terminal commitment, and remains complementary
+to backbone scaling.
+II. RELATED WORK
+A. Vision-and-Language Navigation
+R2R established instruction-guided navigation in Matter-
+port3D [1], [26]. Early work improved generalization through
+instruction augmentation and cross-modal representation
+learning [3], [27]. HAMT models long observation–action
+histories explicitly, while DUET combines global graph
+reasoning with local action selection [4], [5]. VLN-CE
+transfers the task to continuous Habitat environments [2], [28],
+where the agent must execute low-level actions rather than
+jump between graph nodes. ETPNav, BEVBert, and GridMM
+further strengthen long-horizon planning with topological
+or map-like intermediate representations [6], [7], [8]. These
+methods establish strong continuous navigation baselines,
+but normally rely on task-specific learning or learned spatial
+modules.
+B. Foundation Models for Zero-Shot VLN-CE
+Foundation models make it possible to reason about
+navigation instructions without training a complete task-
+specific policy. NavGPT uses an LLM for explicit instruction-
+following reasoning, and DiscussNav decomposes naviga-
+tion reasoning across multiple experts [9], [10]. MapGPT
+maintains a linguistic topological representation to support
+global planning [11]. In continuous environments, Open-
+Nav combines foundation-model reasoning with executable
+waypoint candidates, SmartWay improves waypoint quality
+and history-aware backtracking, and InstructNav and CA-Nav
+organize progress through value maps or explicit constraints
+[12], [13], [14], [15].
+Waypoint-free systems are not interface-free. LaViRA and
+Uni-LaViRA use a language–vision–robot translation in which
+MLLMs choose a direction and then localize a visual target
+[16], [17]. P2DNav similarly separates panoramic choice from
+pixel-level grounding, LightZeroNav structures action and
+transition reasoning around a lightweight Qwen3-VL back-
+bone, and AgenticNav lets the VLM select target pixels, query
+metric depth, and recall visual memory through tools [18],
+[19], [20]. Concurrent systems extend this trend through direct
+three-view action prediction and future–past reasoning, graph-
+constrained instruction solving with backtracking, global–
+local–global trajectory auditing, and online spatial cognitive
+memory [29], [30], [31], [32]. The closest structural overlap
+is Three-Step Nav, whose local candidate selection and look-
+back audit resemble parts of Seeing and Arriving; AgenticNav
+is the closest recent contrast in interface philosophy because
+it broadens model agency, whereas C2Nav bounds it. Our
+claim is therefore not a new three-stage organization. C2Nav
+differs in two coupled respects: every online semantic slot
+accepts only an ordering over alternatives constructed and
+vetted by the controller, and matched role inversions isolate
+
+
+the requested answer form while holding perception, history,
+and execution fixed.
+C. Hierarchical Navigation, Memory, and Recovery
+Long-horizon navigation is commonly stabilized by decom-
+posing global intent from local execution. In learning-based
+VLN, DUET separates global graph reasoning from local
+action selection, while ETPNav evolves a topological planning
+structure as the agent moves [5], [6]. Zero-shot systems adopt
+analogous structure without training a complete navigation
+policy. InstructNav explicitly decomposes an instruction
+into a dynamic navigation chain, CA-Nav manages sub-
+instruction completion under constraints, and SmartWay uses
+historical context and backtracking to recover from poor
+waypoint decisions [13], [14], [15]. These results support two
+recurring lessons: progress should be represented explicitly
+rather than inferred from the current frame alone, and
+an incorrect local commitment should remain recoverable
+whenever possible. C2Nav follows both principles, but uses
+a compact route sketch rather than a learned map and makes
+the transition/recovery decisions part of the same comparative
+interface used for spatial selection.
+D. Comparative and Sequential Decisions
+Comparative judgment formalizes decisions through rel-
+ative evidence rather than an absolute scale [23], [24].
+Reject-option classification similarly motivates abstention
+when evidence is insufficient [33], and sequential testing
+motivates delaying commitment until evidence accumulates
+[34]. Temporally extended options provide a natural abstrac-
+tion for route segments [35], while change-point detection
+motivates comparing whether observations remain consistent
+with the current route leg or support a transition [36].
+These classical ideas are useful because embodied navigation
+contains several asymmetric decisions: a short local motion
+can be corrected on the next cycle, a stage transition changes
+the interpretation of future observations, and a stop action
+ends the episode. C2Nav therefore applies stronger evidence
+requirements as commitment becomes harder to revoke. We
+use comparison, abstention, and accumulated evidence as
+engineering principles rather than as a cognitive model of
+VLMs.
+III. PROPOSED METHOD
+A. Problem Formulation and Overview
+An R2R-CE episode provides a natural-language instruc-
+tion I, egocentric RGB-D observations, odometry, and a
+continuous action interface. Before execution, a language-
+only preprocessing step parses I into an ordered route ladder
+G = (g1, . . . , gK), where each gk describes a semantic route
+leg without coordinates or metric subgoals. This one-time
+nonmetric representation does not directly trigger motion
+and is therefore outside the three online ordinal decision
+slots; our interface claim concerns model outputs that cross
+the model–robot boundary during execution. At step t, the
+agent maintains its physical state st, current leg index ℓt,
+current observation Ot, and an episodic route sketch Rt. The
+navigation policy can be written as
+at = C(Qθ(I, gℓt, Ot, Rt), st) ,
+(1)
+where Qθ is a frozen VLM query and C is the deterministic
+physical controller. The defining restriction is that Qθ returns
+an ordinal decision; metric quantities required to realize at
+are supplied by C.
+The full architecture is shown in Fig. 2. The three faculties
+operate at different temporal scales. Seeing is invoked
+frequently for short-horizon direction selection. Remembering
+accumulates route evidence and controls stage transitions.
+Arriving is activated only near the final instruction stage,
+where a false positive is particularly costly. This coarse-to-
+fine temporal organization lets the system spend stronger
+deliberation where commitment is harder to reverse.
+B. Ordinal Interface Contract
+For decision slot j, the controller constructs a finite
+alternative set Aj = {a1
+j, . . . , am
+j } and asks the VLM only
+for an ordering
+πj = Rankθ(I, Ot, Rt; Aj).
+(2)
+The VLM may return an index, ranking, or pairwise winner,
+but the interface does not request a pixel coordinate, heading,
+distance, progress percentage, scalar confidence, or direct
+motion duration. Once an alternative is selected, the physical
+side maps it to a bounded action using depth, odometry,
+collision checks, and fixed control limits. Thus, semantic
+preference and metric realization are separated.
+A simple signal-detection surrogate motivates the restric-
+tion. For an absolute binary judgment with sensitivity d′ and
+response criterion c, the true-positive response under an equal-
+variance Gaussian observer is Φ(d′ −c). For independent
+two-alternative evidence, the ordering probability is
+P2AFC = Φ
+ d′
+√
+2
+
+,
+(3)
+which does not contain the free criterion c. We do not
+assume that VLM evidence is Gaussian or that prompting
+changes only criterion. Equation (3) merely motivates the
+controlled role-inversion experiments in Sec. IV, where the
+same semantic slot is queried in comparative and cardinal
+forms.
+The contract is operational: every decision slot specifies
+what alternatives the VLM is allowed to compare and which
+quantities remain owned by the physical system. The compact
+ownership summary below makes this separation explicit.
+In particular, a model preference never bypasses feasibility
+checks, sets a metric threshold, or directly commits an
+irreversible stop. This shared ownership pattern is used across
+all three faculties rather than implemented as three unrelated
+prompt heuristics.
+Interface ownership at the three decision slots.
+Slot
+VLM compares
+Physical side retains
+Seeing
+candidate views
+free space; turn/step size
+Transition stay vs. next leg
+displacement; switch timing
+Arriving
+current vs. look-back stop gate; return path
+
+
+Fig. 2.
+Overview of C2Nav. A Seeing ranks physically vetted candidate views and can re-anchor through a junction glance. B Remembering maintains a
+compact route sketch and recognizes instruction-leg transitions by comparison. C Arriving accumulates terminal evidence, compares the present place with
+look-back evidence, and may revoke a rejected stop through Walk-Back. The top-down map is evaluation-side visualization rather than a VLM input.
+C. Seeing: Gaze Election and Re-anchoring
+The physical side first renders a small local fan of candidate
+views (a triplet in the reported implementation)
+Ct = {(vi
+t, oi
+t)}m
+i=1,
+(4)
+where vi
+t is an RGB view and oi
+t is a controller-side
+traversability estimate obtained from depth and collision state.
+Candidates with insufficient free-space support are removed
+before the VLM is queried. Given the active route leg gℓt,
+the VLM ranks the surviving views according to semantic
+consistency with the instruction. The body rotates toward
+the highest-ranked feasible view and executes only a short
+motion bundle before re-observing.
+This bounded commitment is important in continuous
+navigation. A wrong semantic election affects only the current
+local rollout rather than defining a long open-loop trajectory.
+When the local fan is ambiguous or repeated local motion
+fails to expose useful evidence, a Junction Glance constructs a
+wider panoramic strip from the sensor ring. The same ordinal
+query then ranks coarse sectors, the robot performs a pure re-
+orientation, and normal local Gaze Election resumes. Seeing
+therefore uses VLM semantics to choose which controlled
+direction to favor while keeping how far and how much to
+turn outside the model.
+D. Remembering: Route Sketch and Contrastive Transition
+Long-horizon instructions require more than reactive view
+selection. Prompt-only histories can grow large and can lose
+physically meaningful progress after repeated summarization.
+We instead maintain an episodic route sketch
+Rt+1 = Rt ⊕(∆xt, τt, bt, mt, qt),
+(5)
+containing leg-level displacement ∆xt, elapsed time τt, coarse
+ordinal turning evidence bt, a short recent visual/text trace mt,
+and a compact journey-consistency cue qt indicating support
+for the current leg, the next leg, or ambiguity. The sketch is
+not a learned map or a model-authored metric state. Its role
+is to preserve controller-grounded evidence that the agent has
+actually traversed the route described by the instruction.
+After a minimum physical-progress gate, the transition
+decision is phrased as a contrast between adjacent route
+hypotheses,
+Hstay : gℓt
+vs.
+Hnext : gℓt+1.
+(6)
+The VLM chooses which hypothesis is better supported by
+the current scene and route sketch. A fixed controller-side
+consistency rule accepts a transition only after temporally
+repeated support, preventing a single noisy frame from
+advancing the route. This construction converts instruction
+progress from a scalar estimation problem into a local change-
+recognition problem: the system only needs to decide whether
+the evidence still belongs to the current leg or has become
+more compatible with the next one.
+E. Arriving: Hesitation, Look-Back, and Walk-Back
+Stopping receives a more conservative treatment because
+a premature terminal action cannot be corrected within the
+episode. Arriving therefore maintains a finite controller-side
+
+
+evidence state,
+et = (eground, ejourney, elookback),
+er ∈{−1, 0, +1}, (7)
+where r ∈{ground, journey, lookback}, and −1, 0, and
++1 denote evidence against, undecided, and evidence for
+stopping. These codes are deterministic bookkeeping for
+categorical comparison outcomes; the VLM never emits
+a scalar confidence. A fixed evidence ladder maps et to
+hold, inspect, or stop, subject to physical vetoes such
+as implausible depth, insufficient route progress, or collision-
+induced inconsistency. The first level checks whether final-leg
+semantics are grounded in the current view; the second checks
+whether the journey recorded in Rt is compatible with the
+destination; and the final level spends a limited look-back
+budget only when the evidence remains ambiguous.
+For look-back, odometry selects a previously visited frame
+F −at a fixed path distance behind the current frame Ft.
+The terminal query asks which frame is more consistent
+with the destination description. Presentation order can be
+swapped across repeated comparisons, and disagreement leads
+to abstention rather than forced stopping. A rejected stop
+candidate is not necessarily discarded. The controller can
+record a Walk-Back marker; if subsequent motion produces
+disconfirming evidence, the robot returns to the candidate
+neighborhood and evaluates the terminal evidence again. This
+converts some conservative false negatives into recoverable
+decisions while maintaining a high bar for irreversible
+stopping.
+F. Closed-Loop Execution
+At each navigation cycle, C2Nav (1) forms and vets
+candidate views, (2) performs Gaze Election and bounded
+motion, (3) updates the route sketch, (4) tests current-versus-
+next instruction-leg evidence after sufficient physical progress,
+and (5) activates the Arriving ladder only in the final leg.
+Standard spatial decisions therefore remain lightweight, while
+transition and terminal reasoning are event-gated. All model
+variants share the same sensing, route representation, physical
+gates, candidate construction, and controller; only the frozen
+VLM backbone or the queried answer type is changed in the
+experiments.
+Event schedule and fallback. Seeing is the default
+per-cycle query because its consequence is deliberately
+short-horizon. Transition is queried only after the physical
+progress gate is satisfied, and Arriving is queried only in the
+terminal route leg. If the model returns an invalid ranking,
+all alternatives fail deterministic feasibility checks, or the
+evidence needed by a gated faculty is unavailable, the system
+does not synthesize a free-form action. It instead keeps the
+current route state, re-observes or re-anchors, and retries
+through the same bounded interface. This fallback keeps
+uncertainty from silently changing the action vocabulary.
+Shared instantiation. The same frozen VLM can serve all
+three slots with slot-specific comparison templates. Candidate
+generation, depth handling, odometry, route-state updates,
+stopping thresholds, and low-level motion are independent
+of the VLM family. Consequently, backbone scaling changes
+semantic capacity without changing the controller, while the
+role-inversion experiments change the requested answer form
+without changing perception or execution. This separation is
+what makes the two experiment families directly interpretable.
+IV. EXPERIMENTS
+A. Experimental Setup
+Environment and dataset. We evaluate in Habitat
+[28] on R2R-CE validation-unseen [2] using the public
+OpenNav R2R-CE 100 file released with Open-Nav [12].
+LaViRA reports this standard 100-episode setting, and Agen-
+ticNav explicitly uses the exact same 100 episodes [16], [20].
+The protocol is used only for final evaluation, not prompt,
+threshold, or controller tuning; success requires stopping
+within 3 m. All variants share its episode IDs and initial
+states. Where baselines explicitly use this protocol, episode
+selection is aligned, although implementations, controllers,
+and model/API settings differ.
+Metrics. We report Navigation Error (NE), Oracle Success
+Rate (OSR), Success Rate (SR), and Success weighted by Path
+Length (SPL). NE measures final distance to the goal; OSR
+measures whether the trajectory enters the success region
+at any point; SR requires correct final stopping; and SPL
+additionally penalizes inefficient trajectories. The tables report
+episode-level point estimates on the fixed subset. Matched
+ablations are interpreted directly, whereas small cross-paper
+differences are not treated as statistical significance.
+Implementation and controls. The default checkpoint is
+Qwen/Qwen3-VL-8B-Instruct; 4B and 32B variants
+provide the scale comparison [37]. Proprietary runs use
+OpenAI model ID gpt-5.5, the standard model rather than
+GPT-5.5 Pro [38]. The VLM receives the instruction, stage-
+specific RGB candidates, and compact route context; depth
+and odometry remain controller-side. No VLN-specific fine-
+tuning, learned waypoint predictor, or task-specific policy
+optimization is used. All within-paper studies fix the route
+parser, sensors, candidate construction, physical gates, and
+controller: scale changes only the frozen VLM, and role
+inversion only the answer schema.
+B. Comparison with Reported Zero-Shot Methods
+Table I reports the common 100-episode protocol, including
+LaViRA and Three-Step Nav as close hierarchical baselines
+and AgenticNav as the strongest recent interface-oriented
+contrast. With Qwen3-VL-8B-Instruct, C2Nav reaches 31.0%
+SR and 41.0% OSR, matching InstructNav’s SR but trailing
+LaViRA and Three-Step Nav overall. Standard GPT-5.5
+raises C2Nav to 44.0% SR and 29.0% SPL. AgenticNav
+broadens model authority through pixel-action, depth-query,
+and memory-recall tools and reports 55.0% SR/48.41% SPL
+with GPT-5.5 [20]. Thus we make no raw-SOTA claim; our
+complementary claim is the matched effect of restricting
+answer form under a fixed stack. Cross-paper values remain
+descriptive because controllers, prompts, implementations,
+and API settings differ. Full-split systems such as SpaceVLN
+remain broader context.
+
+
+TABLE I
+REPORTED RESULTS ON THE COMMON 100-EPISODE R2R-CE VALIDATION-UNSEEN PROTOCOL. BASELINE VALUES ARE TRANSCRIBED FROM THE
+CITED PRIMARY PAPERS; THE LAVIRA ROWS USE ITS V2 MANUSCRIPT [16]. EPISODE SELECTION IS SHARED WHERE THE SOURCE REPORTS THE
+PUBLIC PROTOCOL; IMPLEMENTATION AND API DIFFERENCES REMAIN.
+Method
+Backbone
+WP-free
+NE↓
+OSR↑
+SR↑
+SPL↑
+Random
+–
+–
+8.63
+12.0
+2.0
+1.5
+NavGPT-CE [9]
+GPT-4
+No
+8.37
+26.9
+16.3
+10.2
+DiscussNav-CE [10]
+GPT-4
+No
+7.77
+15.0
+11.0
+10.5
+MapGPT-CE [11]
+GPT-4o
+Yes
+8.16
+21.0
+7.0
+5.0
+Open-Nav [12]
+GPT-4
+No
+6.70
+23.0
+19.0
+16.1
+SmartWay [15]
+GPT-4o
+No
+7.01
+51.0
+29.0
+22.5
+InstructNav [13]
+GPT-4
+Yes
+6.89
+47.0
+31.0
+24.0
+CA-Nav [14]
+GPT-4
+Yes
+7.58
+48.0
+25.3
+10.8
+Three-Step Nav [31]
+GPT-5 (2025-08-07)
+No
+5.87
+39.0
+34.0
+29.12
+LaViRA [16]
+GPT-4o / Qwen2.5-VL-32B
+Yes
+6.43±0.28
+43.3±3.2
+36.0±1.7
+28.3±0.8
+LaViRA [16]
+Gemini-2.5-Pro / Qwen2.5-VL-32B
+Yes
+6.54±0.27
+48.7±2.1
+38.3±0.6
+28.3±0.9
+AgenticNav [20]
+GPT-5.5
+Yes
+5.19
+65.0
+55.0
+48.41
+C2Nav (Qwen3-VL-8B-Instruct)
+Qwen3-VL-8B-Instruct
+Yes
+8.89
+41.0
+31.0
+16.7
+C2Nav (GPT-5.5)
+GPT-5.5
+Yes
+7.20
+54.0
+44.0
+29.0
+TABLE II
+BACKBONE SCALE UNDER THE SAME C2NAV INTERFACE, EPISODE IDS,
+AND PHYSICAL CONTROLLER.
+Backbone
+NE↓
+OSR↑
+SR↑
+SPL↑
+Qwen3-VL-4B
+9.30
+36.0
+28.0
+15.5
+Qwen3-VL-8B-Instruct
+8.89
+41.0
+31.0
+16.7
+Qwen3-VL-32B
+8.10
+48.0
+39.0
+23.5
+GPT-5.5
+7.20
+54.0
+44.0
+29.0
+C. Backbone Scale Analysis
+A central question is whether the interface merely compen-
+sates for a weak model or remains useful as the backbone
+becomes stronger. Table II shows a consistent trend from
+Qwen3-VL-4B to 8B and 32B, with GPT-5.5 providing the
+strongest result among the tested backbones. SR increases
+from 28.0% at 4B to 31.0% at 8B, 39.0% at 32B, and 44.0%
+with GPT-5.5; SPL follows the same trend. These results
+indicate that the ordinal interface does not remove the need
+for model capability. Instead, stronger semantic reasoning and
+a constrained action interface contribute along complementary
+dimensions.
+D. Ablation Studies
+We next isolate the three faculty-level innovations. Table III
+reports both an additive construction and whole-faculty
+subtraction. Starting from the base zero-shot navigator, adding
+Seeing raises SR from 18.0% to 25.0%. Adding Remembering
+further raises SR to 29.0% and substantially improves SPL,
+while the complete system reaches 31.0% SR. This cumulative
+view shows that the gains are not produced by a single
+terminal heuristic.
+The subtractive view is more diagnostic. Removing Seeing
+causes the largest degradation, from 31.0% to 14.0% SR,
+indicating that controlled semantic direction selection is
+the primary source of reliable local progress. Removing
+Remembering lowers SR to 25.0% while OSR remains
+41.0%, showing that the agent can still approach the des-
+tination but is less reliable at managing stage progression and
+completion. Removing Arriving yields 29.0% SR and 37.0%
+OSR, supporting the value of terminal evidence accumulation
+and recovery even when a basic controller-side stopping path
+remains.
+Component-level removals are consistent with the faculty
+analysis. Removing the Route Sketch gives 36.0% OSR,
+27.0% SR, and 14.4% SPL; removing the contrastive Tran-
+sition gives 43.0% OSR, 26.0% SR, and 10.8% SPL; and
+removing Walk-Back gives 36.0% OSR, 26.0% SR, and 14.1%
+SPL. The Transition ablation is particularly informative: OSR
+increases while SR and SPL decrease, indicating that reaching
+the goal neighborhood is not sufficient when route-stage and
+stopping decisions are poorly coordinated.
+E. Role Inversion: Is Comparison Itself Important?
+Faculty ablation establishes that the modules are useful,
+but it does not isolate the proposed answer type. We therefore
+keep the same observation stream, route context, controller,
+and decision slot while replacing the comparative query with
+a cardinal/absolute counterpart. Table IV reports the resulting
+role inversions.
+The spatial inversion has the largest effect: replacing ordinal
+Gaze Election with a direct commitment-style direction query
+reduces SR from 31.0% to 12.0% and SPL from 16.7% to
+5.3%. The terminal inversion replaces comparative evidence
+accumulation with an absolute single-view arrival judgment
+and reduces SR to 21.0%. The transition inversion is milder,
+reaching 28.0% SR, which suggests that route memory and
+temporal consistency can partially stabilize stage switching
+even when the response form is less constrained. Across
+the three slots, the strongest sensitivity appears where an
+answer is immediately converted into physical direction or
+irreversible termination.
+F. Behavior Analysis
+The aggregate metrics reveal two distinct failure patterns.
+First, successful approach and successful stopping are not
+equivalent. The Full system reaches the success radius in
+41 episodes and finishes successfully in 31, corresponding
+to a 75.6% conversion from oracle success to final success.
+Removing Transition raises OSR to 43% but lowers SR to
+26%, showing that trajectories can pass near the goal while
+
+
+TABLE III
+ABLATION OF THE THREE C2NAV FACULTIES ON THE SAME 100 EVALUATION EPISODES. THE UPPER BLOCK BUILDS THE FULL SYSTEM CUMULATIVELY;
+THE LOWER BLOCK DISABLES ONE ENTIRE FACULTY WHILE KEEPING THE OTHER TWO UNCHANGED.
+Variant
+Seeing
+Remembering
+Arriving
+OSR↑
+SR↑
+SPL↑
+Base navigator
+–
+–
+–
+30.0
+18.0
+11.7
++ Seeing (A)
+✓
+–
+–
+42.0
+25.0
+10.9
++ A + Remembering (B)
+✓
+✓
+–
+37.0
+29.0
+16.2
+Full (A+B+C)
+✓
+✓
+✓
+41.0
+31.0
+16.7
+−Seeing (A)
+–
+✓
+✓
+30.0
+14.0
+6.1
+−Remembering (B)
+✓
+–
+✓
+41.0
+25.0
+10.9
+−Arriving (C)
+✓
+✓
+–
+37.0
+29.0
+16.2
+TABLE IV
+CONTROLLED ROLE INVERSION UNDER IDENTICAL PERCEPTION AND
+EXECUTION.
+Interface variant
+OSR↑
+SR↑
+SPL↑
+Full ordinal interface
+41.0
+31.0
+16.7
+Spatial: cardinal commitment
+30.0
+12.0
+5.3
+Transition: cardinal progress
+40.0
+28.0
+14.8
+Terminal: absolute arrival
+28.0
+21.0
+9.7
+stage and terminal decisions remain inconsistent. Second,
+recovery matters after a conservative decision. Without Walk-
+Back, SR and SPL decrease, consistent with losing the
+ability to revisit a previously plausible terminal region after
+subsequent evidence contradicts continued motion. These
+observations motivate treating Remembering and Arriving as
+coordination mechanisms rather than independent accuracy
+modules.
+G. Qualitative Analysis
+Figure 3 illustrates the intended closed-loop behavior. The
+agent first elects a locally plausible route direction, advances
+the instruction stage after the scene becomes more consistent
+with the next route leg, and then encounters an ambiguous
+terminal candidate. Instead of immediately stopping, the
+Arriving faculty compares the current scene against look-
+back evidence. When the evidence is insufficient, the stop is
+withheld and the agent continues. Subsequent observations
+can trigger Walk-Back, allowing the candidate region to be
+re-evaluated before final commitment. The mechanism is
+interpretable because each VLM judgment operates over a
+small, explicitly presented alternative set.
+V. DISCUSSION
+The experiments suggest that interface design and model
+scale solve different problems. Increasing backbone capacity
+improves semantic recognition and long-horizon reasoning,
+as reflected by the scale trend in Table II. The role inversions,
+however, show that a strong controller still benefits from
+limiting what form of answer is converted into action. This
+distinction is most visible in spatial and terminal decisions,
+where a cardinal error has immediate physical consequences.
+Fig. 3.
+Qualitative C2Nav trace. A plausible candidate stop can be withheld, navigation continues, and Walk-Back enables the agent to revisit and
+re-evaluate the terminal region before committing.
+
+
+Transition decisions are less sensitive because they already
+aggregate route history and temporal evidence.
+The ordinal restriction should not be interpreted as claiming
+that pairwise prompting is universally superior. Comparisons
+may still inherit order bias, visual hallucination, or correlated
+failures. Moreover, the route sketch is deliberately lightweight
+and does not provide the global planning capacity of a learned
+topological map. The present study is a controlled interface
+test on the public 100-episode protocol rather than the full
+validation-unseen split; the tables provide point estimates,
+and cross-paper implementations, controllers, simulator re-
+visions, and API settings may differ. Latency, token cost,
+repeated-run uncertainty, and physical-robot validation are
+not characterized here. The proprietary-backbone result is also
+subject to model-version drift. Finally, the method assumes
+reliable RGB-D sensing and odometry; dynamic obstacles,
+long-term localization drift, and outdoor route semantics
+remain open challenges. These limitations bound the empirical
+claim without changing the matched evidence that answer
+form affects behavior under a fixed navigation stack.
+VI. CONCLUSION
+We presented C2Nav, a zero-shot VLN-CE framework
+built around a simple design rule: compare, then commit.
+The VLM ranks controlled alternatives for spatial selection,
+route-stage transition, and terminal judgment, while the
+robot retains geometry, thresholds, and action magnitude.
+The resulting Seeing–Remembering–Arriving architecture
+achieves competitive zero-shot navigation and scales with
+stronger backbones. Whole-faculty ablations establish the
+complementary roles of the three components, while matched
+role inversions show that changing only the requested answer
+form can substantially alter navigation behavior. These
+results motivate treating the model–robot interface as a first-
+class design variable in foundation-model-driven embodied
+navigation.
+ACKNOWLEDGMENT
+OpenAI GPT-5.6 Pro assisted before submission with
+language and organization edits in the Abstract, Introduction,
+Related Work, Method, and Discussion, plus reference checks.
+It did not generate experiments, data, code, or figures; the
+authors manually revised all wording and verified every
+technical claim, equation, result, and citation.
+REFERENCES
+[1]
+P. Anderson et al., “Vision-and-language navigation: Interpreting
+visually-grounded navigation instructions in real environments,” in
+Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2018,
+pp. 3674–3683.
+[2]
+J. Krantz et al., “Beyond the nav-graph: Vision-and-language nav-
+igation in continuous environments,” in Computer Vision – ECCV,
+2020, pp. 104–120.
+[3]
+Y. Hong et al., “VLN-BERT: A recurrent vision-and-language BERT
+for navigation,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern
+Recognit. (CVPR), 2021, pp. 1643–1653.
+[4]
+S. Chen et al., “History aware multimodal transformer for vision-
+and-language navigation,” in Adv. Neural Inf. Process. Syst., vol. 34,
+2021, pp. 5834–5847.
+[5]
+S. Chen et al., “Think global, act local: Dual-scale graph transformer
+for vision-and-language navigation,” in Proc. IEEE/CVF Conf. Com-
+put. Vis. Pattern Recognit. (CVPR), 2022, pp. 16 537–16 547.
+[6]
+D. An et al., “ETPNav: Evolving topological planning for vision-
+language navigation in continuous environments,” IEEE Trans. Pattern
+Anal. Mach. Intell., vol. 47, no. 7, pp. 5130–5145, 2025.
+[7]
+D. An et al., “BEVBert: Multimodal map pre-training for language-
+guided navigation,” in Proc. IEEE/CVF Int. Conf. Comput. Vis.
+(ICCV), 2023, pp. 2737–2748.
+[8]
+Z. Wang et al., “GridMM: Grid memory map for vision-and-language
+navigation,” in Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV), 2023,
+pp. 15 625–15 636.
+[9]
+G. Zhou, Y. Hong, and Q. Wu, “NavGPT: Explicit reasoning in
+vision-and-language navigation with large language models,” in Proc.
+AAAI Conf. Artif. Intell., vol. 38, 2024, pp. 7641–7649.
+[10]
+Y. Long et al., “Discuss before moving: Visual language navigation
+via multi-expert discussions,” in 2024 IEEE Int. Conf. Robot. Autom.
+(ICRA), 2024, pp. 17 380–17 387.
+[11]
+J. Chen et al., “MapGPT: Map-guided prompting with adaptive path
+planning for vision-and-language navigation,” in Proc. 62nd Annu.
+Meeting Assoc. Comput. Linguistics (ACL), 2024, pp. 9796–9810.
+[12]
+Y. Qiao et al., “Open-Nav: Exploring zero-shot vision-and-language
+navigation in continuous environment with open-source LLMs,” in
+2025 IEEE Int. Conf. Robot. Autom. (ICRA), 2025, pp. 6710–6717.
+[13]
+Y. Long et al., “InstructNav: Zero-shot system for generic instruction
+navigation in unexplored environment,” in Proc. 8th Conf. Robot
+Learn. (CoRL), ser. Proceedings of Machine Learning Research,
+vol. 270, PMLR, 2025, pp. 2049–2060.
+[14]
+K. Chen et al., “Constraint-aware zero-shot vision-language navigation
+in continuous environments,” IEEE Trans. Pattern Anal. Mach. Intell.,
+vol. 47, no. 11, pp. 10 441–10 456, 2025.
+[15]
+X. Shi et al., “SmartWay: Enhanced waypoint prediction and
+backtracking for zero-shot vision-and-language navigation,” in 2025
+IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS), 2025, pp. 16 923–
+16 930.
+[16]
+H. Ding et al., “LaViRA: Language-vision-robot actions translation
+for zero-shot vision language navigation in continuous environments,”
+arXiv preprint arXiv:2510.19655, 2025.
+[17]
+H. Ding et al., “Uni-LaViRA: Language-vision-robot actions
+translation
+for
+unified
+embodied
+navigation,”
+arXiv
+preprint
+arXiv:2605.27582, 2026.
+[18]
+K. Sheng et al., “P2DNav: Panorama-to-downview reasoning
+for zero-shot vision-and-language navigation,” arXiv preprint
+arXiv:2605.19634, 2026.
+[19]
+K. Luo et al., “LightZeroNav: Zero-shot vision language navigation in
+continuous environments based on lightweight VLMs,” arXiv preprint
+arXiv:2603.16947, 2026.
+[20]
+Y. Li et al., “AgenticNav: Zero-shot vision-and-language navigation
+as a tool-calling harness,” arXiv preprint arXiv:2606.10577, 2026.
+[21]
+A. W. Siegel and S. H. White, “The development of spatial
+representations of large-scale environments,” in Advances in Child
+Development and Behavior, H. W. Reese, Ed., vol. 10, Academic
+Press, 1975, pp. 9–55.
+[22]
+R. G. Golledge, Ed., Wayfinding Behavior: Cognitive Mapping and
+Other Spatial Processes. Johns Hopkins University Press, 1999.
+[23]
+L. L. Thurstone, “A law of comparative judgment,” Psychol. Rev.,
+vol. 34, no. 4, pp. 273–286, 1927.
+[24]
+D. M. Green and J. A. Swets, Signal Detection Theory and
+Psychophysics. New York: Wiley, 1966.
+[25]
+L. Zheng et al., “Judging LLM-as-a-judge with MT-bench and chatbot
+arena,” in Adv. Neural Inf. Process. Syst., vol. 36, 2023, pp. 46 595–
+46 623.
+[26]
+A. Chang et al., “Matterport3d: Learning from rgb-d data in indoor
+environments,” in 2017 Int. Conf. 3D Vision (3DV), 2017, pp. 667–676.
+[27]
+D. Fried et al., “Speaker-follower models for vision-and-language
+navigation,” in Adv. Neural Inf. Process. Syst., vol. 31, 2018, pp. 3318–
+3329.
+[28]
+M. Savva et al., “Habitat: A platform for embodied ai research,” in
+Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV), 2019, pp. 9339–
+9347.
+[29]
+X. Shi et al., “Fast-SmartWay: Panoramic-free end-to-end zero-shot
+vision-and-language navigation,” arXiv preprint arXiv:2511.00933,
+2025.
+[30]
+H.
+Yin
+et
+al.,
+“GC-VLN:
+Instruction
+as
+graph
+constraints
+for training-free vision-and-language navigation,” arXiv preprint
+arXiv:2509.10454, 2025.
+[31]
+W. Zheng, Y. Ge, and L. Itti, “Three-step nav: A hierarchical global–
+local planner for zero-shot vision-and-language navigation,” in Proc.
+29th Int. Conf. Artif. Intell. Stat. (AISTATS), ser. Proceedings of
+Machine Learning Research, vol. 300, PMLR, 2026.
+[32]
+Y. Deng et al., “SpaceVLN: A zero-shot vision-and-language nav-
+igation agent with online spatial cognitive memory and reasoning,”
+arXiv preprint arXiv:2606.08992, 2026.
+[33]
+C. K. Chow, “On optimum recognition error and reject tradeoff,”
+IEEE Trans. Inf. Theory, vol. 16, no. 1, pp. 41–46, 1970.
+[34]
+A. Wald, “Sequential tests of statistical hypotheses,” Ann. Math. Stat.,
+vol. 16, no. 2, pp. 117–186, 1945.
+[35]
+R. S. Sutton, D. Precup, and S. Singh, “Between MDPs and semi-
+MDPs: A framework for temporal abstraction in reinforcement
+learning,” Artif. Intell., vol. 112, no. 1–2, pp. 181–211, 1999.
+[36]
+E. S. Page, “Continuous inspection schemes,” Biometrika, vol. 41,
+no. 1–2, pp. 100–115, 1954.
+[37]
+S. Bai et al., “Qwen3-VL technical report,” arXiv preprint
+arXiv:2511.21631, 2025.
+[38]
+OpenAI, GPT-5.5 System Card, System card, Apr. 23, 2026; updated
+Apr. 24, 2026, Apr. 2026.

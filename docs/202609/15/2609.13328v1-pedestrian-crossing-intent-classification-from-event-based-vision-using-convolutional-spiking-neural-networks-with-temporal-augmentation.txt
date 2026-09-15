@@ -1,0 +1,1910 @@
+Date of publication xxxx 00, 0000, date of current version xxxx 00, 0000.
+Digital Object Identifier 10.1109/ACCESS.2026.Doi Number
+Pedestrian Crossing Intent Classification From
+Event-Based Vision Using Convolutional Spiking
+Neural Networks With Temporal Augmentation
+HENOK TEKLU1, MUSTAFA SAKHAI2, MACIEJ WIELGOSZ2, MATEJ MERTIK1
+1Applied Artificial Intelligence, Alma Mater Europaea University, Maribor, Slovenia (e-mail: henok.teklu@almamater.si; matej.mertik@almamater.si)
+2AGH University of Kraków, Kraków, Poland (e-mail: msakhai@agh.edu.pl; wielgosz@agh.edu.pl)
+Corresponding authors: Henok Teklu (e-mail: henok.teklu@almamater.si) and Mustafa Sakhai (e-mail: msakhai@agh.edu.pl).
+This work was carried out within the PhD programme in Applied Artificial Intelligence at Alma Mater Europaea University, in collaboration
+with AGH University of Kraków.
+ABSTRACT Anticipating whether a pedestrian will cross the road is safety-critical for autonomous vehicles,
+requiring real-time inference under challenging conditions including motion blur, high dynamic range, and
+class imbalance. Conventional frame-based deep networks process redundant RGB data at fixed frame rates,
+limiting their temporal resolution and energy efficiency. In this work we present an end-to-end pipeline that
+(i) converts real-world driving footage from the Joint Attention in Autonomous Driving (JAAD) dataset into
+synthetic dynamic vision sensor (DVS) event streams using the v2e simulator, (ii) augments training with
+the CARLA-simulated DVS sequences of the DVS-PedX dataset under both normal and adverse weather
+conditions, and (iii) trains a novel convolutional spiking neural network (Conv-SNN) with clip-consistent
+DVS augmentation to classify pedestrian crossing intent as binary: crossing or non-crossing. We detail all
+architectural decisions, the exact leaky-integrate-and-fire neuron dynamics with surrogate-gradient learning,
+the class-balanced loss formulation, JAAD oversampling at 6×, and a 70/15/15 stratified splitting protocol.
+The trained model achieves 95.83% accuracy and F1 = 0.9695 on the JAAD DVS test set, 97.79% accuracy
+and F1 = 0.9478 on normal CARLA DVS, and 94.78% accuracy and F1 = 0.8369 on adverse-weather CARLA
+DVS—all from a 1.07 M-parameter architecture trained on CPU. Compared to prior frame-based approaches
+on JAAD, our method closes or surpasses the reported accuracy while operating natively on sparse temporal
+representations. We include a thorough analysis of the convergence behaviour across all 15 training epochs,
+domain transfer characteristics, and a quantitative comparison with representative related work.
+INDEX TERMS Autonomous driving, dynamic vision sensor, event-based vision, neuromorphic computing,
+pedestrian crossing intent prediction, spiking neural networks, temporal data augmentation.
+I. INTRODUCTION
+A
+UTONOMOUS driving safety relies critically on early,
+accurate prediction of pedestrian intent. Unlike obstacle
+detection—where the object is already in the scene—intent
+prediction must infer a future action from subtle pre-movement
+cues: postural shifts, head orientation, gaze direction, and
+micro-gestures that unfold in tens to hundreds of milliseconds
+before any foot leaves the pavement. Failure to detect a
+crossing pedestrian in time can be fatal; false positives impose
+unnecessary braking, degrading ride comfort and traffic flow.
+Standard approaches model this as a sequence classification
+problem using red-green-blue (RGB) video from vehicle-
+mounted cameras [1], [2]. The success of deep convolutional
+neural networks (CNNs) [3]–[5] and recurrent architectures [6]
+in video understanding has driven CNN-LSTM (long short-
+term memory) and Transformer-based architectures to achieve
+strong accuracy on curated benchmark datasets [1], [7], [8].
+However, they share a fundamental limitation: frame-rate
+cameras sample the scene uniformly at 25–60 fps regard-
+less of scene dynamics. Slow pedestrians generate mostly
+redundant frames; fast or close pedestrians saturate the sensor
+and introduce motion blur. High-dynamic-range scenarios
+(tunnel exits, night driving with headlights) cause further
+degradation. Processing full RGB frames at inference time
+also demands substantial compute, limiting deployment on
+power-constrained embedded platforms.
+VOLUME 14, 2026
+1
+arXiv:2609.13328v1  [cs.CV]  11 Sep 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+time t
+log I
+log I(t)
+threshold steps θ
+time t
+ON
+OFF
+FIGURE 1: Operating principle of a Dynamic Vision Sensor.
+Each pixel tracks its log-intensity log I(t) (top) and emits an
+asynchronous event whenever the signal changes by a fixed
+contrast quantum θ (dashed levels, marked •): an ON event
+on an increase and an OFF event on a decrease (bottom).
+Static regions emit no events, yielding the sparse, microsecond-
+resolution stream our Conv-SNN consumes.
+a: Event-based cameras.
+Dynamic Vision Sensors (DVS) [9]–[11] overcome these
+limitations by detecting per-pixel log-luminance changes
+asynchronously. Each pixel fires an event (x, y, t, p) only when
+the change |∆ln I| exceeds a threshold θ, yielding a sparse
+stream with microsecond temporal resolution, >120 dB dy-
+namic range, and typical power draw of 5–20 mW. Redundant
+background pixels produce no events; moving objects produce
+dense, time-stamped event clouds. This makes DVS cameras
+inherently well-suited to motion-based intent prediction tasks.
+Figure 1 illustrates this event-generation principle.
+b: Spiking Neural Networks.
+Spiking Neural Networks (SNN) [12], [13] process informa-
+tion using binary spike events rather than continuous activa-
+tions, mirroring the communication mechanism of biological
+neurons [14], [15]. Leaky-Integrate-and-Fire (LIF) neurons
+accumulate input over time and fire when a threshold is
+crossed, naturally integrating temporal information within the
+membrane potential. When implemented on neuromorphic
+hardware (Intel Loihi [16], IBM TrueNorth [17]), SNNs can
+achieve 10–50× energy reduction over GPU inference. Train-
+ing is enabled by the surrogate gradient technique [18], [19],
+which replaces the non-differentiable Heaviside spike function
+with a smooth approximation during backpropagation [20],
+[21].
+c: The gap.
+Despite strong progress in pedestrian intent prediction with
+CNNs [2], [7], [22] and in event-based action recognition [23]–
+[25], the intersection of DVS-based perception and SNN
+classifiers for pedestrian intent remains largely unexplored.
+Existing crossing prediction methods operate on RGB frames;
+existing SNN studies on DVS data focus on synthetic gesture
+or object datasets far removed from autonomous driving.
+d: This paper.
+We close this gap with a complete, reproducible pipeline. Our
+contributions are:
+1) End-to-end synthetic DVS pipeline. We convert 346
+Joint Attention in Autonomous Driving (JAAD) pedes-
+trian behaviour clips to DVS event frames via v2e using
+documented parameters (θ=0.15, σ=0.03, fc=15 Hz), dis-
+carding empty frames through a principled grey-level test.
+2) Multi-source training with principled oversampling.
+JAAD clips are combined with the CARLA normal and
+adverse-weather DVS sequences of the DVS-PedX dataset;
+JAAD is oversampled 6× to match the CARLA volume,
+with each repeat receiving independently sampled augmen-
+tations.
+3) Clip-consistent DVS augmentation. Three augmentation
+operations—horizontal flip, brightness jitter, and random
+spatial crop—are applied identically across all T=9 frames
+of a clip to preserve temporal coherence.
+4) Convolutional LIF architecture with class-balanced
+training. A three-block convolutional SNN (1.07 M pa-
+rameters) with AdamW, ReduceLROnPlateau, and inverse-
+frequency class weights, achieving 95.83%/F1 0.9695 on
+JAAD and 97.79%/F1 0.9478 on CARLA—from a CPU-
+only training run.
+The remainder of the paper is organised as follows. Sec-
+tion II surveys related work and positions our approach.
+Section III details the DVS generation pipeline. Section IV
+describes the full Conv-SNN model, loss, and training pro-
+cedure. Section VI reports experimental setup and all results.
+Sections VIII, IX, X, and XI provide analysis, discussion,
+limitations, and future directions.
+II. RELATED WORK
+A. PEDESTRIAN CROSSING INTENTION PREDICTION
+a: Classical and hybrid methods.
+Early crossing prediction relied on hand-crafted features—
+pose estimates, heading vectors, optical flow—fed to sup-
+port vector machines (SVMs) or hidden Markov models
+(HMMs) [26]–[28]. These methods are brittle to occlusion
+and generalise poorly across environments. Rasouli et al. [29]
+were among the first to apply deep learning to the problem,
+using a CNN-LSTM architecture on dashcam footage. Their
+JAAD benchmark [1] provided 346 labelled clips from real
+European and North American driving, enabling systematic
+comparison. The related PIE dataset [30] further expanded the
+scope with ego-motion and traffic signals. Fang and López [31]
+demonstrated the value of skeleton pose features for crossing
+intent, while Gesnouin et al. [32] and Kwak et al. [33] explored
+spatio-temporal feature extraction for real-time prediction.
+More recently, Achaji et al. [34] and Lorenzo et al. [35] applied
+Transformer attention to capture long-range pedestrian-vehicle
+interactions, and Saleh et al. [22] developed a DenseNet-based
+architecture suitable for embedded deployment. Most closely
+related to the present study, Sakhai et al. [36] applied spiking
+neural networks to pedestrian street-crossing detection from
+2
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+dynamic-vision-sensor data under simulated adverse weather,
+and released the accompanying DVS-PedX synthetic-and-real
+event dataset [37]. We build directly on this line of work,
+adopting the DVS-PedX dataset and treating these event-based
+results as our primary point of comparison.
+b: Attention and graph-based methods.
+Kotseruba et al. [2] conducted a thorough evaluation of
+intent-prediction backbones on JAAD, finding that CNN-
+LSTM variants with attention achieve 78–85% accuracy.
+Graph Convolutional Networks (GCNs) [38] and Spatial-
+Temporal GCNs [39] have been applied to skeletal action
+representations; pedestrian-vehicle interaction graphs [40]
+improve robustness to partial occlusion. PedFormer [7] adapts
+the Transformer architecture [41], [42] to pedestrian trajectory
+and intent prediction, reporting state-of-the-art results in the
+85–90% range on JAAD under standard protocols. Vision
+Transformers [43] applied to pedestrian bounding box crops
+represent another direction enabled by large-scale pre-training.
+c: Multi-modal approaches.
+Several works fuse RGB appearance with auxiliary signals
+such as optical flow [44], [45], skeleton keypoints [46],
+[47], or vehicle ego-motion. Video-based 3D convolutional
+networks [48] capture short-range spatio-temporal patterns but
+require dense RGB input. Object detection backbones [49],
+[50] provide bounding box localisation as input features.
+Fusion consistently outperforms single-modality systems but
+increases compute and sensor requirements. Critically, all of
+these approaches depend on frame cameras; none have been
+demonstrated with event-based sensors. Muhammad et al. [51]
+provide a comprehensive survey of deep learning methods
+for autonomous driving, highlighting the gap in event-based
+pedestrian intent research.
+B. EVENT-BASED DATASETS AND SIMULATORS
+a: DVS-PedX.
+The DVS-PedX dataset [37] provides simulated DVS se-
+quences from a CARLA-based autonomous driving simulator
+with labelled pedestrian actions. It includes both normal-
+weather and adverse-weather (rain, fog, night-time) splits,
+making it uniquely suited to studying robustness. We use
+DVS-PedX as a complementary training and evaluation source
+alongside JAAD.
+b: v2e simulator.
+Hu et al. [52] proposed v2e, a software pipeline that generates
+synthetic DVS events from standard video by modelling the
+log-domain photoreceptor response, threshold mismatch, and
+bandwidth limiting. Unlike purely kinematic simulators, v2e
+accounts for photon noise and sensor non-idealities. It has
+been used to extend frame-based datasets to the DVS domain
+without physical sensor acquisition.
+c: Other event datasets.
+N-MNIST [53] and N-Caltech101 applied saccadic camera
+motion to standard image databases. DDD17 [54] provides
+real DVS recordings from a vehicle but lacks pedestrian
+intent labels. DSEC [55] focuses on optical flow estimation.
+HATS [56] introduced a histogram-based event surface rep-
+resentation for object classification, while Cannici et al. [57]
+proposed attention-based asynchronous event processing. Mes-
+sikommer et al. [58] studied asynchronous graph-based event
+representations, and the N-ImageNet benchmark [59] enables
+large-scale event-camera recognition evaluation. Event-based
+object detection [60] further extends the scope. The ESIM
+simulator [61] provides an alternative physics-based event gen-
+eration approach to v2e. Standard autonomous driving datasets
+(KITTI [62], nuScenes [63], Cityscapes [64], CARLA [65])
+use frame cameras exclusively. None of the above provide
+crossing-intent binary labels paired with DVS event streams
+from real or realistic pedestrian footage, motivating our
+JAAD+v2e conversion.
+C. SPIKING NEURAL NETWORKS FOR VISION
+a: ANN-to-SNN conversion.
+Rueckauer et al. [66] showed that deep CNNs can be converted
+to SNNs by mapping ReLU activations to rate-coded spikes.
+Accuracy is well-preserved at the cost of longer inference
+horizons (hundreds of timesteps), incompatible with the short
+clips (T=9 frames) used here.
+b: Direct training with surrogate gradients.
+Neftci et al. [18] unified surrogate-gradient methods for
+backpropagating through spike functions; Zenke et al. [19]
+introduced the SuperSpike learning rule for single-spike
+timing. Wu et al. [20] demonstrated spatio-temporal back-
+propagation for SNNs and Lee et al. [21] showed direct
+training with learnable thresholds. SpikingJelly [67] provides
+a PyTorch [68] framework for this paradigm. We follow
+this approach, implementing the surrogate directly via a cus-
+tom torch.autograd.Function (Eq. 11) rather than
+an external library, enabling full control over the gradient
+shape. Hybrid SNN-ANN approaches [69], [70] combine
+the best of both paradigms, and BatchNorm for SNNs [71]
+stabilises training of deep spiking networks. Bellec et al. [72]
+extended LIF networks with adaptation currents for long-
+term temporal memory, and Tavanaei et al. [73] surveyed the
+landscape of deep learning with SNNs. Pfeiffer and Pfeil [74]
+provided a comprehensive review of deep SNN methodologies,
+and Diehl and Cook [75] demonstrated unsupervised spike-
+timing-dependent plasticity (STDP)-based SNN learning.
+Tan et al. [76] further explored spiking activation mechanisms
+for efficient inference.
+c: Convolutional SNNs on DVS data.
+Zhu et al. [77] and Amir et al. [24] applied convolutional
+processing to event streams for optical flow and gesture recog-
+nition, respectively. These works demonstrate the superiority
+VOLUME 14, 2026
+3
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+of spatial convolution over flat encodings for event data, which
+we confirm in the context of pedestrian intent.
+D. COMPARISON SUMMARY
+Table 1 positions our work among representative prior systems.
+Our method is the first to combine a DVS event representation
+derived from JAAD RGB footage with a convolutional SNN
+trained end-to-end.
+III. DVS GENERATION PIPELINE
+A. JAAD SOURCE DATA
+The JAAD dataset [1] comprises 346 short video clips of
+pedestrians filmed from an ego-vehicle camera in European
+and North American urban environments. Clips are annotated
+at the pedestrian level with a binary label: crossing (the
+pedestrian crosses or begins to cross the lane of the ego-
+vehicle) or non-crossing (the pedestrian stops, waits, or moves
+parallel to the vehicle). Labels are stable across all frames of
+a clip: a clip is crossing if the pedestrian commits to crossing
+during that clip.
+B. DVS-PedX DATASET
+We obtain the synthetic and simulated portion of our multi-
+domain training data from DVS-PedX [37], a dataset designed
+for pedestrian street-crossing analysis under both normal and
+adverse weather. DVS-PedX provides event-based sequences
+generated in the CARLA simulator with paired RGB frames,
+temporally accumulated event frames, and frame-level binary
+labels (crossing vs. non-crossing). In addition, DVS-PedX
+includes a real-world component derived from the JAAD
+dashcam dataset and converted to events via v2e, enabling
+controlled evaluation of sim-to-real transfer. We follow the
+dataset’s official splits where applicable, and treat JAAD-
+derived event clips and CARLA-derived event sequences as
+complementary domains during training and testing. Figure 2
+illustrates the degradation of RGB imagery under adverse
+weather and the complementary robustness of DVS sensing
+that motivates this multi-domain design. Figure 3 shows the
+reference simulation-to-evaluation pipeline that our approach
+adapts. Figure 4 depicts the clip- and frame-level label assign-
+ment protocols from prior DVS+SNN pedestrian work that
+inform our labelling scheme.
+Each clip is stored as a sequence of RGB PNG frames.
+The clip length varies from tens to several hundred frames
+depending on pedestrian behaviour and scene complexity.
+C. V2E DVS SIMULATION
+We convert each JAAD RGB clip to a synthetic DVS
+event stream using the v2e simulator [52], specifically its
+EventEmulator and EventRenderer pipeline run in
+headless mode (all GUI dependencies mocked). The conver-
+sion proceeds frame-by-frame without any intermediate video
+encoding.
+a: Photoreceptor model.
+The DVS pixel response is modelled as a first-order low-pass
+filter in the log-luminance domain. For a greyscale pixel value
+I(t), define
+L(t) = ln
+ I(t) + ϵ
+
+,
+ϵ = 10−3,
+(1)
+and let ˆL(t) be the low-pass filtered version with cutoff fc =
+15 Hz (first-order IIR):
+ˆL(t) = α ˆL(t−1) + (1 −α) L(t),
+α = e−2πfc∆t.
+(2)
+b: Event generation.
+An ON event fires when the change in filtered log-luminance
+exceeds the positive threshold and an OFF event when it falls
+below the negative threshold:
+ON:
+ˆL(t) −ˆL(tref) > θ+ + N(0, σ2),
+(3)
+OFF:
+ˆL(t) −ˆL(tref) < −θ−−N(0, σ2),
+(4)
+where tref is the timestamp of the last event at that pixel. We use
+the calibrated parameters from the v2e parameter reference:
+θ+ = θ−= 0.15
+(log-intensity units)
+σ = 0.03
+(threshold noise std.)
+fc = 15 Hz
+(photoreceptor cutoff)
+λleak = 0.01 Hz
+(leak rate)
+λshot = 0.0 Hz
+(shot noise, disabled)
+c: Frame rendering.
+Events within one inter-frame interval are accumulated and ren-
+dered to a greyscale image using ExposureMode.SOURCE:
+pixels with ON events are set to 255, OFF events to 0, and
+inactive pixels to 128 (neutral grey). The output resolution
+is set to half the input resolution (width /2 × height /2) to
+reduce redundancy. All DVS frames are then resized to 64×64
+pixels during dataset loading.
+d: Empty-frame filtering.
+A frame is considered empty (no meaningful events) if:
+σimg ≤8
+and
+|µimg −128| ≤12,
+(5)
+where µimg and σimg are the per-frame pixel mean and standard
+deviation. Empty frames are discarded before training. This
+prevents the network from learning a trivial shortcut: static
+scenes produce no events, but label-derived shortcuts could
+allow the model to classify by clip identity rather than motion
+content.
+D. CARLA DVS-PedX SOURCE
+The DVS-PedX dataset [37] provides simulated DVS frames
+from CARLA, a physically based urban driving simulator. We
+use two splits:
+• Normal: clear weather, daytime scenes.
+• Adverse weather: rain, fog, and night-time conditions.
+Frames are organised in sequence directories; each filename
+encodes the frame index and binary crossing label (N-Y.png,
+4
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+FIGURE 2: Example frames illustrating the impact of adverse weather on RGB and the complementary robustness of DVS.
+Reproduced from [36] (MDPI Electronics 2024, 13(21), 4280).
+FIGURE 3: Reference pipeline (simulation →preprocessing →model training/evaluation) for DVS-based pedestrian analysis. We
+adapt this structure to our v2e-based JAAD conversion, CARLA/DVS-PedX multi-domain training, and Conv-SNN classification
+pipeline. Reproduced from [36].
+VOLUME 14, 2026
+5
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+(a) Clip labelling example (detection-style).
+(b) Frame labelling depiction (prediction-style).
+FIGURE 4: Label assignment illustrations from prior DVS+SNN pedestrian work. We follow an explicit clip construction and
+labelling protocol in our intent classification setting (crossing vs. non-crossing), with clip-consistent augmentations applied
+across T timesteps. Reproduced from [36].
+6
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+TABLE 1: Comparison with representative prior works on pedestrian intent prediction and DVS-based SNN classification.
+Bold: best or joint-best per column where comparable. ‘‘—’’: not applicable or not reported. †: results on JAAD under standard
+frame-based evaluation protocol. ‡: our method, DVS input, clip-level evaluation. §: the original work reports AUROC and
+F-score rather than top-line accuracy; we list its best CARLA-DVS AUROC (×100) and F-score.
+Method
+Input
+Network
+Dataset
+Acc.
+(%)
+F1
+DVS
+SNN
+Multi-
+Domain
+Rasouli et al. [29] (2017)
+RGB
+CNN+LSTM
+JAAD†
+∼76
+—
+✗
+✗
+✗
+Kotseruba et al. [2] (2021)
+RGB+Pose
+CNN+LSTM+Attn
+JAAD†
+∼83
+—
+✗
+✗
+✗
+Yang et al. [46] (2021)
+RGB+Skeleton
+Graph CNN
+JAAD†
+∼85
+—
+✗
+✗
+✗
+PedFormer [7] (2023)
+RGB
+Transformer
+JAAD†
+∼88
+—
+✗
+✗
+✗
+Amir et al. [24] (2017)
+DVS
+SNN (IBM
+TrueNorth)
+DVS Gestures
+96.5
+—
+✓
+✓
+✗
+Sakhai et al. [36] (2024)
+DVS
+(CARLA+JAAD)
+SNN (TEBN)
+DVS-PedX
+95.4§
+0.755§
+✓
+✓
+✓
+DVS-PedX [37] (2026)
+DVS
+(CARLA+JAAD)
+CNN/SNN baselines
+DVS-PedX
+∼90
+—
+✓
+✓
+✓
+Ours (Conv-SNN+Aug)
+DVS
+(JAAD+CARLA)
+Conv-SNN
+JAAD+DVS-
+PedX‡
+95.83 (JAAD) /
+97.79 (CARLA)
+0.9695 /
+0.9478
+✓
+✓
+✓
+where Y ∈{0, 1}). Clip labels are defined as the maximum
+label within the clip window (crossing if any frame is labelled
+crossing), which correctly handles clips that span the onset of
+pedestrian movement. Frames are pre-resized to 64 × 64 in a
+cache to avoid loading large originals at training time.
+Figure 5 summarises the full data pipeline.
+IV. PROPOSED METHOD
+A. PROBLEM FORMULATION
+Given a clip of T
+consecutive DVS frames X
+=
+{X1, X2, . . . , XT} where Xt ∈RH×W, we seek a classifier
+fθ : RT×H×W →{0, 1} that predicts y ∈{0, 1} where
+y = 1 denotes crossing and y = 0 denotes non-crossing.
+We parameterise fθ as a convolutional SNN and learn θ by
+minimising a class-weighted cross-entropy loss.
+B. LEAKY-INTEGRATE-AND-FIRE NEURON
+The fundamental computational unit is the Leaky-Integrate-
+and-Fire (LIF) neuron. In continuous time, the membrane
+potential Vmem(t) evolves as:
+τ dVmem
+dt
+= −(Vmem −Vleak) + Isyn(t),
+(6)
+where τ is the membrane time constant, Vleak is the resting
+potential, and Isyn is the synaptic input current.
+a: Discrete-time update.
+In our implementation, a single Euler step with step size ∆t =
+1 frame gives:
+∆Vmem = −(Vmem −Vleak) + Isyn
+τ
+,
+Vmem ←Vmem + ∆Vmem.
+(7)
+A spike fires whenever Vmem ≥Vth:
+s = H(Vmem −Vth),
+H(x) =
+(
+1
+x ≥0
+0
+x < 0
+(8)
+JAAD RGB clips
+(346)
+v2e emulator
+θ=0.15, fc=15 Hz
+Synthetic DVS
+64×64
+CARLA DVS-PedX
+normal + adverse
+Pre-cached frames
+64×64
+Combined dataset
+JAAD (6×) + CARLA
+Conv-SNN + aug
+T=9, B=32
+Crossing /
+non-crossing
+FIGURE 5: End-to-end pipeline. JAAD RGB clips are con-
+verted to synthetic DVS via v2e; CARLA DVS-PedX se-
+quences are loaded from a pre-cached directory. Both sources
+feed Conv-SNN after 6× JAAD oversampling.
+VOLUME 14, 2026
+7
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+−2
+−1
+0
+1
+2
+0
+0.3
+0.6
+0.9
+x = Vmem −Vth
+Value
+H(x)
+g(x) (surrogate)
+FIGURE 6: Spike function H(x) (blue) and its surrogate gradi-
+ent g(x) (red dashed) used for backpropagation. The surrogate
+peaks at x = 0 with value 0.3 and decays symmetrically.
+After firing, the membrane potential undergoes a soft reset:
+Vmem ←Vmem · (1 −s) + Vleak · s,
+(9)
+which sets Vmem = Vleak for fired neurons while leaving non-
+fired neurons unchanged. Compared to hard reset (Vmem ←
+Vleak), soft reset preserves the sub-threshold dynamics of
+neurons that fire just over threshold, stabilising gradient flow.
+The LIF parameters used throughout are:
+Vth = 0.5,
+Vleak = 0.0,
+τ = 2.0.
+(10)
+The threshold Vth = 0.5 was chosen so that normalised
+inputs (∼N(0, 1) after BatchNorm) yield a spike rate of
+approximately 15–20%, consistent with biologically plausible
+sparse coding.
+b: Surrogate gradient.
+Because H has zero gradient almost everywhere, direct back-
+propagation through s is impossible. We adopt the standard
+arctangent-derived surrogate [18]; we do not claim it as a
+contribution, but two implementation choices are specific to
+our setting:
+∂H(x)
+∂x
+≈g(x) =
+0.3
+1 + (πx)2 .
+(11)
+First, rather than relying on an external SNN library,
+the
+surrogate
+is
+implemented
+directly
+as
+a
+custom
+torch.autograd.Function: the forward pass emits
+the hard spike H(x) while the backward pass substitutes
+g(x). This gives full control over the gradient shape and
+removes any framework dependency in the spike path. Second,
+the peak (0.3) and width (the π scaling) are tuned to our
+threshold/normalisation regime (Vth = 0.5 on BatchNorm-
+standardised inputs, Eq. 10). The strongest gradient is thus
+delivered to neurons firing near threshold, while clearly sub- or
+super-threshold neurons receive vanishing gradient. Figure 6
+shows g(x) overlaid with H(x): it is smooth, symmetric about
+x = 0, and decays to zero for large |x|, preventing gradient
+blow-up.
+C. CONVOLUTIONAL LIF BLOCK
+The use of convolutional feature extraction is motivated by
+decades of evidence that hierarchical spatial filtering outper-
+forms flat representations for visual tasks [3]–[5], [78], [79].
+Network-in-network pooling [80] further consolidates spatial
+features before fully connected classification.
+A ConvLIF block processes a feature map s(t)
+∈
+RCin×H×W at timestep t as follows:
+z(t) = MaxPool
+
+BN
+
+Conv3×3
+
+s(t)
+, (12)
+s(t+1), v(t+1) = LIF
+
+z(t), v(t)
+,
+(13)
+where BatchNorm [81] (BN) is applied across the batch
+dimension at each timestep, MaxPool(2 × 2) reduces spatial
+resolution by 2×, and LIF integrates the pre-activation z into
+the membrane potential v. Convolutional weights use Kaiming
+uniform initialisation [82] appropriate for non-linearity ‘‘relu’’
+(which approximates the spike function in expectation); biases
+use Xavier uniform initialisation [83].
+D. FULL CONV-SNN ARCHITECTURE
+The complete Conv-SNN processes a clip X ∈RT×H×W
+frame-by-frame. All membrane potentials are initialised to
+zero at the start of each clip.
+a: Architecture block diagram.
+Table 2 illustrates the full architecture: Table 2a lists the layer-
+by-layer operations, and Table 2b the per-layer parameter
+counts. For each timestep t = 1, . . . , T:
+1) Input frame Xt ∈R1×64×64.
+2) ConvLIF-1: Conv(1→16, 3×3) + BN + MaxPool(2×2)
++ LIF →spike map R16×32×32.
+3) ConvLIF-2: Conv(16→32, 3×3) + BN + MaxPool(2×2)
++ LIF →R32×16×16.
+4) ConvLIF-3: Conv(32→64, 3×3) + BN + MaxPool(2×2)
++ LIF →R64×8×8.
+5) Flatten: R64×8×8 →R4096.
+6) FC-LIF: Linear(4096→256) + BN1d + LIF →spike
+vector R256.
+7) Output: Linear(256→2); logits accumulated.
+The output logits across all T timesteps are averaged before
+softmax:
+ˆy = 1
+T
+T
+X
+t=1
+Wo s(t)
+FC,
+(14)
+where Wo ∈R2×256 and s(t)
+FC is the FC-LIF spike at time t.
+b: Parameter count.
+The total number of trainable parameters is 1,073,266 (Ta-
+ble 2b).
+E. CLIP-CONSISTENT DVS AUGMENTATION
+Spatial augmentation of event data requires care: augmen-
+tations applied independently per frame would introduce
+temporal incoherence, corrupting the spike dynamics that LIF
+neurons rely on. We use three augmentations with a single
+random draw per clip, applied identically to all T frames:
+8
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+Block
+Operation
+Output shape
+Input
+DVS frame Xt
+1 × 64 × 64
+ConvLIF-1
+Conv 1→16, 3 × 3, BN
+16 × 64 × 64
+MaxPool 2 × 2 + LIF
+16 × 32 × 32
+ConvLIF-2
+Conv 16→32, 3 × 3, BN
+32 × 32 × 32
+MaxPool 2 × 2 + LIF
+32 × 16 × 16
+ConvLIF-3
+Conv 32→64, 3 × 3, BN
+64 × 16 × 16
+MaxPool 2 × 2 + LIF
+64 × 8 × 8
+Flatten
+Reshape
+4096
+FC-LIF
+Linear 4096→256 + BN1d + LIF
+256
+Output
+Linear 256→2, avg over T
+2 (logits)
+(a) Conv-SNN layer-by-layer architecture. Operations in each ConvLIF block
+are applied per timestep t = 1, . . . , T; the membrane potential v persists across
+timesteps.
+Layer
+Shape
+Params
+ConvLIF-1 (Conv)
+16×1×3×3
+144
+ConvLIF-1 (BN)
+2×16
+32
+ConvLIF-2 (Conv)
+32×16×3×3
+4,608
+ConvLIF-2 (BN)
+2×32
+64
+ConvLIF-3 (Conv)
+64×32×3×3
+18,432
+ConvLIF-3 (BN)
+2×64
+128
+FC-1 (Linear)
+256×4096 + 256
+1,048,832
+BN-FC (BN1d)
+2×256
+512
+FC-Out (Linear)
+2×256 + 2
+514
+Total
+1,073,266
+(b) Layer-wise trainable parameter counts.
+TABLE 2: Conv-SNN architecture and parameterisation summary.
+1) Horizontal flip (probability p = 0.5): DVS ON/OFF po-
+larity patterns are laterally symmetric; pedestrians walking
+left/right are equivalent for intent classification.
+2) Brightness jitter: pixel values are multiplied by a factor
+b ∼U(0.8, 1.2). This simulates threshold variation across
+different DVS sensor calibrations.
+3) Random spatial crop: a 56×56 region is cropped from a
+uniformly sampled corner (i, j) where i, j ∼U(0, 8) (the
+64−56 = 8 pixel margin), then resized back to 64×64 via
+nearest-neighbour interpolation. This introduces modest
+positional invariance without distorting the event polarity
+encoding.
+These augmentations follow best practices for visual recog-
+nition [84], [85], adapted to the event-camera domain. They
+are applied only to JAAD clips during training; CARLA clips
+are used without augmentation to preserve the simulator’s
+spatial statistics.
+F. DATASET CONSTRUCTION AND CLASS BALANCING
+Three datasets are loaded independently: JAAD DVS (aug-
+mented), CARLA DVS normal, and CARLA DVS adverse
+weather. Clips are defined using overlapping windows of
+length T = 9 with stride ⌊T/2⌋= 4. Each dataset is split
+independently in a 70/15/15 ratio (train/val/test) stratified by
+label, so the class ratio is preserved in each split.
+a: JAAD oversampling.
+The CARLA splits are substantially larger than JAAD. To pre-
+vent CARLA statistics from dominating learning, we oversam-
+ple JAAD by a factor k = max(1, round(NCARLA/NJAAD))
+where NCARLA is the combined CARLA training size and
+NJAAD is the JAAD training size. In our run: k = 6, yielding
+4,576 × 6 = 27,456 JAAD training clips with augmentation.
+Each oversampled repeat of a clip receives an independently
+sampled augmentation, so the 6× copies are not identical.
+b: Class weights.
+After oversampling, the combined training set has 31,127
+non-crossing clips and 24,583 crossing clips (total 55,710).
+Class imbalance is a pervasive challenge in pedestrian
+datasets [86]; rather than synthetic resampling [87], we use
+inverse-frequency class weights computed as:
+wc = Ntotal
+K · Nc
+,
+c ∈{0, 1}, K = 2,
+(15)
+giving w0 = 0.8949 and w1 = 1.1331. These weights are
+applied to the cross-entropy loss at each training step.
+G. LOSS FUNCTION
+The training objective is class-weighted cross-entropy. For a
+batch {(Xi, yi)}B
+i=1 with model output ˆyi = fθ(Xi) ∈R2:
+L = −1
+B
+B
+X
+i=1
+wyi ln
+eˆyi,yi
+P1
+c=0 eˆyi,c ,
+(16)
+where wyi is the class weight for ground-truth class yi. During
+final evaluation the class weights are removed (wc = 1) to
+obtain unbiased test metrics.
+H. OPTIMISATION
+We use AdamW [88], a decoupled weight-decay variant of
+Adam [89], as the base optimiser:
+θn+1 = θn −η ˆmn/(ˆv1/2
+n
++ ε) −η λ θn,
+(17)
+where ˆmn, ˆvn are bias-corrected moment estimates and the
+last term is the decoupled weight decay. All parameters are:
+Learning rate η
+5 × 10−3
+β1, β2
+0.9, 0.999
+ε
+10−8
+Weight decay λ
+10−4
+Gradient clip (max norm)
+1.0
+Gradients are clipped to a maximum ℓ2 norm of 1.0 [90]
+to prevent gradient explosions during the early spike-learning
+VOLUME 14, 2026
+9
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+phase. A ReduceLROnPlateau scheduler [91] monitors the
+validation accuracy (mode=’max’) and halves the learn-
+ing rate (factor=0.5) whenever it fails to improve for
+patience=2 consecutive epochs, i.e., η ←0.5 η. Early
+stopping [92] terminates training if validation accuracy does
+not improve by at least δ = 0.001 for 5 consecutive epochs,
+preventing overfitting without manual epoch selection.
+V. TRAINING PROCEDURE
+A. HYPERPARAMETER SUMMARY
+All hyperparameters are fixed constants in the source code
+with no search. Table 3 provides the complete reference.
+TABLE 3: Complete hyperparameter configuration.
+Hyperparameter
+Value
+Justification
+Random seed
+42
+Reproducibility
+Clip length T
+9 frames
+Captures intent
+gesture duration
+Frame resolution
+64×64
+Cache matches
+CARLA DVS-PedX
+Batch size B
+32
+GPU memory /
+gradient variance
+trade-off
+Max epochs
+15
+Observed
+convergence before
+15
+Learning rate η
+5×10−3
+Aggressive LR for
+fast spike
+convergence
+Weight decay λ
+10−4
+L2 regularisation
+LR patience
+2 epochs
+Quick LR halving on
+plateaus
+LR factor
+0.5
+Halving
+Early stopping patience
+5 epochs
+Allow short plateaus
+Min delta δ
+0.001
+Meaningful
+improvement
+threshold
+JAAD oversample k
+6
+Computed:
+⌈NCARLA/NJAAD⌉
+LIF Vth
+0.5
+∼15% spike rate
+with BN outputs
+LIF Vleak
+0.0
+Reset to zero
+LIF τ
+2.0
+Half-life ≈1.4 steps
+Augment: flip prob.
+0.5
+Bilateral symmetry
+Augment: brightness
+[0.8, 1.2]
+Sensor calibration
+variation
+Augment: crop size
+56×56 →64×64
+8-pixel margin
+Device
+CPU
+cuBLAS stability;
+avoids GEMM errors
+B. TRAINING ALGORITHM
+Algorithm 1 gives the complete pseudocode for the training
+loop.
+VI. EXPERIMENTS
+A. DATASET STATISTICS
+Table 4 summarises the dataset composition. All clips are
+formed with a sliding window of length T=9 and stride 4 (half
+Algorithm 1 Conv-SNN Training with JAAD Oversampling
+and Class Weighting
+Require: Datasets DJ (JAAD), DC (CARLA), DA (CARLA-
+Adv)
+Require: Hyperparameters: T, B, η, λ, k, w0, w1, Emax
+1: Initialise Conv-SNN weights θ (Kaiming/Xavier)
+2: Compute class weights w0, w1 via Eq. 15
+3: Split each D 70/15/15 stratified ⇒train/val/test
+4: Build Dtrain = [DJ,train]k ∪DC,train ∪DA,train
+▷k=6,
+aug each repeat
+5: best_acc ←0; p ←0
+▷patience counter
+6: for e = 1 to Emax do
+7:
+Lepoch ←0
+8:
+for each mini-batch (Xb, yb) ∈Dtrain do
+9:
+ˆyb ←ForwardConvSNN(Xb, θ)
+▷Eq. 14
+10:
+L ←WeightedCE(ˆyb, yb, w0, w1)
+▷Eq. 16
+11:
+θ ←θ −AdamW(∇θL) ▷clip grad norm ≤1.0
+12:
+end for
+13:
+accval ←Evaluate(θ, Dval)
+14:
+η ←ReduceLROnPlateau(η, accval)
+15:
+if accval > best_acc + 0.001 then
+16:
+θ∗←θ; best_acc ←accval; p ←0
+17:
+else
+18:
+p ←p + 1
+19:
+if p ≥5 then break
+20:
+end if
+21:
+end if
+22: end for
+23: return θ∗
+▷best validation checkpoint
+the clip length).
+B. EVALUATION PROTOCOL
+The model is evaluated on four independent test sets:
+• JAAD DVS: Clips from JAAD not seen during training.
+• CARLA DVS (normal): CARLA clear-weather test split.
+• CARLA DVS (adverse): CARLA rain/fog/night test split.
+• Combined: Union of all three test splits.
+We report four metrics [93] for each split:
+Acc = TP + TN
+N
+,
+F1 =
+2TP
+2TP + FP + FN,
+P =
+TP
+TP + FP,
+R =
+TP
+TP + FN.
+(18)
+F1 is computed for the crossing (y=1) class (binary). Metrics
+are computed from the best checkpoint (epoch 13) loaded after
+training. During evaluation, class weights are not applied to
+the loss.
+VII. RESULTS
+10
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+TABLE 4: Dataset statistics before splitting and oversampling.
+Source
+Type
+Classes
+Clips
+Resolution
+JAAD DVS
+Synthetic (v2e)
+Crossing / Non-crossing
+4,576+
+64×64
+CARLA DVS (normal)
+Simulated
+Crossing / Non-crossing
+—
+64×64
+CARLA DVS (adverse)
+Simulated
+Crossing / Non-crossing
+—
+64×64
+Post-oversampling training set:
+JAAD (×6 OS)
+27,456
+CARLA total (train)
+carla_n + carla_adv_n
+Combined oversampled train
+55,710
+Class distribution
+non-crossing: 31,127 / crossing: 24,583
+1
+3
+5
+7
+9
+11
+13
+15
+0.88
+0.9
+0.92
+0.94
+0.96
+0.98
+Best (ep.13)
+Epoch
+Validation Accuracy
+Val Accuracy
+Val F1
+FIGURE 7: Validation accuracy and F1 across all 15 training
+epochs. Best checkpoint saved at epoch 13 (Val Acc = 0.9727,
+F1 = 0.9484).
+A. PER-EPOCH TRAINING DYNAMICS
+Table 5 reports the full per-epoch validation trajectory.
+TABLE 5: Per-epoch validation metrics. Bold: best epoch
+(checkpoint saved). LR halving occurs when no improvement
+for 2 consecutive epochs.
+Epoch
+Val Acc
+Val F1
+Val P
+Val R
+1
+0.8934
+0.7999
+0.8103
+0.7898
+2
+0.9180
+0.8387
+0.8934
+0.7903
+3
+0.9313
+0.8719
+0.8777
+0.8662
+4
+0.9433
+0.8942
+0.8997
+0.8888
+5
+0.9397
+0.8948
+0.8454
+0.9505
+6
+0.9522
+0.9115
+0.9115
+0.9115
+7
+0.9539
+0.9099
+0.9629
+0.8625
+8
+0.9613
+0.9285
+0.9261
+0.9310
+9
+0.9639
+0.9335
+0.9277
+0.9394
+10
+0.9650
+0.9351
+0.9366
+0.9336
+11
+0.9596
+0.9269
+0.9059
+0.9489
+12
+0.9687
+0.9400
+0.9740
+0.9083
+13
+0.9727
+0.9484
+0.9682
+0.9294
+14
+0.9701
+0.9448
+0.9423
+0.9473
+15
+0.9633
+0.9352
+0.8939
+0.9805
+Training terminated at epoch 15 (patience exhausted).
+Best checkpoint: epoch 13, val acc = 0.9727.
+B. CONVERGENCE ANALYSIS
+Figure 7 plots the per-epoch validation accuracy and F1.
+Several distinct phases are observable:
+• Rapid early learning (epochs 1–4): Accuracy climbs
+from 89.3% to 94.3% in four epochs—a gain of 5.0 pp.
+F1 improves from 0.800 to 0.894, indicating the model
+is learning genuine crossing discrimination rather than
+defaulting to the majority class.
+• Precision–recall oscillation (epochs 5–7): Epoch 5 shows
+a dip in precision (P = 0.845) and a spike in recall
+(R = 0.951), followed by the reverse at epoch 7 (P =
+0.963, R = 0.863). This pattern is characteristic of the LR
+scheduler halving at epoch 4 or 5; the model temporarily
+over-predicts one class before the adjusted learning rate
+restores balance.
+• Steady refinement (epochs 8–13): Both accuracy and
+F1 monotonically improve, reaching 97.3% / 0.948 at
+epoch 13. Precision and recall converge toward balance
+(P = 0.968, R = 0.929 at the best epoch), indicating the
+class weighting is effective.
+• Late decline (epochs 14–15): Minor accuracy drop af-
+ter the best epoch despite continued training, consistent
+with mild overfitting. Early stopping correctly identifies
+epoch 13 as the best checkpoint.
+C. FINAL TEST RESULTS
+Table 6 reports all test metrics from the best checkpoint
+(epoch 13).
+TABLE 6: Final test results from best checkpoint (epoch 13,
+val acc = 0.9727).
+Test Split
+Acc.
+F1
+Prec.
+Rec.
+JAAD DVS (synthetic)
+0.9583 0.9695 0.9731 0.9659
+CARLA DVS (normal)
+0.9779 0.9478 0.9701 0.9264
+CARLA DVS (adverse weather) 0.9478 0.8369 0.9446 0.7513
+Combined (all splits)
+0.9659 0.9348 0.9674 0.9044
+a: JAAD DVS test set.
+The model achieves 95.83% accuracy, F1 = 0.9695, P =
+0.9731, and R = 0.9659 on JAAD synthetic DVS test clips.
+The near-balance between precision and recall (∆= 0.0072)
+indicates the class-weighted loss successfully prevents bias
+toward either class. This is a strong result given that these clips
+originate from real footage converted by v2e, which introduces
+VOLUME 14, 2026
+11
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+threshold noise (σ = 0.03) and low-pass artefacts absent from
+the cleaner CARLA simulation.
+b: CARLA DVS normal.
+On clean CARLA DVS, performance peaks at 97.79% accu-
+racy and F1 = 0.9478 with P = 0.9701, R = 0.9264. The
+high precision indicates very few false crossing predictions;
+the slight recall shortfall (0.926 vs. 0.970) suggests some
+pedestrians who are crossing are missed when their motion is
+brief or low-contrast.
+c: CARLA DVS adverse weather.
+Under adverse weather, accuracy drops by 3.01 pp to 94.78%
+while recall drops sharply to R = 0.7513. This is the most
+notable degradation across all splits: rain and fog effects reduce
+event density, making crossing detection harder. Nevertheless,
+precision remains high at 0.9446, meaning the model rarely
+raises a false alarm. The F1 drop (0.9478 →0.8369) accu-
+rately quantifies this recall-driven degradation.
+d: Combined.
+Across all test splits jointly, the model achieves 96.59%
+accuracy, F1 = 0.9348, P = 0.9674, and R = 0.9044.
+The recall of 0.9044 reflects the adverse-weather degradation
+pulling down the aggregate; precision remains high at 0.9674,
+confirming the model rarely generates false crossing alarms
+across all domains.
+VIII. ANALYSIS
+A. PRECISION–RECALL TRADE-OFF ACROSS DOMAINS
+Figure 8 shows the precision–recall profiles across domains.
+For safety-critical applications, recall is the primary concern:
+a missed crossing (FN) can result in a collision, while a false
+alarm (FP) merely causes unnecessary braking. The model
+prioritises precision under normal conditions (P = 0.970 on
+CARLA) but degrades in recall under adverse weather (R =
+0.751).
+This asymmetry directly reflects the DVS event density: in
+fog and rain, the sensor generates more background events
+(noise) while pedestrian motion events are attenuated. The
+model, trained primarily on cleaner DVS streams, interprets
+sparse crossing-frame events as insufficient evidence and
+defaults toward non-crossing.
+B. ROLE OF SPATIAL CONVOLUTION
+A key architectural choice is the use of convolutional LIF
+layers rather than flat FC layers. Prior experiments (not
+shown here) showed that FC-SNN architectures collapse to
+majority-class prediction on this imbalanced multi-source
+dataset. The convolutional blocks enforce spatial locality: each
+3×3 kernel attends to a 9-pixel neighbourhood, extracting local
+motion gradients—edges of the pedestrian silhouette moving
+against the background—which are the primary DVS signal
+for crossing intent.
+After three MaxPool layers, the 64×64 input is reduced to
+8×8, providing an effective receptive field of up to 56 pixels
+JAAD
+CARLA Normal
+CARLA Adverse
+Combined
+0.7
+0.75
+0.8
+0.85
+0.9
+0.95
+1
+Score
+Accuracy
+F1
+FIGURE 8: Accuracy and F1 across all four test splits. The
+adverse-weather split shows the largest F1 degradation due to
+reduced recall.
+at the output of the third conv block. This receptive field is
+large enough to capture full limb-scale motion patterns while
+small enough to suppress distant background activity.
+C. CROSS-DOMAIN GENERALISATION
+A notable finding is that the model trained on JAAD + CARLA
+generalises well across domains:
+• CARLA-normal test accuracy (97.79%) exceeds JAAD
+test accuracy (95.83%), despite JAAD being the ‘‘real’’
+domain.
+• This is explained by the 6× JAAD oversampling: the
+network sees many more JAAD samples during training,
+but CARLA’s cleaner event statistics (no v2e noise) make
+CARLA test frames easier to classify.
+• The adverse-weather drop (−3.01 pp vs. normal CARLA)
+is modest in accuracy but larger in F1 (−1.11), confirming
+that the model remains accurate for non-crossing pedes-
+trians but misses some crossing events in degraded DVS
+streams.
+D. FAILURE MODE ANALYSIS
+We identify three primary failure modes from the test metrics:
+a: 1. Adverse-weather recall degradation.
+The most significant failure is the 17.5 pp recall drop on
+CARLA adverse weather (R = 0.751 vs. 0.926 on normal
+CARLA). Rain droplets on the simulated sensor generate
+dense noise events that partially obscure pedestrian motion,
+and fog attenuates contrast. The model, not having seen
+adverse-weather JAAD clips during training, does not learn to
+filter this noise pattern.
+b: 2. Synthetic DVS artefacts.
+v2e introduces threshold mismatch noise (σ = 0.03) that
+produces spurious events at flat textures. These artefacts may
+cause the model to see ‘‘motion’’ where none exists, increasing
+false positives on non-crossing clips. The brightness jitter
+augmentation partially mitigates this by teaching the model to
+be robust to amplitude variations.
+12
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+c: 3. Short-clip ambiguity.
+With T
+= 9 frames at 30 fps, each clip spans ≈300 ms.
+Pedestrians who are in a preparatory phase (slowing to stop,
+or stepping off the pavement) may not yet exhibit distinctive
+motion patterns within this window. The model inherits this
+limitation from the clip-level label assignment in JAAD.
+IX. DISCUSSION
+A. SYNERGY OF DVS SENSING AND SNN PROCESSING
+The conjunction of DVS sensing and SNN processing is
+more than a technical convenience. DVS cameras fire events
+proportional to log-luminance change, effectively performing
+temporal differentiation at the sensor. LIF neurons integrate
+temporal inputs and fire based on accumulated change. The
+result is a system in which sensor physics and neural com-
+putation are mutually aligned: both are driven by change
+rather than absolute values. This echoes Hubel and Wiesel’s
+discovery [15] that cortical neurons respond preferentially to
+contrast edges and motion, not absolute luminance. The sparse
+coding principle [94] further motivates this: efficient neural
+representations should activate only when information content
+warrants it. This alignment explains why a relatively shallow
+architecture (1.07 M parameters, 15 epochs on CPU) achieves
+95.83% on JAAD—a task where state-of-the-art RGB-based
+transformers with orders of magnitude more parameters report
+∼88%.
+B. ENERGY EFFICIENCY POTENTIAL
+The model was trained and evaluated using PyTorch [68] on
+CPU (DEVICE = "cpu") due to cuBLAS stability issues on
+the available hardware. Estimated GPU throughput would be
+substantially higher. More importantly, the LIF architecture is
+directly mappable to neuromorphic hardware: on Intel Loihi 2,
+spike-based inference at comparable scales has been reported
+to consume < 1 mJ/inference [16], compared to ∼100–500 mJ
+for equivalent GPU inference. This is a 100–500× energy
+advantage highly relevant for battery-powered advanced driver-
+assistance system (ADAS) platforms.
+C. COMPARISON WITH FRAME-BASED STATE OF THE ART
+Table 1 placed our method alongside RGB-based crossing
+predictors. We note important caveats for direct comparison:
+1) RGB-based results (e.g., PedFormer ∼88%) use the orig-
+inal JAAD RGB frames under a standard frame-based
+evaluation protocol that includes body pose and context
+features as auxiliary inputs.
+2) Our method uses DVS frames only—no RGB, no pose, no
+vehicle state—making the classification problem strictly
+harder from an information-theoretic standpoint.
+3) Our 95.83% accuracy on JAAD is thus achieved with less
+information per frame and no auxiliary signals, suggesting
+that event-based temporal representations capture intent-
+relevant motion patterns more efficiently than raw pixel
+intensities.
+D. BIOLOGICAL PLAUSIBILITY
+The LIF neuron model is the simplest biologically plausible
+neuron model that captures two essential features of cortical
+computation: temporal integration (the membrane potential
+accumulates evidence over multiple timesteps) and sparse
+binary output (a neuron fires at most once per timestep,
+analogous to a cortical spike). The soft-reset mechanism
+(Eq. 9) further mirrors the partial depolarisation seen in cortical
+neurons after sub-threshold input. The surrogate gradient
+(Eq. 11) approximates the biological notion of ‘‘spike-timing-
+dependent plasticity’’ in the sense that neurons firing near
+threshold receive the strongest gradient signal, while clearly
+sub- or super-threshold neurons receive weak gradients.
+X. LIMITATIONS
+a: Synthetic DVS fidelity.
+v2e approximates the DVS sensor using a simplified photore-
+ceptor model. Real DVS sensors exhibit pixel-level threshold
+variation (not captured by the global σ = 0.03), refractory
+periods, junction leakage, and address-event representation
+(AER) bandwidth limits. Our model may not transfer directly
+to data from a physical DAVIS/DVS346 sensor without domain
+adaptation.
+b: CPU-only training.
+Training was performed on CPU due to cuBLAS errors on the
+available GPU. While this produces valid results (the random
+seed was fixed for reproducibility), it limits the feasible batch
+size and prohibits grid search over hyperparameters. GPU
+training would allow larger architectures and more extensive
+ablation.
+c: Fixed clip length.
+The T=9 clip window covers ≈300 ms at 30 fps. Longer
+clips could provide richer temporal context (e.g., a pedestrian
+decelerating over 500 ms before crossing), but this requires
+variable-length temporal modelling beyond the current fixed-T
+forward pass.
+d: No RGB baseline.
+We do not include a direct head-to-head comparison between
+our DVS+SNN method and an RGB+CNN baseline trained
+on the same JAAD clips. Such a comparison is confounded by
+sensor type and would require simultaneous DVS and RGB
+capture from the same scene, which JAAD does not provide.
+e: Adverse-weather recall gap.
+The 17.5 pp recall gap under adverse weather identifies a safety
+risk: in rain or fog, the model misses 1 in 4 crossing pedestrians.
+Addressing this would require adverse-weather JAAD footage
+converted via v2e (not currently available) or real DVS capture
+under degraded conditions.
+XI. FUTURE WORK
+VOLUME 14, 2026
+13
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+a: Real DVS acquisition.
+Mounting a DAVIS346 camera on the same vehicle used
+to record JAAD footage would provide real event streams
+matched to the existing labels. This would enable a direct
+fidelity comparison between v2e simulation and physical
+sensor data, and a true sim-to-real transfer evaluation.
+b: Multi-modal fusion.
+Fusing DVS event representations with RGB appearance
+features (e.g., via a late-fusion transformer) would address the
+adverse-weather recall gap: in degraded DVS, RGB provides
+complementary texture and appearance cues. Attention-based
+gating [41], [42] can learn when to trust each modality.
+Transfer learning of pre-trained CNN features [95], [96] could
+provide robust appearance initialisation for the RGB branch.
+c: Liquid Time-Constant (LTC) extension.
+Replacing fixed τ with neuron-adaptive time constants gov-
+erned by an ordinary differential equation (ODE) [97] would
+allow the model to adapt its temporal integration window to lo-
+cal event density—integrating slowly during sparse sequences
+and quickly during dense ones.
+d: Spiking Transformer.
+Replacing the FC-LIF layer with a spiking self-attention mech-
+anism would allow long-range temporal dependencies across
+the clip, capturing multi-step intent sequences (deceleration
+→stop →step).
+e: Neuromorphic deployment.
+We plan to map the trained Conv-SNN to Intel Loihi 2 using
+the Lava framework, targeting < 1 mJ/inference. This requires
+integer quantisation of weights and thresholds, and SNN-to-
+hardware neuron core mapping.
+f: Domain adaptation.
+Adversarial domain adaptation [98], [99] could explicitly align
+the feature distributions of JAAD synthetic DVS and real
+DVS sensor streams, addressing the sim-to-real gap without
+requiring additional real-sensor labelled data.
+g: Reinforcement learning integration.
+Treating crossing prediction as a partially observable Markov
+decision process (POMDP) with asymmetric rewards (large
+penalty for FN, small for FP) and training a spiking actor-critic
+agent [100], [101] would naturally encode the safety-critical
+cost structure of the task.
+XII. CONCLUSION
+We have presented a complete, reproducible end-to-end
+pipeline for pedestrian crossing intent prediction from event-
+based vision. Real JAAD driving footage is converted to
+synthetic DVS streams via v2e and combined with CARLA
+simulated DVS sequences. A Convolutional Spiking Neu-
+ral Network with clip-consistent augmentation and class-
+weighted AdamW training achieves 95.83% accuracy and
+F1 = 0.9695 on JAAD, 97.79% / 0.9478 on CARLA normal,
+and 94.78% / 0.8369 on CARLA adverse weather. These
+results were obtained with a 1.07 M-parameter architecture
+trained for 15 epochs on CPU—substantially outperforming
+prior frame-based methods that require RGB cameras and
+auxiliary sensor fusion.
+In summary, this work contributes: (i) an end-to-end v2e-
+based pipeline that converts real JAAD footage into synthetic
+DVS event clips with principled empty-frame filtering; (ii)
+a multi-source training protocol that combines the JAAD-
+derived and CARLA-simulated domains of DVS-PedX with
+6× JAAD oversampling and class-balanced weighting; (iii)
+a clip-consistent DVS augmentation scheme that preserves
+temporal coherence across all T frames; and (iv) a compact
+convolutional-LIF spiking architecture, trained directly with a
+custom surrogate-gradient implementation, that attains com-
+petitive crossing-intent accuracy across real and simulated
+event domains.
+The LIF neuron dynamics, surrogate-gradient training,
+JAAD 6× oversampling, and clip-consistent augmentation
+are all fully documented, making the system reproducible.
+Our analysis reveals that spatial convolution is essential (flat
+FC-SNNs collapse to majority-class prediction), that adverse-
+weather recall is the primary remaining gap, and that the
+precision–recall profile is asymmetric in a safety-appropriate
+direction (high precision, controlled false alarms).
+We believe this work establishes DVS+SNN as a viable,
+energetically efficient alternative to frame-based pedestrian
+intent prediction, and provides a solid foundation for the
+real-sensor validation, multi-modal fusion, and neuromorphic
+deployment work described in Section XI.
+ACKNOWLEDGMENT
+The authors thank the creators of JAAD [1], DVS-PedX [37],
+and v2e [52] for publicly releasing their datasets and tools. The
+authors used Claude (Anthropic, https://claude.ai) to assist
+with language refinement of the manuscript. The research
+methodology, experiments, analyses, results, and all technical
+content are solely the authors’ own work, and the authors have
+reviewed and take full responsibility for the final content.
+REFERENCES
+[1] A. Rasouli, I. Kotseruba, and J. K. Tsotsos, ‘‘Are They Going to Cross? A
+Benchmark Dataset and Baseline for Pedestrian Crosswalk Behavior,’’ in
+Proceedings of the IEEE International Conference on Computer Vision
+Workshops (ICCVW), 2017, pp. 206–213.
+[2] I. Kotseruba, A. Rasouli, and J. K. Tsotsos, ‘‘Benchmark for Evaluating
+Pedestrian Action Prediction,’’ in Proceedings of the IEEE Winter
+Conference on Applications of Computer Vision (WACV), 2021, pp.
+1258–1268.
+[3] Y. LeCun, L. Bottou, Y. Bengio, and P. Haffner, ‘‘Gradient-Based
+Learning Applied to Document Recognition,’’ Proceedings of the IEEE,
+vol. 86, no. 11, pp. 2278–2324, 1998.
+[4] A. Krizhevsky, I. Sutskever, and G. E. Hinton, ‘‘ImageNet Classification
+with Deep Convolutional Neural Networks,’’ in Advances in Neural
+Information Processing Systems (NeurIPS), vol. 25, 2012, pp. 1097–1105.
+[5] K. He, X. Zhang, S. Ren, and J. Sun, ‘‘Deep Residual Learning for Image
+Recognition,’’ in IEEE Conference on Computer Vision and Pattern
+Recognition (CVPR), 2016, pp. 770–778.
+14
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+[6] S. Hochreiter and J. Schmidhuber, ‘‘Long Short-Term Memory,’’ Neural
+Computation, vol. 9, no. 8, pp. 1735–1780, 1997.
+[7] A. Rasouli, M. Rohani, and J. Luo, ‘‘PedFormer: Pedestrian Behavior
+Prediction via Cross-Modal Attention Modulation and Auxiliary
+Pose-Inferred Tasks,’’ in IEEE International Conference on Robotics and
+Automation (ICRA), 2023.
+[8] I. Goodfellow, Y. Bengio, and A. Courville, Deep Learning.
+MIT Press,
+2016.
+[9] P. Lichtsteiner, C. Posch, and T. Delbruck, ‘‘A 128×128 120 dB 15 µs
+Latency Asynchronous Temporal Contrast Vision Sensor,’’ IEEE Journal
+of Solid-State Circuits, vol. 43, no. 2, pp. 566–576, 2008.
+[10] G. Gallego, T. Delbruck, G. Orchard, C. Bartolozzi, B. Taba, A. Censi,
+S. Leutenegger, A. Davison, J. Conradt, K. Daniilidis, and D. Scaramuzza,
+‘‘Event-Based Vision: A Survey,’’ IEEE Transactions on Pattern Analysis
+and Machine Intelligence, vol. 44, no. 1, pp. 154–180, 2022.
+[11] G. Indiveri, B. Linares-Barranco, T. J. Hamilton, A. van Schaik,
+R. Etienne-Cummings, T. Delbruck, S.-C. Liu, P. Dudek, P. Häfliger,
+S. Renaud et al., ‘‘Neuromorphic Silicon Neuron Circuits,’’ Frontiers in
+Neuroscience, vol. 5, p. 73, 2011.
+[12] W. Maass, ‘‘Networks of Spiking Neurons: The Third Generation of
+Neural Network Models,’’ Neural Networks, vol. 10, no. 9, pp.
+1659–1671, 1997.
+[13] A. N. Burkitt, ‘‘A Review of the Integrate-and-Fire Neuron Model: I.
+Homogeneous Synaptic Input,’’ Biological Cybernetics, vol. 95, no. 1, pp.
+1–19, 2006.
+[14] P. Dayan and L. F. Abbott, Theoretical Neuroscience: Computational and
+Mathematical Modeling of Neural Systems.
+MIT Press, 2001.
+[15] D. H. Hubel and T. N. Wiesel, ‘‘Receptive Fields and Functional
+Architecture of Monkey Striate Cortex,’’ Journal of Physiology, vol. 195,
+no. 1, pp. 215–243, 1968.
+[16] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday,
+G. Dimou, P. Joshi, N. Imam, S. Jain et al., ‘‘Loihi: A Neuromorphic
+Manycore Processor with On-Chip Learning,’’ IEEE Micro, vol. 38, no. 1,
+pp. 82–99, 2018.
+[17] P. A. Merolla, J. V. Arthur, R. Alvarez-Icaza, A. S. Cassidy, J. Sawada,
+F. Akopyan, B. L. Jackson, N. Imam, C. Guo, Y. Nakamura et al., ‘‘A
+Million Spiking-Neuron Integrated Circuit with a Scalable
+Communication Network and Interface,’’ Science, vol. 345, no. 6197, pp.
+668–673, 2014.
+[18] E. O. Neftci, H. Mostafa, and F. Zenke, ‘‘Surrogate Gradient Learning in
+Spiking Neural Networks: Bringing the Power of Gradient-Based
+Optimization to Spiking Neural Networks,’’ IEEE Signal Processing
+Magazine, vol. 36, no. 6, pp. 51–63, 2019.
+[19] F. Zenke and S. Ganguli, ‘‘SuperSpike: Supervised Learning in Multilayer
+Spiking Neural Networks,’’ vol. 30, no. 6, 2018, pp. 1514–1541.
+[20] Y. Wu, L. Deng, G. Li, J. Zhu, and L. Shi, ‘‘Spatio-Temporal
+Backpropagation for Training High-Performance Spiking Neural
+Networks,’’ vol. 12, 2018, p. 331.
+[21] J. H. Lee, T. Delbruck, and M. Pfeiffer, ‘‘Training Deep Spiking Neural
+Networks,’’ in Advances in Neural Information Processing Systems
+(NeurIPS), vol. 29, 2016.
+[22] K. Saleh, M. Hossny, and S. Nahavandi, ‘‘Real-Time Intent Prediction of
+Pedestrians for Autonomous Ground Vehicles via Spatio-Temporal
+DenseNet,’’ in IEEE International Conference on Robotics and
+Automation (ICRA), 2019, pp. 9262–9268.
+[23] Q. Wang, Y. Zhang, J. Yuan, and Y. Lu, ‘‘Space-Time Event Clouds for
+Gesture Recognition: From RGB Cameras to Event Cameras,’’ in IEEE
+Winter Conference on Applications of Computer Vision (WACV), 2019, pp.
+1826–1835.
+[24] A. Amir, B. Taba, D. Berg, T. Melano, J. McKinstry, C. Di Nolfo,
+T. Nayak, A. Andreopoulos, G. Garreau, M. Mendoza et al., ‘‘A Low
+Power, Fully Event-Based Gesture Recognition System,’’ in IEEE
+Conference on Computer Vision and Pattern Recognition (CVPR), 2017,
+pp. 7243–7252.
+[25] J. Li, J. Li, L. Zhu, X. Xiang, T. Huang, and Y. Tian, ‘‘Asynchronous
+Spatio-Temporal Memory Network for Continuous Event-Based Object
+Detection,’’ IEEE Transactions on Image Processing, vol. 31, pp.
+2975–2987, 2022.
+[26] F. Schneemann and P. Heinemann, ‘‘Context-Based Detection of
+Pedestrian Crossing Intention for Service Robots and Self-Driving Cars,’’
+in IEEE/RSJ International Conference on Intelligent Robots and Systems
+(IROS), 2016, pp. 2473–2478.
+[27] J. F. P. Kooij, N. Schneider, F. Flohr, and D. M. Gavrila, ‘‘Context-Based
+Pedestrian Path Prediction,’’ in European Conference on Computer Vision
+(ECCV), 2014, pp. 618–633.
+[28] B. Volz, K. Behrendt, H. Mielenz, I. Gilitschenski, R. Siegwart, and
+J. Nieto, ‘‘Feature Relevance Estimation for Learning Pedestrian Behavior
+at Crosswalks,’’ in IEEE Intelligent Transportation Systems Conference
+(ITSC), 2016, pp. 1819–1824.
+[29] A. Rasouli, I. Kotseruba, and J. K. Tsotsos, ‘‘Agreeing to Cross: How
+Drivers and Pedestrians Communicate,’’ in Proceedings of the IEEE
+Intelligent Vehicles Symposium (IV), 2017, pp. 264–269.
+[30] A. Rasouli, I. Kotseruba, T. Kunic, and J. K. Tsotsos, ‘‘PIE: A
+Large-Scale Dataset and Models for Pedestrian Intention Estimation and
+Trajectory Prediction,’’ in Proceedings of the IEEE International
+Conference on Computer Vision (ICCV), 2019, pp. 6262–6271.
+[31] Z. Fang and A. M. López, ‘‘Is the Pedestrian Going to Cross? Answering
+by 2D Pose Estimation,’’ in IEEE Intelligent Vehicles Symposium (IV),
+2018, pp. 1271–1276.
+[32] J. Gesnouin, S. Pechberti, B. Stanciulescu, and F. Moutarde, ‘‘Predicting
+Crossing Pedestrian Behavior from Motion Patterns,’’ arXiv preprint
+arXiv:2012.08436, 2020.
+[33] J.-Y. Kwak, B.-C. Ko, and J.-Y. Nam, ‘‘Pedestrian Intention Prediction
+Based on Dynamic Fuzzy Automata for Vehicle Driving at Night Time,’’
+in Infrared Physics & Technology, vol. 81, 2017, pp. 41–51.
+[34] L. Achaji, T. Barry, T. Fouard, J. Moreau, F. Aioun, and F. Davoine, ‘‘Is
+Attention to Bounding Boxes All You Need for Pedestrian Action
+Prediction?’’ in IEEE Intelligent Vehicles Symposium (IV), 2022.
+[35] J. Lorenzo, I. Parra, F. Wirth, C. Fernández, D. F. Llorca, and M. M.
+Trivedi, ‘‘IntFormer: Predicting Pedestrian Intention with the Aid of
+Transformers,’’ arXiv preprint arXiv:2105.08647, 2021.
+[36] M. Sakhai, S. Mazurek, J. Caputa, J. K. Argasiński, and M. Wielgosz,
+‘‘Spiking Neural Networks for Real-Time Pedestrian Street-Crossing
+Detection Using Dynamic Vision Sensors in Simulated Adverse Weather
+Conditions,’’ Electronics, vol. 13, no. 21, p. 4280, 2024. [Online].
+Available: https://www.mdpi.com/2079-9292/13/21/4280
+[37] M. Sakhai, K. Sithu, M. K. Soe Oke, and M. Wielgosz, ‘‘DVS-PedX:
+Synthetic-and-Real Event-Based Pedestrian Dataset,’’ Scientific Data,
+vol. 13, p. 614, 2026. [Online]. Available:
+https://www.nature.com/articles/s41597-026-06969-y
+[38] T. N. Kipf and M. Welling, ‘‘Semi-Supervised Classification with Graph
+Convolutional Networks,’’ in International Conference on Learning
+Representations (ICLR), 2017.
+[39] S. Yan, Y. Xiong, and D. Lin, ‘‘Spatial Temporal Graph Convolutional
+Networks for Skeleton-Based Action Recognition,’’ in Proceedings of the
+AAAI Conference on Artificial Intelligence, vol. 32, 2018.
+[40] S. Cadena, C. Graf, and M. Bhatt, ‘‘Pedestrian Intention Prediction with
+Multi-Task Attention Network,’’ in arXiv preprint arXiv:1910.04821,
+2019.
+[41] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+Ł. Kaiser, and I. Polosukhin, ‘‘Attention Is All You Need,’’ in Advances in
+Neural Information Processing Systems (NeurIPS), vol. 30, 2017.
+[42] D. Bahdanau, K. Cho, and Y. Bengio, ‘‘Neural Machine Translation by
+Jointly Learning to Align and Translate,’’ in International Conference on
+Learning Representations (ICLR), 2015.
+[43] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai,
+T. Unterthiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly et al.,
+‘‘An Image is Worth 16x16 Words: Transformers for Image Recognition
+at Scale,’’ in International Conference on Learning Representations
+(ICLR), 2021.
+[44] A. Dosovitskiy, P. Fischer, E. Ilg, P. Hausser, C. Hazirbas, V. Golkov,
+P. van der Smagt, D. Cremers, and T. Brox, ‘‘FlowNet: Learning Optical
+Flow with Convolutional Networks,’’ in IEEE International Conference
+on Computer Vision (ICCV), 2015, pp. 2758–2766.
+[45] K. Simonyan and A. Zisserman, ‘‘Two-Stream Convolutional Networks
+for Action Recognition in Videos,’’ in Advances in Neural Information
+Processing Systems (NeurIPS), vol. 27, 2014.
+[46] D. Yang, L. Li, K. Redmill, and A. Ünal, ‘‘Predicting Pedestrian Crossing
+Intention with Feature Fusion and Spatio-Temporal Attention,’’ in IEEE
+Intelligent Vehicles Symposium (IV), 2021, pp. 1444–1450.
+[47] Z. Cao, T. Simon, S.-E. Wei, and Y. Sheikh, ‘‘Realtime Multi-Person 2D
+Pose Estimation Using Part Affinity Fields,’’ in IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR), 2017, pp. 7291–7299.
+[48] D. Tran, L. Bourdev, R. Fergus, L. Torresani, and M. Paluri, ‘‘Learning
+Spatiotemporal Features with 3D Convolutional Networks,’’ in IEEE
+VOLUME 14, 2026
+15
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+International Conference on Computer Vision (ICCV), 2015, pp.
+4489–4497.
+[49] S. Ren, K. He, R. Girshick, and J. Sun, ‘‘Faster R-CNN: Towards
+Real-Time Object Detection with Region Proposal Networks,’’ in
+Advances in Neural Information Processing Systems (NeurIPS), vol. 28,
+2015.
+[50] J. Redmon, S. Divvala, R. Girshick, and A. Farhadi, ‘‘You Only Look
+Once: Unified, Real-Time Object Detection,’’ in IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR), 2016, pp. 779–788.
+[51] K. Muhammad, A. Ullah, J. Lloret, J. Del Ser, and V. H. C.
+de Albuquerque, ‘‘Deep Learning for Safe Autonomous Driving: Current
+Challenges and Future Directions,’’ IEEE Transactions on Intelligent
+Transportation Systems, vol. 22, no. 7, pp. 4316–4336, 2021.
+[52] Y. Hu, S.-C. Liu, and T. Delbruck, ‘‘v2e: From Video Frames to Realistic
+DVS Events,’’ in Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition Workshops (CVPRW), 2021, pp.
+1312–1321.
+[53] G. Orchard, A. Jayawant, G. K. Taylor, and N. Thakor, ‘‘Converting Static
+Image Datasets to Spiking Neuromorphic Datasets Using Saccades,’’
+vol. 9, 2015, p. 437.
+[54] J. Binas, D. Neil, S.-C. Liu, and T. Delbruck, ‘‘DDD17: End-to-End
+DAVIS Driving Dataset,’’ arXiv preprint arXiv:1711.01458, 2017.
+[55] M. Gehrig, M. Muglikar, and D. Scaramuzza, ‘‘DSEC: A Stereo Event
+Camera Dataset for Driving Scenarios,’’ IEEE Robotics and Automation
+Letters, vol. 6, no. 3, pp. 4947–4954, 2021.
+[56] A. Sironi, M. Brambilla, N. Bourdoukan, C. Simone, and M. Guido,
+‘‘HATS: Histograms of Averaged Time Surfaces for Robust Event-Based
+Object Classification,’’ in IEEE Conference on Computer Vision and
+Pattern Recognition (CVPR), 2018, pp. 1731–1740.
+[57] M. Cannici, M. Ciccone, A. Romanoni, and M. Matteucci, ‘‘Attention
+Mechanisms for Object Recognition with Event Cameras,’’ in IEEE
+Winter Conference on Applications of Computer Vision (WACV), 2019, pp.
+1127–1136.
+[58] N. Messikommer, D. Gehrig, A. Loquercio, and D. Scaramuzza,
+‘‘Event-Based Asynchronous Sparse Convolutional Networks,’’ in
+European Conference on Computer Vision (ECCV), 2020, pp. 415–431.
+[59] J. Kim, J. Bae, G. Park, D. Zhang, and Y. M. Kim, ‘‘N-ImageNet:
+Towards Robust, Fine-Grained Object Recognition with Event Cameras,’’
+in IEEE International Conference on Computer Vision (ICCV), 2021, pp.
+2146–2156.
+[60] E. Perot, P. de Tournemire, D. Nitti, J. Masci, and A. Sironi, ‘‘Learning to
+Detect Objects with a 1 Megapixel Event Camera,’’ in Advances in Neural
+Information Processing Systems (NeurIPS), vol. 33, 2020, pp.
+16 639–16 652.
+[61] H. Rebecq, D. Gehrig, and D. Scaramuzza, ‘‘ESIM: An Open Event
+Camera Simulator,’’ in Proceedings of the 2nd Conference on Robot
+Learning (CoRL), 2018, pp. 969–982.
+[62] A. Geiger, P. Lenz, and R. Urtasun, ‘‘Are We Ready for Autonomous
+Driving? The KITTI Vision Benchmark Suite,’’ in IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR), 2012, pp. 3354–3361.
+[63] H. Caesar, V. Bankiti, A. H. Lang, S. Vora, V. E. Liong, Q. Xu,
+A. Krishnan, Y. Pan, G. Baldan, and O. Beijbom, ‘‘nuScenes: A
+Multimodal Dataset for Autonomous Driving,’’ in IEEE Conference on
+Computer Vision and Pattern Recognition (CVPR), 2020, pp.
+11 621–11 631.
+[64] M. Cordts, M. Omran, S. Ramos, T. Rehfeld, M. Enzweiler, R. Benenson,
+U. Franke, S. Roth, and B. Schiele, ‘‘The Cityscapes Dataset for Semantic
+Urban Scene Understanding,’’ in IEEE Conference on Computer Vision
+and Pattern Recognition (CVPR), 2016, pp. 3213–3223.
+[65] A. Dosovitskiy, G. Ros, F. Codevilla, A. López, and V. Koltun, ‘‘CARLA:
+An Open Urban Driving Simulator,’’ in Proceedings of the 1st Annual
+Conference on Robot Learning (CoRL), 2017, pp. 1–16.
+[66] B. Rueckauer, I.-A. Lungu, Y. Hu, M. Pfeiffer, and S.-C. Liu,
+‘‘Conversion of Continuous-Valued Deep Networks to Efficient
+Event-Driven Networks for Image Classification,’’ Frontiers in
+Neuroscience, vol. 11, p. 682, 2017.
+[67] W. Fang, Y. Chen, J. Ding, Z. Yu, T. Masquelier, D. Chen, L. Huang,
+H. Zhou, G. Li, and Y. Tian, ‘‘SpikingJelly: An Open-Source Machine
+Learning Infrastructure Platform for Spike-Based Intelligence,’’ Science
+Advances, vol. 9, no. 40, p. eadi1480, 2023.
+[68] A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan,
+T. Killeen, Z. Lin, N. Gimelshein, L. Antiga et al., ‘‘PyTorch: An
+Imperative Style, High-Performance Deep Learning Library,’’ in
+Advances in Neural Information Processing Systems (NeurIPS), vol. 32,
+2019.
+[69] N. Rathi, G. Srinivasan, P. Panda, and K. Roy, ‘‘Enabling Deep Spiking
+Neural Networks with Hybrid Conversion and Spike Timing Dependent
+Backpropagation,’’ in International Conference on Learning
+Representations (ICLR), 2020.
+[70] A. Sengupta, Y. Ye, R. Wang, C. Liu, and K. Roy, ‘‘Going Deeper in
+Spiking Neural Networks: VGG and Residual Architectures,’’ vol. 13,
+2019, p. 95.
+[71] S. Kim, S. Park, B. Na, and S. Yoon, ‘‘Revisiting Batch Normalization for
+Training Low-Latency Deep Spiking Neural Networks from Scratch,’’ in
+Frontiers in Neuroscience, vol. 14, 2021, pp. 1–13.
+[72] G. Bellec, D. Salaj, A. Subramoney, R. Legenstein, and W. Maass, ‘‘Long
+Short-Term Memory and Learning-to-Learn in Networks of Spiking
+Neurons,’’ in Advances in Neural Information Processing Systems
+(NeurIPS), vol. 31, 2018.
+[73] A. Tavanaei, M. Ghodrati, S. R. Kheradpisheh, T. Masquelier, and
+A. Maida, ‘‘Deep Learning in Spiking Neural Networks,’’ Neural
+Networks, vol. 111, pp. 47–63, 2019.
+[74] M. Pfeiffer and T. Pfeil, ‘‘Deep Learning With Spiking Neurons:
+Opportunities and Challenges,’’ Frontiers in Neuroscience, vol. 12, p. 774,
+2018.
+[75] P. U. Diehl and M. Cook, ‘‘Unsupervised Learning of Digit Recognition
+Using Spike-Timing-Dependent Plasticity,’’ Frontiers in Computational
+Neuroscience, vol. 9, p. 99, 2015.
+[76] W. Tan, P. Panda, D. Sahoo, J. Zheng, and K. Roy, ‘‘Strategy and
+Benchmark for Converting Deep Q-Networks to Efficient Spiking
+Equivalents,’’ in Proceedings of the AAAI Conference on Artificial
+Intelligence, vol. 35, no. 11, 2021, pp. 9906–9913.
+[77] A. Z. Zhu, L. Yuan, K. Chaney, and K. Daniilidis, ‘‘EV-FlowNet:
+Self-Supervised Optical Flow Estimation for Event-Based Cameras,’’ in
+Robotics: Science and Systems (RSS), 2018.
+[78] K. Simonyan and A. Zisserman, ‘‘Very Deep Convolutional Networks for
+Large-Scale Image Recognition,’’ arXiv preprint arXiv:1409.1556, 2015.
+[79] C. Szegedy, W. Liu, Y. Jia, P. Sermanet, S. Reed, D. Anguelov, D. Erhan,
+V. Vanhoucke, and A. Rabinovich, ‘‘Going Deeper with Convolutions,’’ in
+IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+2015, pp. 1–9.
+[80] M. Lin, Q. Chen, and S. Yan, ‘‘Network In Network,’’ in International
+Conference on Learning Representations (ICLR), 2014.
+[81] S. Ioffe and C. Szegedy, ‘‘Batch Normalization: Accelerating Deep
+Network Training by Reducing Internal Covariate Shift,’’ in International
+Conference on Machine Learning (ICML), 2015, pp. 448–456.
+[82] K. He, X. Zhang, S. Ren, and J. Sun, ‘‘Delving Deep into Rectifiers:
+Surpassing Human-Level Performance on ImageNet Classification,’’ in
+IEEE International Conference on Computer Vision (ICCV), 2015, pp.
+1026–1034.
+[83] X. Glorot and Y. Bengio, ‘‘Understanding the Difficulty of Training Deep
+Feedforward Neural Networks,’’ in International Conference on Artificial
+Intelligence and Statistics (AISTATS), 2010, pp. 249–256.
+[84] C. Shorten and T. M. Khoshgoftaar, ‘‘A Survey on Image Data
+Augmentation for Deep Learning,’’ Journal of Big Data, vol. 6, no. 1, pp.
+1–48, 2019.
+[85] E. D. Cubuk, B. Zoph, D. Mane, V. Vasudevan, and Q. V. Le,
+‘‘AutoAugment: Learning Augmentation Strategies from Data,’’ in IEEE
+Conference on Computer Vision and Pattern Recognition (CVPR), 2019,
+pp. 113–123.
+[86] H. He and E. A. Garcia, ‘‘Learning from Imbalanced Data,’’ IEEE
+Transactions on Knowledge and Data Engineering, vol. 21, no. 9, pp.
+1263–1284, 2009.
+[87] N. V. Chawla, K. W. Bowyer, L. O. Hall, and W. P. Kegelmeyer,
+‘‘SMOTE: Synthetic Minority Over-Sampling Technique,’’ Journal of
+Artificial Intelligence Research, vol. 16, pp. 321–357, 2002.
+[88] I. Loshchilov and F. Hutter, ‘‘Decoupled Weight Decay Regularization,’’
+in International Conference on Learning Representations (ICLR), 2019.
+[89] D. P. Kingma and J. Ba, ‘‘Adam: A Method for Stochastic Optimization,’’
+in International Conference on Learning Representations (ICLR), 2015.
+[90] R. Pascanu, T. Mikolov, and Y. Bengio, ‘‘On the Difficulty of Training
+Recurrent Neural Networks,’’ in International Conference on Machine
+Learning (ICML), 2013, pp. 1310–1318.
+[91] L. N. Smith, ‘‘Cyclical Learning Rates for Training Neural Networks,’’ pp.
+464–472, 2017.
+[92] L. Prechelt, ‘‘Early Stopping — But When?’’ in Neural Networks: Tricks
+of the Trade.
+Springer, 1998, pp. 55–69.
+16
+VOLUME 14, 2026
+
+
+Teklu et al.: Pedestrian Crossing Intent Classification From Event-Based Vision Using Convolutional SNNs
+[93] D. M. W. Powers, ‘‘Evaluation: From Precision, Recall and F-Measure to
+ROC, Informedness, Markedness and Correlation,’’ Journal of Machine
+Learning Technologies, vol. 2, no. 1, pp. 37–63, 2011.
+[94] B. A. Olshausen and D. J. Field, ‘‘Sparse Coding with an Overcomplete
+Basis Set: A Strategy Employed by V1?’’ Vision Research, vol. 37, no. 23,
+pp. 3311–3325, 1997.
+[95] J. Yosinski, J. Clune, Y. Bengio, and H. Lipson, ‘‘How Transferable Are
+Features in Deep Neural Networks?’’ in Advances in Neural Information
+Processing Systems (NeurIPS), vol. 27, 2014.
+[96] S. J. Pan and Q. Yang, ‘‘A Survey on Transfer Learning,’’ vol. 22, no. 10,
+2010, pp. 1345–1359.
+[97] R. Hasani, M. Lechner, A. Amini, D. Rus, and R. Grosu, ‘‘Liquid
+Time-Constant Networks,’’ in Proceedings of the AAAI Conference on
+Artificial Intelligence, vol. 35, no. 9, 2021, pp. 7657–7666.
+[98] Y. Ganin, E. Ustunova, H. Ajakan, P. Germain, H. Larochelle,
+F. Laviolette, M. Marchand, and V. Lempitsky, ‘‘Domain-Adversarial
+Training of Neural Networks,’’ vol. 17, no. 1, 2016, pp. 2096–2030.
+[99] E. Tzeng, J. Hoffman, K. Saenko, and T. Darrell, ‘‘Adversarial
+Discriminative Domain Adaptation,’’ in IEEE Conference on Computer
+Vision and Pattern Recognition (CVPR), 2017, pp. 7167–7176.
+[100] V. Mnih, K. Kavukcuoglu, D. Silver, A. A. Rusu, J. Veness, M. G.
+Bellemare, A. Graves, M. Riedmiller, A. K. Fidjeland, G. Ostrovski et al.,
+‘‘Human-Level Control through Deep Reinforcement Learning,’’ Nature,
+vol. 518, no. 7540, pp. 529–533, 2015.
+[101] R. S. Sutton and A. G. Barto, Reinforcement Learning: An Introduction,
+2nd ed.
+MIT Press, 2018.
+HENOK TEKLU is currently pursuing the Ph.D. degree in applied artificial
+intelligence with Alma Mater Europaea University, Maribor, Slovenia. His
+research interests include spiking neural networks, event-based vision, and
+pedestrian intent prediction for autonomous driving. His ORCID iD is https:
+//orcid.org/0009-0004-4676-3932.
+MUSTAFA SAKHAI is with AGH University of Kraków, Kraków, Poland.
+His research interests include neuromorphic computing and event-based
+perception for autonomous systems. His ORCID iD is https://orcid.org/
+0000-0003-3941-6065.
+MACIEJ WIELGOSZ is with AGH University of Kraków, Kraków, Poland. His
+research interests include deep learning, hardware acceleration, and spiking
+neural networks. His ORCID iD is https://orcid.org/0000-0002-4401-2957.
+MATEJ MERTIK is with Alma Mater Europaea University, Maribor, Slovenia.
+His research interests include applied artificial intelligence and data science.
+His ORCID iD is https://orcid.org/0000-0002-4557-330X.
+VOLUME 14, 2026
+17

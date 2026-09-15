@@ -1,0 +1,918 @@
+1
+Predictive audio representations for early detection
+and tracking of hidden dynamic objects
+Katerina Vinciguerra1, Member, IEEE, Moritz Brandes2, Danilo Hollosi2, and Letizia
+Marchegiani1, Member, IEEE
+Abstract—Predicting potential dangers is core to safety. Fore-
+casting the presence of other traffic agents is core to danger
+prediction. Occluded traffic agents challenge detection systems
+as they might become visible too late, leaving the autonomous
+vehicle too little time to identify, plan and act accordingly in
+a robust and safe way. Previous works proved that auditory
+perception, being omnidirectional and not constrained by a field-
+of-view, provides fundamental cues for early spotting of different
+road users, even when hidden by other vehicles or infrastructures.
+Yet, those contributions deal with scenarios with only one vehicle
+present, and they either identify the type of vehicle or estimate its
+direction of arrival. In this work, we move forward, and propose
+a multi-task system which, simultaneously, estimates the number
+of vehicles present, their type, and their direction of arrival.
+Our methodological contribution is a two-stage pipeline: a self-
+supervised pre-training stage inspired by the Joint- Embedding
+Predictive Architecture (JEPA) applied directly to multichannel
+raw waveforms, followed by supervised multi-task fine-tuning
+with a bidirectional LSTM and three classification heads. The
+pre-training stage trains the encoder without labels, pushing it
+to predict the latent representation of a future audio segment
+from its past context. To train and test our framework, since
+no suitable dataset was publicly available, we collected an ad-
+hoc one covering Non-Line-Of-Sight scenarios with multiple
+traffic agents simultaneously operating. Experimental evaluation
+shows that our method outperforms the state of the art; it also
+proves that our design choice allows the model to learn robust
+representations, which can be transferred to an unseen driving
+scenario, maintaining reasonable and stable performance.
+Index Terms—Driverless Vehicles, Auditory Perception, Ma-
+chine Learning, Audio Signal Processing
+I. INTRODUCTION
+S
+AFE navigation requires anticipating road users that are
+not yet visible. Cameras and LiDARs can only operate
+when there is line of sight. Although the same does not
+apply to automotive radars, able to penetrate non-conductive
+materials like plastic bumpers and glass, they still cannot see
+through the metallic bodies of potential in-between vehicles,
+resulting in a limited field of view. Sound propagates, and
+encodes spatial information, easily around obstacles, making
+acoustic perception extremely valuable in non-line-of-sight
+(NLOS) scenarios, such as vehicles approaching a T-junction
+from a hidden street.
+Prior investigations demonstrated that a microphone array
+can estimate the presence of an approaching vehicle before
+1K.
+Vinciguerra
+and
+L.
+Marchegiani
+are
+with
+the
+De-
+partment
+of
+Engineering
+and
+Architecture,
+University
+of
+Parma,
+Parma,
+Italy
+{katerina.vinciguerra,
+letizia.marchegiani}@unipr.it
+2M. Brandes and D. Hollosi are with the Fraunhofer Institute for Digital
+Media Technology IDMT, Oldenburg, Germany.
+Fig. 1: Example of a typical use-case: a car is approaching
+from the left and a van is approaching from the right at T-
+junction with buildings occluding them. The 8-microphone on-
+board array captures their raw audio signatures, which a self-
+supervised pretrained encoder maps into latent embeddings. A
+supervised head then aggregates a 3-second window of these
+embeddings to predict, at every second, the direction, number,
+and type of the non-line-of-sight vehicles.
+it becomes visible [1]–[4]. These results are encouraging:
+yet, these works address scenarios where a single vehicle is
+present, and while they recover the direction of arrival, they
+do not identify the type of vehicle. A system operating in
+the real world, though, interacts with multiple simultaneous
+traffic agents: to do so safely and robustly, it needs to know
+the location and also the nature of those agents. Different types
+of vehicles, indeed, have different performance characteristics,
+kinematics, and movement limits (e.g., a city bus has a much
+wider turning radius and slower manoeuvrability than a car),
+which strongly condition planning and risk assessment.
+Acoustic traffic monitoring systems [5] provide those esti-
+mates, but operate at minute-level granularity on fixed road-
+side infrastructure, thus they are not directly usable by an
+autonomous vehicle.
+arXiv:2609.13595v1  [cs.SD]  11 Sep 2026
+
+
+2
+This letter addresses this gap. We present a multi-task
+acoustic perception framework that simultaneously classifies,
+at one-second resolution, the direction of arrival (DoA) of
+sound sources outside the field-of-view (e.g., left, right), and
+predicts the number of vehicles in the scene, together with
+their class, by using only the raw waveform from an 8-
+microphone circular array. A schematic representation of the
+system is provided in Fig. 1. While we acknowledge that
+handling the simultaneous presence of only 2 vehicles may
+appear as a limitation of our approach, the challenges that
+arise in multi-vehicle scenes are mainly related to the ability
+to detect and parse the presence of more than one simultaneous
+spectral signature. Our goal is to provide a proof-of-concept
+that it is possible to develop a multi-task pipeline able to
+handle planar localisation, classification and vehicle counting
+without relying on any sound-source separation method. Sound
+source separation, indeed, is pretty much still an open problem,
+especially in the wild [6]. Such a proof-of-concept can serve as
+a baseline for further approaches coping with several vehicles.
+Our methodological contribution is a two-stage pipeline:
+a self-supervised pre-training stage inspired by the Joint-
+Embedding Predictive Architecture (JEPA) [7], [8], applied
+directly to multichannel raw waveforms without spectral pre-
+processing, followed by supervised multi-task fine-tuning with
+a bidirectional LSTM and three classification heads. Rather
+than reconstructing raw audio, the encoder is trained to predict
+the latent representation of a future acoustic segment from its
+past context, thereby adopting a temporal prediction objective
+that encourages semantically meaningful structure and yields
+representations that are temporally stable and transferable
+across driving conditions.
+II. RELATED WORK
+Acoustic vehicle perception. Audio has been explored both
+as a complement to visual sensing and as an independent
+modality for early detection of traffic agents outside the field
+of view [9], [10]. The first dataset explicitly designed to
+address NLOS scenarios was introduced in [1], where the
+authors used SRP-PHAT [11] and a linear SVM to estimate
+the Direction-of-Arrival (DoA) of a vehicle, expressed as
+left, front, right, none. Subsequent work improved direction
+accuracy using CNN architectures [2], jointly predicted the
+approach and departure directions [3], and integrated acoustic
+cues with bird’s-eye-view spatial priors [4]. All these works
+perform only DoA estimation in single-vehicle scenarios.
+The DCASE community, through the Acoustic-Based Traffic
+Monitoring challenge and its baseline system [5], investigated
+multi-vehicle localisation and classification relying on fixed
+roadside arrays. Yet, this setting does not fit the requirements
+of an autonomous vehicle’s planner: the sensors are stationary,
+rather than on-board, and estimates are provided every minute,
+making them very valuable for traffic monitoring, but not to
+trigger immediate interventions.
+Self-supervised audio representations. Contrastive meth-
+ods [12] and masked reconstruction approaches [13], [14]
+have shown that representations learned without labels on
+a large audio dataset can be reused across a broad range
+of downstream audio tasks. The Joint-Embedding Predictive
+Architecture [8], [15] proposes a different objective: a pre-
+dictor is trained to forecast the latent representation of a
+masked or future region from context, avoiding the cost of
+reconstructing perceptually irrelevant signal detail. Audio-
+JEPA [16] adapts this principle to mel-spectrogram patches
+and achieves competitive results on general audio benchmarks
+with large amounts of training data. We adapt the JEPA tem-
+poral prediction paradigm to operate directly on multichannel
+raw waveforms, letting the encoder free to learn from the
+raw signal whichever spectral, temporal, and cross-channel
+structure the prediction task actually rewards.
+Our contribution can be summarised as follows:
+1) To the best of our knowledge, this is the first on-board
+acoustic system that jointly estimates the direction, the
+number, and the class of multiple NLOS vehicles, with
+1-second latency.
+2) We introduce a JEPA-inspired temporal-prediction ob-
+jective trained directly on raw 8-channel waveforms, and
+show that it captures better representations than super-
+vised models, which allows generalisation to unseen, and
+significantly different, scenarios.
+III. METHOD
+We divide the description of the proposed framework into
+three parts: the temporal windowing of the input signal (Sec-
+tion III-A), the self-supervised pre-training of the acoustic
+encoder (Section III-B), and the supervised multi-task fine-
+tuning stage (Section III-C). An overview of the full pipeline
+is shown in Fig. 2.
+A. Temporal Windowing of the Input Signal
+Let the ego-vehicle carry a circular array of M = 8 micro-
+phones sampled at fs = 48 kHz. The continuous multichannel
+data point is segmented into non-overlapping one-second audio
+frames. Each frame is represented as a raw waveform tensor
+x ∈RM×L, where L = fs = 48K samples. Each frame
+is normalised channel-wise to zero mean and unit variance,
+with no spectral transform: the model operates directly on the
+raw waveform. Consecutive frames are grouped into sliding
+windows of length T = 3 seconds. The window centred at
+frame n is the ordered triple
+Wn =
+ xn−2, xn−1, xn
+
+,
+(1)
+where subscripts denote absolute frame indices within a fixed
+data point scenario. Windows do not cross the scenario bound-
+aries.
+B. Self-Supervised Pre-training
+1) Architecture: The acoustic encoder fθ : RM×L →RD
+maps a single one-second waveform to a latent vector of di-
+mension D = 256. It consists of three strided one-dimensional
+convolutional blocks followed by global average pooling and
+a linear projection:
+z = Wfc GAP
+
+ϕ3
+ ϕ2
+ ϕ1(x)
+
+,
+(2)
+
+
+3
+where x denotes the normalised input, each block ϕk is a one-
+dimensional strided convolution with kernel size 9 and stride
+2, followed by batch normalisation and a ReLU activation,
+producing {64, 128, 256} output channels for k ∈{1, 2, 3}
+respectively. GAP denotes global average pooling over the
+time dimension, and Wfc ∈RD×256 is the linear projection
+matrix. The choice D = 256 matches the channel depth of
+the final convolutional block, so no information bottleneck is
+introduced before the latent space.
+A lightweight predictor gϕ : RD →RD approximates the
+mapping from a past latent representation to a future one. It
+is a two-layer MLP:
+gϕ(z) = Linearϕ2
+
+ReLU
+ Linearϕ1(z)
+
+,
+(3)
+where Linearϕk denotes a fully-connected layer with learnable
+parameters ϕk, both mapping RD →RD.
+2) Training objective: Following the JEPA principle [7],
+[8], we maintain two encoder instances: an online encoder
+fθ updated by gradient descent, and a target encoder f¯θ
+updated by an exponential moving average (EMA) of the
+online weights:
+¯θ ←m ¯θ + (1 −m) θ,
+m = 0.99.
+(4)
+with momentum m following the convention established by
+BYOL [17] and adopted by I-JEPA [8]. The target encoder
+receives no gradient; it provides stable prediction targets that
+prevent representational collapse without requiring negative
+pairs [17]. The target encoder is updated by EMA after every
+gradient step on θ.
+For a window Wn, the online encoder processes the past
+frame xn−2 and the predictor is trained to forecast the target
+encoding of the future frame xn:
+LSSL =
+gϕ
+ fθ(xn−2)
+
+−f¯θ(xn)
+
+2
+2.
+(5)
+The intermediate frame xn−1 is intentionally excluded from
+pre-training, forcing the encoder to capture longer-range
+acoustic dynamics (see also Section IV). Gradients flow only
+through fθ and gϕ; the target encoder f¯θ is updated solely
+via Eq. (4). Pre-training runs for 100 epochs on the training
+split using the Adam optimizer [18] (η = 10−3, β1 = 0.9,
+β2 = 0.999, batch size 32). After pre-training, the online en-
+coder weights θ are retained and the predictor gϕ is discarded.
+C. Supervised Multi-Task Fine-tuning
+1) Model architecture: The pre-trained encoder fθ is com-
+posed with a bidirectional LSTM and three classification
+heads (Fig. 2). The three frames of window Wn are encoded
+independently by the shared encoder, producing the latent
+sequence
+ zn−2, zn−1, zn
+
+∈RT ×D with zn+k = fθ(xn+k),
+k ∈{−2, −1, 0}. A single-layer bidirectional LSTM with
+per-direction hidden dimension H
+= 128 aggregates the
+sequence; at each step the forward and backward hidden
+states are concatenated as ←→
+h n+k = [−→
+h n+k; ←−
+h n+k] ∈R2H,
+with 2H = D = 256 so the BiLSTM output lives in the
+same ambient dimension as the encoder latent. Only the final
+step ←→
+h n is propagated forward, through a shared module
+h = MLPψ(←→
+h n) ∈R128 consisting of a linear projection
+R2H
+→R128 with a ReLU non-linearity, regularised by
+dropout with probability p=0.4 applied to both its input and
+output. Three linear heads Wdir ∈R5×128, Wcnt ∈R3×128,
+Wtype ∈R4×128 project h to logits for the five direction
+classes (left, front, right, none, both/back), three count classes
+(0, 1, 2), and four vehicle-type classes (car, van, car + van,
+none).
+2) Training objective and protocol: Each head is trained
+with cross-entropy; the total loss L is given by
+L = λ Ldir
+CE + Lcnt
+CE + Ltype
+CE ,
+λ = 5,
+(6)
+Fine-tuning proceeds in two phases. During a warm-up of
+Ew = 5 epochs, fθ is frozen and only MLPψ and the heads
+are trained with Adam (ηhead = 10−3). Afterwards, fθ is
+unfrozen and jointly optimised at ηenc = 10−5, the rate is
+chosen empirically to adapt the SSL representation without
+catastrophic forgetting. Total training runs for E = 20 epochs
+at batch size 32; the checkpoint with the highest validation
+direction accuracy is retained.
+IV. EXPERIMENTS
+We run three main experiments: we evaluate the perfor-
+mance of our multi-task model and compare it with the state
+of the art (Experiment 1); we carry out ablation studies to ex-
+perimentally evaluate the rationale of our design choices (Ex-
+periment 2); we investigate whether the model can generalise
+and robustly operate on unseen, and significantly different,
+scenarios (Experiment 3). We indicate the three tasks: DoA
+estimation, vehicle type classification and number of vehicle
+estimation as Direction, Count and Type, respectively. Some
+qualitative results conclude the section.
+A. The Dataset
+To collect real-world data, three MER2-503-36U3C cameras
+were mounted side-by-side on the roof of a vehicle, directly
+above an octagonal array of eight microphones. A GPS unit
+was also installed on the roof. An overview of the setup
+is shown in Fig. 3. Each camera provides a 93° FoV at a
+resolution of 2448×2048 px at 20 fps, resulting in a combined
+horizontal coverage of approximately 279°.
+Data collection took place at the SolarPark in Oldenburg,
+Germany. The dataset spans across 6 different scenarios (cf.,
+Fig. 4), grouped into two main settings leading to two different
+datasets: the one we refer to as the T-Junction (TJ) one and
+the Take-Over (TO) one. In both cases, trials last between 10
+and 30 s, depending on the vehicle’s speed and position. To
+reduce bias toward specific engine signatures, two different
+cars and two different vans were used. In the T-junction
+(TJ) dataset, the ego-vehicle is stationary at a T-junction. The
+dataset contains 6,827 labeled audio frames of 1s: 1,958 with
+no vehicle present, 2,264 with a single vehicle approaching
+(left-to-right or right-to-left), and 2,605 with two vehicles
+approaching. In the Take Over (TO) dataset, the ego-vehicle
+is in motion, and one or two vehicles perform an overtake
+manoeuvre. The dataset contains 3,005 one-second labeled
+audio frames: 2,263 with one vehicle, and 742 with two.
+
+
+4
+Fig. 2: Overview of the proposed two-stage pipeline. Stage 1 - JEPA-inspired pre-training (self-supervised): the online
+encoder fθ maps the past frame xn−2 ∈RM×L to a latent vector zn−2 ∈RD; the predictor gϕ forecasts the future frame xn,
+supervised by the target encoder f¯θ via LJEPA (Eq. 5); gradients flow through fθ and gϕ only, after which gϕ is discarded and
+weights θ are transferred to Stage 2. Stage 2 - Multi-task fine-tuning (supervised): the three frames of Wn are encoded
+independently, yielding (zn−2, zn−1, zn), processed by a bidirectional LSTM whose final hidden state ←→
+h n passes through a
+shared dropout-MLP block and three linear head predicting direction (5 classes), count (3 classes), and vehicle type (4 classes)
+via L (Eq. 6, λ=5).
+Fig. 3: Sensor configuration used in data collection. In (a):
+schematic top-view representation; In (b), GPS (1) and cam-
+era–microphone (2) system mounted on the vehicle.
+To annotate the dataset, when labels are not available di-
+rectly from the experiments’ design, we leveraged the cameras
+and the labels given by YOLOv26x [19] running on the front
+camera images for static scenarios and on all three camera
+images for the others (mistakes were manually corrected). We
+assign labels for all the tasks we carry on: three classes (0, 1,
+2) to indicate the numer of vehicles in the scene; four classes
+(car, van, car+van, none) to indicate the vehicle type, and five
+classes (left, front, right, none, both) to represent the direction
+of arrival/departure of a vehicle. More specifically, we assign
+the front label to any vehicle visible in the front camera’s 93◦
+cone, left to vehicles entering or leaving via the left camera,
+and right via the right camera. The label both refers to two
+vehicles approaching from opposite directions, the label none
+indicates no vehicles. In the driving scenarios, a vehicle that
+has not yet reached either lateral camera is labelled as back.
+All models are trained and evaluated on the TJ dataset:
+5,458 frames for training, 1,369 frames across 78 for val-
+idation. The TO dataset is held out from all training stages,
+including self-supervised pre-training, and is used only for the
+cross-scenario evaluation of Section IV-D.
+B. Experiment 1
+Table I shows the performance of our model (indicated as
+Proposed), and a comparison against the state of the art. We
+evaluate the accuracy in the Direction tasks of the models in
+[1], [3], and [2], trained and tested on the TJ dataset (same
+split). Those models rely on a four-class schema for single-
+vehicle scenarios. Our method uses the extended five-class
+taxonomy, covering multiple simultaneous vehicles. Compared
+to the strongest prior result, even considering an additional
+class, our approach yields a 9.1% improvement. We believe
+this is due to the JEPA-inspired stage of our method, capturing
+better representations compared to SOTA supervised models,
+and perform well also on smaller datasets, like ours.
+
+
+5
+(a)
+(b)
+(c)
+(d)
+(e)
+(f)
+Fig. 4: Reference scenarios ; ego-vehicle in blue. (a-d) static
+(T-junction): one (a) or two vehicles (b,c) approaching from
+the same direction (one vehicle occluding the other); two ve-
+hicles approaching from different directions (d). (e-f) driving
+(take-over): one (e) or two vehicles (f) approaching from the
+back and overtaking the ego-vehicle.
+As being the only other work carrying out all three tasks, we
+also compare ourselves against [5], trained and tested on the
+TJ dataset (same split). Our model shows an improvement of
+21.2% in the Direction task, 40.1% in the Type task, and 5.6%
+in the Count task. Table II (left columns) reports per-class
+recall on the TJ validation set. Classes none (94.4%) and both
+(100.0%) are the ones characterised by the highest accuracy:
+the absence of any acoustic source and the simultaneous
+presence of two vehicles coming from both sides produce
+discriminating signatures. The most often confused is the front
+class (60.0%), with the BiLSTM reacting with some delay to
+the class change. For instance, a vehicle approaching from
+the left, whose DoA is initially, and correctly, classified as
+left might be kept considered as such when it enters the front
+class. More details are provided in Section IV-E2. Recall in
+the Count task exceeds 93% across all classes, indicating that
+the self-supervised learning (SSL) representations encode the
+presence and number of distinct acoustic sources, without any
+architecture designed for counting. Vans achieve the highest
+recall (97.0%) in the Type task, likely due to their distinctive
+low-frequency engine signature.
+C. Experiment 2
+Table I includes also the results of ablation studies run to
+experimentally evaluate the rationale of our design choices. We
+can observe that the LSTM-only baseline provides the worst
+performance: without the SSL inductive bias, the supervised
+signal alone is insufficient to learn generalised representations.
+We also note that the difference between frozen and unfrozen
+learning at stage 2 does not impact performance much, but
+helps better appreciate the direction task. The Ablation -
+prediction-target compares three configurations of the same
+encoder-predictor architecture, differing only in which frames
+act as context and target. The two-step horizon predicts xn
+from xn−2; the one-step variant predicts xn from xn−1; the
+interpolation variant recovers xn−1 from {xn−2, xn}. In the
+Ablation - context window, the two-step horizon yields the best
+performance (81.8% direction, vs. 80.8% one-step and 79.3%
+interpolation), and is our default. One possible interpretation is
+that one-step prediction can be largely achieved by extending
+short-time spectral content from the immediately preceding
+frame, providing a weaker inductive bias than the longer
+horizon; conversely, predicting the masked intermediate frame
+from a bidirectional context turns the pretext task closer to
+reconstruction than to forecasting.
+TABLE I: Results obtained in Experiment 1 and 2, expressed
+as accuracy (%) in the three tasks: Direction, Count, and
+Type. The symbol ‘−’ stands for ‘not applicable’.
+Method / Config.
+Direction Count Type
+Baselines
+LSTM only
+33.7
+47.0
+40.0
+Related Works
+DCASE baseline [5]
+67.5
+89.5
+66.9
+SRP-PHAT + SVM [1]
+53.4
+-
+-
+DOA + TF + CNN [3]
+61.9
+-
+-
+Mel spec. + CNN [2]
+75.0
+-
+-
+Proposed
+SSL + BiLSTM (frozen)
+79.9
+94.1
+93.2
+SSL + BiLSTM (fine-
+tuned)
+81.8
+94.5
+93.7
+Ablation — prediction target
+Interpolation
+79.3
+89.0
+87.3
+One-step
+80.8
+94.1
+92.5
+Ablation — context window
+2 s window
+80.4
+93.1
+91.1
+3 s window (ours)
+81.8
+94.5
+93.7
+4 s window
+81.0
+95.3
+93.5
+D. Experiment 3
+We investigate whether the model can generalise to unseen
+scenarios. The TO dataset is held out from all training stages.
+After training on the static TJ dataset, we compare three
+adaptation strategies:
+• Option A (head-only): the SSL encoder fθ is frozen; only
+the BiLSTM, shared MLP, and heads are fine-tuned.
+• Option B (full-model): all components are fine-tuned,
+with a small encoder learning rate (ηenc=10−5) to limit
+forgetting.
+• Option C (SSL re-pretraining + head): the temporal-
+prediction objective (Section III-B) is re-applied for 30
+epochs on the unlabeled support audio, updating the
+encoder only; the BiLSTM and heads are then fine-tuned
+as in Option A.
+The TO dataset introduces one new direction class, back,
+absent from the static training set. The direction head is
+extended from 5 to 6 output neurons before fine-tuning, with
+the back weights and bias initialised to zero; the count and type
+
+
+6
+heads are unchanged. One shot is one complete take-over data
+point (10-30 one-second frames). Each (K-shot, Option) con-
+figuration is evaluated over N=10 random draws; fine-tuning
+runs for 15 epochs at ηhead=5×10−4, with the same weighting
+λ=5 as in base training. Direction recall is computed only over
+classes present in the TO data; none and both are excluded.
+1) Zero-shot transfer: At K=0, overall direction accuracy
+is 2.3%, effectively zero by construction: the back neuron
+is initialised to zero and cannot be predicted until the head
+receives gradient updates. Count and type accuracy collapse
+to 8.2% and 6.5%, reflecting the distribution shift between
+stationary and dynamic conditions.
+2) Few-shot adaptation: With K=5 support points, overall
+direction accuracy reaches 54.5-55.8% across the three op-
+tions, rising to 69.2-70.1% at K=10 (Table II). The ranking
+among options is not stable across shot counts, and the spread
+between them is small relative to the standard deviation across
+the N=10 random data points. We read this as evidence that
+the three strategies are practically equivalent at the support
+sizes tested: the frozen SSL representations already suffice
+for driving-scenario adaptation, and neither full-model fine-
+tuning (Option B) nor SSL re-pretraining (Option C) measur-
+ably beats head-only adaptation (Option A). The same near-
+equivalence holds for count and type.
+3) Per-class behaviour under class imbalance: Per-class
+recall reveals two effects of class imbalance in the TO dataset:
+the right class stays persistently low (≤13% at both 5- and
+10-shot), and the left class is non-monotonic, declining from
+32.4% at 5-shot to 15.6% at 10-shot under Option A. This
+points to two future directions: collecting more diverse data
+to decrease the representation gap, and developing methods for
+better zero-shot understanding of long-tailed scenarios, since
+real-world traffic is inherently asymmetric and balanced data
+sets cannot be assumed.
+E. Qualitative Analysis
+1) Detection horizon outside the Field-of-View (FoV): For
+each of the 38 validation scenarios where vehicles are entering
+the FoV approaching it from the left/right, the detection
+horizon is defined as the longest run of consecutive 1s frames
+classified correctly, ending at the frame immediately preceding
+the vehicle’s entry into the camera’s FoV. A single frame
+classified differently terminates the run, so the metric is
+conservative. The model achieves a mean detection horizon of
+4.6 s (median 5.0 s), with 77% of scenarios providing at least
+1s of advance prediction and 62% at least 3s. Those results
+further highlight the benefits in the use of sound to anticipate
+the presence of a traffic agent before it becomes visible,
+allowing for longer response times and increased safety.
+2) Front-class error pathology: In Experiment 1 the front
+class yield 60.0% recall. In an attempt to investigate the
+reasons making it the hardest to recognise, we analyse when
+most errors take place. The intuition is that the Direction
+classes, identified by the cone described in Figure 3 are
+rather arbitrary and not acoustically grounded, thus mistakes
+in the transitions are physiological. We divide the class into
+three subclasses: entering, front, leaving. The entering subclass
+Fig. 5: Predictions on the front class in the Direction task,
+broken down by frame position within the front visibility cone
+(cf., Section IV-E2); each row reports the share of predictions
+in each subclass. k the number of frames.
+contains all samples corresponding to the first 1s frame where
+the vehicle just becomes visible when entering the “front
+visible cone” from left or right. The leaving subclass contains
+all samples corresponding to the last 1s frame where the
+vehicle is still visible before leaving from the “front visible
+cone” heading left or right. The front subclass contains all the
+remaining samples from the original front class. Fig. 5 reports
+the results of the analysis. As we can see, most mistakes
+happen when “transitioning” from the left/right classes to the
+front and viceversa, supporting the initial intuition.
+3) Dynamics and Types Representations: We analyse the
+SSL latent abilities to capture jointly the dynamics and the
+type of the sound sources, and ask what the representation
+actually contains without supervision. Figure 6 shows a UMAP
+[20] projection of the learned latents. Three structural facts
+are visible. First, silence consistently lives outside the active
+manifold: the none class of direction, the 0 class of count,
+and the none class of type occupy the same peripheral islands,
+indicating a stable no vehicle state separated from any vehicle
+activity. Second, the dominant axis within the active manifold
+separates one-vehicle from two-vehicle scenarios. Figure 6-
+b shows a clean spatial gradient with two-vehicle frames (2)
+on the left and one-vehicle frames (1) on the right. Figure
+6-c inherits this structure since two-vehicle scenarios are
+always car+van pairs by recording protocol. Third, within
+the one-vehicle subset of 6-c, car is less clustered than van,
+demonstrating a weaker representation of this class. Figure
+6-a shows that direction-of-arrival classes form recognisable
+regions: left (blue) and right (green) occupy opposite sides
+of the active manifold, both (orange) clusters tightly on the
+left edge where the two-vehicle region lies, and front (yellow)
+intermixes with the others, partially in coherence with the two
+opposite sides, but also highlighting the encoder’s limits to
+capture the spatial structure of that class.
+V. CONCLUSION
+We introduced a multi-task acoustic perception framework
+that estimates the direction, the number, and the type of
+occluded vehicles in the scene. The framework works directly
+on the raw audio signals and provides robust predictions
+every second. Experimental evaluation showed that our method
+outperforms the state of the art, and further stressed the crucial
+role that auditory perception can play. Future work might
+
+
+7
+TABLE II: Per-class recall (%) of the proposed model on the TJ (static) validation set and on the TO (driving) dataset. Static
+results correspond to the best checkpoint trained on T-junction data only. Driving results are reported for the three adaptation
+strategies: A (head-only), B (full-model), C (SSL re-pretraining + head). For K>0, each cell reports mean, ± std over N=10
+random support-set draws. At zero-shot (K=0) no fine-tuning is performed and the three options are identical. N/A stands for
+‘Not Available’, as the class is not present in this scenario.
+TO Dataset
+0-shot
+5-shot
+10-shot
+Task Class
+TJ Dataset
+all
+A
+B
+C
+A
+B
+C
+Direction
+left
+81.8
+1.7
+32.4±22.0 31.4±20.9 28.4±18.8
+15.6±17.3 17.7±17.6 20.9±15.5
+front
+60.0
+5.6
+60.4±18.0 60.3±17.2 57.9±20.3
+70.8±8.2
+70.7±8.0
+71.7±6.0
+right
+71.3
+13.0
+6.0±2.4
+4.3±3.2
+0.0±0.0
+8.0±7.6
+9.0±7.0
+4.7±8.2
+back
+N/A
+0.0
+57.7±29.0 60.4±27.6 62.1±27.6
+83.7±23.7 82.9±23.4 80.3±17.3
+none
+94.4
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+both
+100.0
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+Overall
+81.8
+2.3
+54.5±10.9 55.8±10.2 55.5±10.3
+70.1±10.1
+69.9±9.9
+69.2±7.4
+Count
+0 vehicles
+94.4
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+1 vehicle
+95.5
+7.8
+94.8±4.0
+95.7±3.8
+93.7±8.2
+94.8±3.4
+95.4±2.7
+93.6±9.0
+2 vehicles
+93.8
+9.3
+49.9±24.0 47.3±26.0 38.4±33.5
+59.0±16.6 58.8±17.9 48.5±27.0
+Overall
+94.5
+8.2
+83.2±4.5
+83.2±5.1
+79.4±4.7
+85.7±3.1
+86.2±3.7
+82.1±6.2
+Type
+car
+85.7
+9.6
+52.5±31.3 52.7±31.9 53.3±33.6
+57.3±20.2 57.8±21.7 53.3±25.5
+van
+97.0
+0.4
+54.0±32.7 55.0±33.6 51.1±36.2
+53.7±17.1 53.2±18.5 55.0±21.3
+car+van
+94.2
+8.4
+51.5±21.7 48.9±24.5 38.6±32.3
+62.2±16.0 61.6±17.8 50.0±26.3
+none
+94.7
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+Overall
+93.7
+6.5
+52.1±7.8
+51.8±7.9
+48.2±9.7
+56.8±3.6
+56.7±3.9
+52.2±4.3
+(a)
+(b)
+(c)
+Fig. 6: UMAP projection of the frozen-encoder validation latents
+(same projection coordinates across all panels), coloured by the three
+downstream classification labels. (a) Direction (b) Count (c) Type.
+proceed along two main directions: the extension to scenarios
+with more than 2 vehicles present, where localisation is refined
+to a regression task (i.e., from classes to continuous angles),
+and the integration into a multimodal system.
+VI. ACKNOWLEDGEMENT
+This work was supported by the Fraunhofer IDMT institute
+for the materials to do the data collection part. Thanks to the
+hearing car team and employees from the institute, we were
+able to collect data in a controlled and safe environment for
+the experiments.
+REFERENCES
+[1] Y. Schulz, A. K. Mattar, T. M. Hehn, and J. F. P. Kooij, “Hearing
+what you cannot see: Acoustic vehicle detection around corners,” IEEE
+Robotics and Automation Letters, vol. 6, no. 2, pp. 2587–2594, 2021.
+[2] D. Li, “Sound source localization of cars at intersections based on deep
+learning,” in 2023 IEEE 6th International Conference on Information
+Systems and Computer Aided Education (ICISCAE), 2023, pp. 377–381.
+[3] M. Hao, F. Ning, K. Wang, S. Duan, Z. Wang, D. Meng, and P. Xie,
+“Acoustic non-line-of-sight vehicle approaching and leaving detection,”
+IEEE Transactions on Intelligent Transportation Systems, vol. 25, no. 8,
+pp. 9979–9991, 2024.
+[4] M. Jeon, J.-K. Cho, H.-Y. Kim, B. Park, S.-W. Seo, and S.-W. Kim,
+“Non-line-of-sight vehicle localization based on sound,” IEEE Transac-
+tions on Intelligent Transportation Systems, vol. 26, no. 2, pp. 2321–
+2338, 2025.
+[5] S. Damiano, L. Bondi, S. Ghaffarzadegan, A. Guntoro, and T. van
+Waterschoot, “Can synthetic data boost the training of deep acoustic
+vehicle counting networks?” in Proceedings of the 2024 International
+Conference on Acoustics, Speech and Signal Processing (ICASSP)
+(accepted), Seoul, South Korea, April 2024.
+[6] S. Araki, N. Ito, R. Haeb-Umbach, G. Wichern, Z.-Q. Wang, and Y. Mit-
+sufuji, “30+ years of source separation research: Achievements and
+future challenges,” in ICASSP 2025-2025 IEEE International Conference
+on Acoustics, Speech and Signal Processing (ICASSP).
+IEEE, 2025,
+pp. 1–5.
+[7] Y.
+LeCun,
+“A
+path
+towards
+autonomous
+machine
+intelligence,”
+OpenReview, 2022. [Online]. Available: https://openreview.net/forum?
+id=BZ5a1r-kVsf
+[8] M. Assran, Q. Duval, I. Misra, P. Bojanowski, P. Vincent, M. Rab-
+bat, Y. LeCun, and N. Ballas, “Self-supervised learning from images
+with a joint-embedding predictive architecture,” in Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 2023, pp. 15 619–15 629.
+[9] B. Fatimah, A. Preethi, V. Hrushikesh, A. Singh, and H. R. Kotion, “An
+automatic siren detection algorithm using fourier decomposition method
+and mfcc,” in 2020 11th IEEE Int. Conf. on Computing, Communication
+and Networking Technologies (ICCCNT), 2020, pp. 1–6.
+[10] L. Marchegiani and P. Newman, “Listening for sirens: Locating and
+classifying acoustic alarms in city scenes,” IEEE Transactions on
+Intelligent Transportation Systems, vol. 23, no. 10, pp. 17 087–17 096,
+2022.
+[11] J. H. Dibiase, “A high-accuracy, low-latency technique for talker lo-
+calization in reverberant environments using microphone arrays,” Ph.D.
+dissertation, Brown University, Rhode Island, Aug. 2000.
+[12] A. Saeed, D. Grangier, and N. Zeghidour, “Contrastive learning of
+general-purpose audio representations,” in ICASSP 2021 - 2021 IEEE
+International Conference on Acoustics, Speech and Signal Processing
+(ICASSP), 2021, pp. 3875–3879.
+[13] P.-Y. Huang, H. Xu, J. Li, A. Baevski, M. Auli, W. Galuba, F. Metze,
+
+
+8
+and C. Feichtenhofer, “Masked autoencoders that listen,” in Advances
+in Neural Information Processing Systems (NeurIPS), vol. 35, 2022.
+[14] A. Baevski, H. Zhou, A. Mohamed, and M. Auli, “wav2vec 2.0: A
+framework for self-supervised learning of speech representations,” in
+Advances in Neural Information Processing Systems (NeurIPS), vol. 33,
+2020, pp. 12 449–12 460.
+[15] A. Bardes, Q. Garrido, J. Ponce, M. Rabbat, Y. LeCun, M. Assran,
+and N. Ballas, “Revisiting feature prediction for learning visual
+representations from video,” arXiv preprint arXiv:2404.08471, 2024.
+[Online]. Available: https://arxiv.org/abs/2404.08471
+[16] L. Tuncay, E. Labb´e, E. Benetos, and T. Pellegrini, “Audio-jepa: Joint-
+embedding predictive architecture for audio representation learning,”
+2025. [Online]. Available: https://arxiv.org/abs/2507.02915
+[17] J.-B.
+Grill,
+F.
+Strub,
+F.
+Altch´e,
+C.
+Tallec,
+P.
+H.
+Richemond,
+E. Buchatskaya, C. Doersch, B. A. Pires, Z. D. Guo, M. Ghesh-
+laghi Azar, B. Piot, K. Kavukcuoglu, R. Munos, and M. Valko, “Boot-
+strap your own latent: A new approach to self-supervised learning,” in
+Advances in Neural Information Processing Systems (NeurIPS), vol. 33,
+2020, pp. 21 271–21 284.
+[18] D. P. Kingma and J. Ba, “Adam: A method for stochastic optimization,”
+in International Conference on Learning Representations (ICLR), 2015.
+[19] R. Sapkota, R. H. Cheppally, A. Sharda, and M. Karkee, “Yolo26:
+Key
+architectural
+enhancements
+and
+performance
+benchmarking
+for real-time object detection,” 2026. [Online]. Available: https:
+//arxiv.org/abs/2509.25164
+[20] L.
+McInnes,
+J.
+Healy,
+N.
+Saul,
+and
+L.
+Großberger,
+“Umap:
+Uniform manifold approximation and projection,” Journal of Open
+Source Software, vol. 3, no. 29, p. 861, 2018. [Online]. Available:
+https://doi.org/10.21105/joss.00861

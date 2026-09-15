@@ -1,0 +1,1148 @@
+Learning Communication-Conditioned Generative Policies for
+Decentralized Multi-Agent Collision Avoidance
+Prajwal Koirala1 and Mark Campbell1
+Abstract— In
+this
+work,
+we
+propose
+a
+decentralized
+communication-conditioned generative framework for multi-
+agent collision avoidance. Agents generate short-horizon ac-
+tion sequences using a flow-matching policy trained from
+privileged offline demonstrations with access to global state.
+The demonstrations do not include explicit communication
+signals; instead, agents learn to exchange and aggregate latent
+messages that encode interaction-relevant intent under partial
+observability. This formulation supports flexible inference at
+test time, where unconditioned generation corresponds to inde-
+pendent behavior and communication-conditioned generation
+enables coordinated interaction without centralized planning.
+The resulting policies operate in a fully decentralized manner
+at execution time, relying only on local observations and learned
+messages. Combined with a receding-horizon inference scheme,
+the proposed approach enables efficient single-step inference
+of short-horizon action sequences and degrades gracefully
+under communication dropouts. Extensive simulation results
+demonstrate near-expert collision avoidance performance and
+strong generalization to denser, unseen multi-agent scenarios,
+along with zero-shot transfer to real-robot experiments.
+I. INTRODUCTION
+Multi-agent navigation arises in applications such as au-
+tonomous driving, warehouse robotics, aerial swarms, and
+pedestrian modeling, where agents must reach individual
+goals while operating in shared environments. As density
+and heterogeneity increase, ensuring safe and efficient inter-
+action becomes critical. Collision avoidance is central to this
+problem: each agent must reason about its own dynamics
+and objectives while anticipating the intentions and future
+motions of others. The challenge is amplified by decen-
+tralization, as agents rely on local observations and must
+act under partial observability without explicit coordination
+[1]. Designing scalable collision avoidance strategies in such
+settings remains a fundamental challenge in robotics.
+Classical approaches to goal-oriented multi-agent collision
+avoidance, such as Reciprocal Velocity Obstacles (RVO) and
+ORCA, rely on strong assumptions about agent dynamics,
+sensing accuracy, and reciprocal compliance [2], [3], [4].
+While these methods offer elegant guarantees under ideal-
+ized conditions, their performance often degrades in dense
+environments or in the presence of heterogeneous agents
+whose interaction dynamics deviate from hand-crafted rules.
+Learning-based approaches provide an appealing alternative
+*This work was supported by NSF CPS grant CNS-2211599 and NSF
+FRR grant IIS-2305532.
+1Prajwal Koirala and Mark Campbell are with the Sibley School of
+Mechanical and Aerospace Engineering, Cornell University. {pk596,
+mc288}@cornell.edu
+Code is available at: https://github.com/PrajwalKoirala/
+CommGenPolicy .
+Fig. 1.
+Communication-conditioned generative policy for decentralized
+multi-agent control. Each agent aggregates learned inter-agent messages
+with its local observation to condition a flow-matching policy that generates
+short-horizon action sequences via iterative refinement. The illustration
+highlights an ego agent (right), whose action sequence of horizon length
+K is denoised by repeatedly applying a learned velocity field for S
+integration steps, while coordination emerges through message exchange
+without centralized planning.
+by directly capturing implicit interaction patterns from data.
+Popular learning-based approaches, such as CADRL [5] and
+recent diffusion-based method [6], have demonstrated strong
+performance in multi-agent motion planning. However, many
+of these methods assume centralized control or access to
+privileged global state information during execution, limiting
+their applicability in fully decentralized settings. As a result,
+learned policies often struggle to generalize to realistic multi-
+agent systems in which agents must act solely based on local
+observations.
+Communication mitigates partial observability and en-
+ables coordination in decentralized multi-agent systems. Yet,
+learning-based communication in robotics and autonomous
+driving fleets has largely focused on perception-level objec-
+tives (e.g., detection and tracking), with limited integration
+into downstream decision-making and closed-loop evaluation
+[7]. In contrast, control-theoretic approaches provide prin-
+cipled coordination via distributed optimization, often with
+safety guarantees, but rely on hand-crafted communication
+protocols and explicit models that restrict representational
+flexibility and multimodal fusion [8]. From a learning per-
+spective, communication can be viewed as a representation
+learning problem: agents must learn what information to
+transmit, how to aggregate messages from others, and how
+to use the resulting representation to make interaction-aware
+decisions [9], [10]. How to learn such communication rep-
+arXiv:2609.14268v1  [cs.RO]  13 Sep 2026
+
+
+resentations end-to-end for decentralized collision avoidance
+remains an open question.
+We argue that generative models (like diffusion [11],
+[12] and flow-matching [13], [14]) provide a natural and
+effective framework for communication-conditioned multi-
+agent decision-making. Deterministic, regression-based poli-
+cies are often brittle in interactive environments, where
+multimodal action distributions and distribution shift can lead
+to compounding errors and cascading failures. In contrast,
+generative policies can model complex distributions over ac-
+tions or short-horizon trajectories, allowing them to represent
+multiple valid interaction strategies, which are essential for
+safe multi-agent interaction [15]. In this work, we adopt a
+flow-matching generative policy trained from offline expert
+demonstrations and condition action generation on learned
+inter-agent communication. The expert is a privileged policy
+with access to global state, but the demonstrations themselves
+do not contain explicit communication signals; instead, com-
+munication emerges through end-to-end optimization under
+partial observability. Thus, our formulation naturally supports
+flexible communication-conditioning at inference time: un-
+conditioned generation corresponds to agents acting indepen-
+dently based on local observations, while communication-
+conditioned generation enables interaction-aware decision-
+making without centralized control. Importantly, the pro-
+posed approach also admits efficient single-step inference,
+addressing a key practical challenge in deploying generative
+policies for real-time robotic control.
+Building on this formulation, we develop a fully decen-
+tralized learning and execution framework in which agents
+rely solely on local observations and learned inter-agent
+messages at test time. Communication is learned end-to-end
+and used to condition a receding-horizon generative policy,
+enabling agents to resolve interactions without centralized
+planning or explicit coordination signals. In closed-loop
+simulation, the resulting policies exhibit smooth, interaction-
+aware behavior and degrade gracefully under communication
+dropouts, achieving strong collision avoidance performance
+in dense multi-agent environments. The key contributions of
+this work are threefold:
+• a decentralized communication framework that learns
+interaction-aware messages, aggregating into a consen-
+sus signal for multi-agent collision avoidance;
+• a communication-conditioned flow-matching policy en-
+abling efficient inference while remaining robust to
+communication dropouts and interaction complexity;
+• validation through closed-loop simulation experiments
+that the proposed approach achieves near-expert colli-
+sion avoidance performance and robustness to commu-
+nication dropouts in dense multi-agent environments.
+II. PROBLEM FORMULATION AND PRELIMINARIES
+We consider a decentralized multi-agent collision avoid-
+ance problem in a planar workspace. A set of N agents must
+navigate toward individual goal locations while avoiding
+collisions with other agents. Each agent operates under
+partial observability and makes decisions based solely on
+local sensing and learned communication, without access to
+centralized coordination or global state at execution time. All
+agents are assumed to be homogeneous in terms of dynamics,
+observation models, policy architectures, and communication
+protocols, and may differ only in their instantaneous states,
+physical sizes, and goals. This homogeneity assumption
+enables parameter sharing across agents and supports scala-
+bility to varying team sizes.
+A. Agent Dynamics
+Each agent i ∈{1, . . . , N} is modeled as a circular robot
+with unicycle dynamics. Let p(t)
+i
+∈R2 and θ(t)
+i
+∈R denote
+the position and heading of agent i at time t. The state
+evolves according to
+p(t+1)
+i
+= p(t)
+i
++ v(t)
+i ∆t,
+θ(t+1)
+i
+= θ(t)
+i
++ ∆θ(t)
+i ,
+v(t+1)
+i
+= vcmd,(t)
+i
+"
+cos θ(t+1)
+i
+sin θ(t+1)
+i
+#
+,
+(1)
+where (vcmd
+i
+, ∆θi) are the commanded linear speed and
+heading change issued by the agent’s policy, and ∆t denotes
+the control timestep.
+B. Observation Model
+At each timestep, agent i receives a local observation
+vector o(t)
+i
+expressed in its ego-centric coordinate frame.
+The observation consists of goal-related information, self-
+state features, and limited information about a nearby agent:
+oi =
+h
+dgoal
+i
+ϕi
+vpref
+i
+ri
+p∥
+i,1
+p⊥
+i,1
+v∥
+i,1
+v⊥
+i,1
+i⊤
+. (2)
+Here, dgoal
+i
+= ∥gi −pi∥denotes the distance to the goal, ϕi
+is the relative heading toward the goal in the ego frame, vpref
+i
+is the preferred speed, and ri is the ego agent’s radius.
+The remaining terms describe the relative position and
+velocity of the nearest neighboring agent, projected onto
+the ego-frame basis {e∥
+i , e⊥
+i }. Restricting the observation to
+the closest neighbor ensures scalability and reflects realistic
+sensing limitations, while capturing the most safety-critical
+interaction in dense environments.
+C. Action Space and Receding-Horizon Control
+Each agent policy operates over a continuous per-timestep
+control action space
+ai =
+vi
+∆θi
+⊤∈R2,
+(3)
+corresponding to a speed adjustment and heading change.
+At any timestep t, rather than predicting a single action, the
+proposed policy produces a short-horizon sequence of actions
+at each timestep:
+A(t)
+i
+=
+h
+a(t,1)
+i
+a(t,2)
+i
+· · ·
+a(t,K)
+i
+i⊤
+∈RK×2.
+(4)
+Only the first action a(t,1)
+i
+is executed, and the process is
+repeated at the next timestep, resulting in a receding-horizon
+control scheme [16]. This formulation, detailed in section III-
+E, enables short-term planning while maintaining reactivity
+to changes in the environment.
+
+
+D. Decentralized Communication
+To mitigate partial observability, agents are allowed to ex-
+change learned communication messages. At each timestep,
+agent i computes a latent message mi ∈Rdm based solely
+on its local observation. Messages received from other agents
+are aggregated into a fixed-dimensional communication em-
+beddings, which conditions the ego agent’s policy. Commu-
+nication is fully decentralized: agents do not have access to
+global state, agent identities, or centralized coordination at
+execution time. The specific message generation, aggrega-
+tion mechanism, and conditioning strategy are detailed in
+Section III.
+E. Task Objective and Data Collection
+The objective of each agent is to reach its goal location
+while avoiding collisions with other agents. A collision is
+defined to occur when the distance between any pair of
+agents i̸ = j satisfies ∥pi −pj∥≤ri + rj. An episode
+terminates when all agents reach their goals within a toler-
+ance εgoal, a collision occurs, or a maximum time horizon
+Tmax is exceeded.
+Training data is collected using the CADRL [5], which
+serves as a privileged expert policy with access to the
+states of all other agents in the scene, expressed in the
+ego agent’s local reference frame. This observation space
+is strictly richer than the local observation model described
+in Section II-B. Although CADRL demonstrations do not
+include explicit communication signals, they exhibit coor-
+dinated collision-avoidance behaviors enabled by access to
+centralized multi-agent state information. While learning-
+based methods achieve strong performance, their reliance on
+privileged observations during execution limits applicability
+in fully decentralized settings. In contrast, our goal is to
+learn policies that operate under decentralized execution with
+partial observability and uncertain communication. To this
+end, we leverage privileged expert demonstrations during
+training and distill the resulting behaviors into agent policies
+that rely solely on local observations and learned inter-agent
+communication for robust collision avoidance [17].
+F. Generative Models and Flow Matching Policies
+Generative models provide a flexible alternative to uni-
+modal policies by modeling distributions over actions or
+short-horizon trajectories. In robotics, diffusion-based poli-
+cies generate action sequences through iterative denoising
+and have demonstrated strong performance when trained
+from offline demonstrations. These approaches interpret con-
+trol as sampling from a learned conditional distribution
+rather than predicting a single action [15]. Flow matching
+offers a closely related but deterministic and computation-
+ally efficient alternative. Instead of learning a reverse-time
+stochastic process, flow matching directly learns a time-
+dependent vector field that transports samples from a simple
+base distribution to the data distribution along a predefined
+interpolation [13], [14]. Let xτ ∈Rd denote an intermediate
+latent sample at interpolation time τ ∈[0, 1], where τ = 0
+corresponds to noise (e.g., x0 ∼N(0, I)) and τ = 1 cor-
+responds to dataset sample x1 ∼D (eg. action sequences).
+Flow matching learns a velocity field uθ satisfying
+dxτ
+dτ = uθ(xτ, τ, o),
+(5)
+where o denotes the conditioning input, such as the agent’s
+observation. Given a learned velocity field uθ, samples from
+the data distribution can be generated by numerically inte-
+grating this ordinary differential equation, e.g., using Euler
+updates. As detailed in Section III-B, the conditioning input
+may additionally include learned inter-agent communication
+signals, enabling interaction-aware action generation while
+preserving decentralized execution.
+III. METHODOLOGY
+A. Communication and Message Passing
+In our decentralized multi-agent setting, each agent acts
+based on its local observation and information exchanged
+through learned communication signals. This section de-
+scribes the communication mechanism used to summarize
+interaction-relevant information from other agents and pro-
+vide a conditioning signal for the generative policy intro-
+duced in Section III-B. We first define how agents emit
+messages from local observations, and then describe how
+these messages are aggregated into a shared representation
+that supports coordinated decision-making under decentral-
+ized execution.
+a) Message Emission.: At each time step t, agent i
+produces a latent message
+m(t)
+i
+= Mθ1
+ o(t)
+i
+
+,
+(6)
+where o(t)
+i
+denotes the agent’s local observation and Mθ1
+is a shared message encoder applied independently across
+agents. The message m(t)
+i
+∈Rd is a compressed latent rep-
+resentation and is not required to explicitly encode physical
+state or future actions.
+b) Pairwise Interaction Encoding.: To model directed
+interactions between agents, each ordered agent pair (i, j)
+forms a pairwise interaction token
+z(t)
+ij = Iθ2
+
+m(t)
+i , m(t)
+j
+
+,
+(7)
+where Iθ2 is a learned interaction encoder shared across all
+agent pairs. In parallel, a scalar compatibility score
+α(t)
+ij = αθ3
+
+m(t)
+i , m(t)
+j
+
+(8)
+is computed for the same pair. Self-interactions are masked.
+c) Attention-Based
+Aggregation:
+The
+compatibility
+scores are normalized across agents to form a stochastic
+attention [18] distribution
+w(t)
+ij =
+exp(α(t)
+ij )
+P
+ℓ̸=i exp(α(t)
+iℓ)
+,
+(9)
+and the aggregated communication vector processed by agent
+i is given by
+¯m(t)
+i
+=
+X
+j̸=i
+w(t)
+ij z(t)
+ij .
+(10)
+
+
+This aggregation is permutation-invariant and relies only
+on locally exchanged messages, preserving decentralization.
+Additionally, the aggregated vector ¯m(t)
+i
+can be interpreted
+as a soft consensus over interaction-relevant information
+from other agents, providing a latent summary of how
+their behavior is expected to influence agent i over a short
+horizon. Rather than enforcing explicit agreement or shared
+plans, the attention-weighted aggregation induces a soft form
+of consensus by allowing each agent to adapt its internal
+representation based on a learned, weighted summary of
+others’ messages. From this perspective, m(t)
+i
+characterizes
+interaction intent in a latent and task-dependent manner,
+without requiring predefined semantics or explicit coordina-
+tion protocols.
+The communication module is intentionally lightweight
+and free of privileged information. Its parameters are trained
+jointly with the conditional generative policy and are fur-
+ther shaped by an auxiliary distillation objective [19], [17]
+described in Section III-C. We next describe how the aggre-
+gated intent embeddings condition the generation of short-
+horizon action sequences.
+B. Conditional Generative Policy
+We model each agent’s decision-making process as condi-
+tional generation of a short-horizon action sequence, where
+conditioning occurs through the learned communication em-
+beddings described in Section III-A. This separation allows
+interaction reasoning to be captured in a compact latent form,
+while action generation is handled by a scalable generative
+policy.
+a) Flow-Based Policy Parameterization: We parame-
+terize the policy using a conditional flow-matching model
+that transports samples from a simple base distribution to the
+target action-sequence distribution. Let ϵ ∼N(0, I) denote
+a noise sample of the same dimension as the action sequence
+A(t)
+i . For an interpolation variable τ ∼U[0, 1], we define the
+linear interpolation
+Aτ = τ A(t)
+i
++ (1 −τ) ϵ.
+(11)
+The conditional velocity field
+uθ
+
+Aτ, o(t)
+i , τ, ¯m(t)
+i
+
+(12)
+is implemented as a neural network and predicts the transport
+velocity at interpolation time τ, conditioned on the agent’s
+local observation and aggregated communication embedding.
+b) Conditional Flow-Matching Objective: The condi-
+tional flow-matching loss is defined as
+LCFM = EA,ϵ,τ
+uθ
+
+Aτ, o(t)
+i , τ, ¯m(t)
+i
+
+−
+
+A(t)
+i
+−ϵ
+
+2
+2
+
+,
+(13)
+which trains the model to recover the optimal transport
+vector field under conditioning. Gradients from this objective
+propagate through both the generative policy and the commu-
+nication module, enabling end-to-end learning of interaction-
+aware action generation.
+c) Unconditional Flow-Matching Objective: In addi-
+tion to conditional generation, we incorporate an uncondi-
+tional flow-matching objective that excludes communication
+conditioning:
+LUFM = EA,ϵ,τ
+uθ
+
+Aτ, o(t)
+i , τ, ∅
+
+−
+
+A(t)
+i
+−ϵ
+
+2
+2
+
+,
+(14)
+where ∅represents the unconditional embedding. This ob-
+jective regularizes the base generative dynamics and sta-
+bilizes training, but does not contribute gradients to the
+communication module. As a result, learned messages are
+shaped exclusively by interaction-relevant conditional gener-
+ation rather than by marginal action statistics.
+C. Privileged Teacher and Distillation
+While communication in Section III-A is learned end-to-
+end through the conditional generative objective, we addi-
+tionally introduce a privileged interaction model to shape
+the semantics of the learned messages. This model acts
+as a teacher that encodes predictive beliefs about near-
+term system evolution using information unavailable at test
+time, and supervises the communication module through an
+auxiliary distillation objective.
+a) Privileged Interaction Transformer: We instantiate
+the teacher as a transformer-based interaction encoder
+h(t) = Tϕ
+n
+o(t)
+i , g(t)
+i
+oN
+i=1
+
+,
+(15)
+where o(t)
+i
+denotes the local observation of agent i, and
+g(t) denotes privileged global reference information available
+only during training (global ego and goal- coordinates).
+The output h(t) = {h(t)
+i }N
+i=1 is a set of agent-wise latent
+intent embeddings. The transformer architecture [20] enables
+joint reasoning over agents and produces representations that
+encode interaction-relevant predictive structure rather than
+explicit actions.
+Fig. 2.
+Privileged teacher and decentralized distillation. Global interaction
+structure is learned by a transformer teacher and distilled into a lightweight
+communication module whose aggregated messages condition decentralized
+generative policies at test time.
+
+
+b) Teacher Training Objective: The teacher is trained
+independently via a reconstruction objective that encourages
+each latent embedding h(t)
+i
+to capture information sufficient
+to predict the agent’s immediate future observation:
+Lintent = E
+Dψ
+
+h(t)
+i
+
+−o(t+1)
+i
+
+2
+2
+
+,
+(16)
+where Dψ is a lightweight decoder. Gradients from Lintent
+update both the transformer parameters ϕ and the decoder
+parameters ψ, yielding a latent representation that reflects
+the teacher’s predictive belief over near-term state evolution.
+c) Distillation into Communication Messages: To align
+the learned communication embeddings with the teacher’s
+predictive structure, we reuse the decoder Dψ to define an
+auxiliary loss on the aggregated messages ¯m(t)
+i
+produced by
+the communication module:
+Laux = E
+Dψ
+
+¯m(t)
+i
+
+−o(t+1)
+i
+
+2
+2
+
+.
+(17)
+Importantly, during optimization of Laux, gradients are prop-
+agated only to the communication parameters and not to
+the decoder Dψ. The decoder therefore serves as a fixed
+projection that defines the semantic target space for the
+messages, preventing collapse to trivial encodings.
+This training procedure induces a clean separation of func-
+tional roles across components. A privileged transformer,
+with access to global state information during training, is
+responsible for learning a predictive belief representation
+that captures short-horizon system evolution and encodes the
+latent intent of the expert agents used to generate the data
+[21]. In parallel, a decentralized communication module is
+trained to approximate this belief representation using only
+local observations and inter-agent message passing, thereby
+learning a distributed surrogate of the privileged belief with-
+out direct access to global inputs. The resulting messages are
+then consumed by a communication-conditioned generative
+policy, which is trained without exposure to any privileged
+information and relies solely on the learned messages for co-
+ordination. Consequently, the messages encode interaction-
+relevant intent rather than raw observations or explicit action
+proposals, enabling effective conditioning of the generative
+policy while strictly preserving decentralized execution at
+test time. From a probabilistic perspective, the privileged
+transformer acts as a teacher that defines a latent belief over
+short-term system dynamics, while the communication mod-
+ule learns a constrained approximation of this belief through
+an auxiliary distillation objective that shapes the geometry
+of the message space without directly prescribing policy
+outputs. The final multi-agent behavior thus emerges from
+the downstream conditional generative objective described in
+Section III-B, rather than being imposed by the distillation
+process itself.
+D. Overall Training Objectives and Optimization
+We train the full system using a composite objective that
+combines conditional generation, auxiliary regularization,
+and privileged supervision. The total loss is given by
+Ltotal = LCFM + λ1 LUFM + λ2 Laux + Lintent,
+(18)
+where λ1, λ2 < 1 weight auxiliary objectives that support,
+but do not dominate, the primary conditional generative
+training signal. Overall, LCFM provides the dominant end-
+to-end learning signal, while auxiliary losses shape repre-
+sentation geometry and stabilize training without introducing
+privileged information into inference-time components.
+E. Decentralized Inference and Receding-Horizon Execution
+At evaluation time, agents execute policies in a fully
+decentralized manner, using only local observations and
+learned communication. No privileged information, central-
+ized coordination, or teacher models are accessed. Rather
+than predicting a single control input, the policy generates
+a short-horizon action sequence A(t)
+i
+of which only the first
+action a(t,1)
+i
+is executed by the agent i at timestep t. The
+remaining actions serve as an internal plan refined over time.
+At each time step, agents exchange messages and compute
+aggregated representations
+¯m(t)
+i
+following Section III-A.
+These aggregated messages condition the generative policy
+during action sequence generation. Specifically, action se-
+quences are generated by integrating the learned velocity
+field uθ using a small number of explicit Euler steps.
+a) Initialization (first step of an episode): When no
+prior action sequence is available, generation starts from
+Gaussian noise Ai,0 ∼N(0, I). Starting from τ = 0, we
+perform S Euler integration steps:
+Ai ←Ai + 1
+S uθ(o(t)
+i , Ai, τ, ¯m(t)
+i ),
+τ ←τ + 1
+S .
+(19)
+b) Receding-horizon warm start: At subsequent time
+steps, we warm-start generation from the previously pre-
+dicted action sequence A(t−1)
+i
+. To allow adaptation to new
+observations, we partially corrupt the sequence with a Gaus-
+sian sample ϵ ∼N(0, I):
+˜A(t)
+i
+= α A(t−1)
+i
++ (1 −α)ϵ,
+α = 1 −1
+S .
+(20)
+A single denoising step is then applied at time τ = α:
+A(t)
+i
+= ˜A(t)
+i
++ (1 −α)uθ(o(t)
+i , ˜A(t)
+i , α, ¯m(t)
+i ).
+(21)
+c) Execution: Each agent executes only the first action
+a(t,1)
+i
+, discards it from the plan, and repeats the procedure
+at the next time step.
+This receding-horizon inference scheme achieves tem-
+poral consistency through warm-starting while remaining
+responsive to newly acquired observations and inter-agent
+communication. By initializing each inference step from the
+previously selected action sequence, the procedure implicitly
+encourages commitment to a coherent mode of behavior,
+thereby reducing abrupt changes in sequential decisions
+without the need for explicit regularization or smoothing
+terms. As a result, temporal smoothness emerges naturally
+from the inference process itself rather than being imposed
+by auxiliary objectives. Moreover, the warm-started sequence
+
+
+provides a principled fallback mechanism in the presence of
+communication dropouts: when the aggregated message ¯mi
+t
+is unavailable or unreliable, the agent can continue executing
+a consistent plan based on its prior inference. Importantly,
+after initialization, the method requires only a single eval-
+uation of the learned actor vector field uθ per agent at
+each timestep, yielding a computationally efficient inference
+procedure that is compatible with real-time decentralized
+control constraints.
+IV. EXPERIMENTS, RESULTS AND DISCUSSIONS
+A. Overall Results and Generalization Across Agent Scales
+We first evaluate the overall effectiveness of the proposed
+communication-conditioned generative policy and its ability
+to generalize beyond the training regime. All models are
+trained exclusively on trajectories collected from four-agent
+collision avoidance scenarios, while evaluation is performed
+on environments containing N ∈{4, 6, 8} agents. Impor-
+tantly, no additional fine-tuning or retraining is performed
+when increasing the number of agents, making the six-
+and eight-agent evaluations a strict test of out-of-distribution
+(OOD) generalization with respect to agent count. Policies
+are trained in the Gym Collision Avoidance environment
+within We report success rate (fraction of agents reaching
+their goal without collision) and collision rate, averaged
+over complete episodes, including standard deviation across
+multiple random seeds and environment initializations.
+Fig. 3.
+Training dynamics and generalization across agent counts. Success
+rate and collision rate during training, evaluated periodically on environ-
+ments with 4, 6, and 8 agents. Policies are trained exclusively on 4-agent
+demonstrations and evaluated zero-shot on larger agent counts, illustrating
+stable learning and strong generalization to denser multi-agent scenarios.
+a) Learning dynamics: Figure 3 illustrates the evolu-
+tion of success and collision rates as the training proceeds.
+Notably, although optimization is driven solely by four-
+agent data, the learned policy exhibits an improvement in
+performance not only on the in-distribution four-agent setting
+but also on six- and eight-agent scenarios. This indicates
+that the communication module and flow-matching policy
+learn interaction patterns that extrapolate to denser agent
+configurations, rather than overfitting to a fixed agent count.
+b) Quantitative comparison: Table I summarizes the
+performance of the proposed method in comparison with
+centralized policies with access to privileged information,
+decentralized policies without communication, and ablated
+variants of our framework. All methods (except CADRL)
+are trained on 4-agent environments and evaluated on both
+4-agent and 8-agent settings. We report success rate and
+collision rate, averaged over 10 test scenarios and 4 random
+seeds. Across both agent scales, the proposed method con-
+sistently outperforms decentralized baselines and achieves
+performance close to that of privileged controllers. Notably,
+the centralized BC baseline, despite access to all agents’
+observations, lacks a shared global reference frame and thus
+struggles with relative coordination. In contrast, our learned
+communication (requiring no global frame at inference)
+induces a structured interaction representation that enables
+selective attention to relevant peers, effectively resolving co-
+ordination under partial observability. These results suggest
+that learned communication provides both a decentralization
+mechanism and a beneficial inductive bias for multi-agent
+coordination, with privileged training distilling interaction-
+relevant structure into lightweight, targeted signals.
+c) Robustness to heterogeneous behaviors: To further
+stress-test the learned policy, we evaluate scenarios in which
+a subset of two agents follow a non-cooperative policy that
+ignores others and prioritizes goal-reaching exclusively. Even
+under this partial policy mismatch, agents using the proposed
+communication-conditioned generative policy maintain a
+high success rate and avoid most collisions. This suggests
+that the learned policy does not rely on strong assumptions
+of fully cooperative behavior and exhibits robustness to
+partially adversarial or unmodeled agent dynamics, adapting
+effectively in many cases.
+B. Robustness to Communication Dropouts via Receding-
+Horizon Inference
+We evaluate the robustness of the proposed framework to
+intermittent or missing inter-agent communication, a com-
+mon failure mode in real-world multi-robot systems due to
+bandwidth limits, packet loss, or hardware constraints. A
+central design objective of our receding-horizon generative
+policy is to degrade gracefully under such conditions, rather
+than relying on uninterrupted message exchange. To simulate
+communication failures, we introduce message dropouts dur-
+ing evaluation. For each episode, communication is disabled
+for a fraction d% of timesteps, during which agents receive
+no messages from other agents. Agents are not informed
+in advance when communication will be unavailable. All
+Fig. 4.
+Robot trajectories under severe communication dropouts (d =
+50%, 75%, 95%). Circles denote robot footprints, and stars denote goals.
+
+
+TABLE I
+QUANTITATIVE EVALUATION OF MULTI-AGENT COLLISION AVOIDANCE UNDER COOPERATIVE AND PARTIALLY NON COOPERATIVE SETTINGS.
+4 Agents (Train Scale)
+8 Agents (Generalization)
+Method
+Cooperative
+Non-Cooperative
+Cooperative
+Non-Cooperative
+Success ↑
+Collision ↓
+Success ↑
+Collision ↓
+Success ↑
+Collision ↓
+Success ↑
+Collision ↓
+Proposed
+0.97 ± 0.02
+0.03 ± 0.02
+0.80 ± 0.01
+0.19 ± 0.02
+0.92 ± 0.02
+0.06 ± 0.02
+0.79 ± 0.02
+0.19 ± 0.02
+Proposed w/o Communication
+0.31 ± 0.02
+0.69 ± 0.02
+0.36 ± 0.02
+0.64 ± 0.02
+0.52 ± 0.12
+0.47 ± 0.12
+0.48 ± 0.13
+0.50 ± 0.13
+Proposed w/o Auxiliary Loss
+0.86 ± 0.08
+0.14 ± 0.08
+0.75 ± 0.04
+0.25 ± 0.04
+0.93 ± 0.03
+0.07 ± 0.03
+0.77 ± 0.03
+0.23 ± 0.03
+Proposed w/o Unconditioned Loss
+0.87 ± 0.06
+0.13 ± 0.06
+0.81 ± 0.07
+0.19 ± 0.07
+0.88 ± 0.03
+0.11 ± 0.02
+0.81 ± 0.08
+0.17 ± 0.08
+Decentralized Behavioral Cloning (BC) [22]
+0.62 ± 0.06
+0.38 ± 0.06
+0.56 ± 0.02
+0.44 ± 0.02
+0.48 ± 0.14
+0.52 ± 0.14
+0.67 ± 0.05
+0.33 ± 0.05
+Decentralized BC w/ Attention-Based Communication [18]
+0.79 ± 0.07
+0.21 ± 0.07
+0.70 ± 0.07
+0.30 ± 0.07
+0.83 ± 0.06
+0.17 ± 0.06
+0.71 ± 0.06
+0.29 ± 0.06
+Centralized Behavioral Cloning (BC)
+0.63 ± 0.05
+0.37 ± 0.05
+0.56 ± 0.02
+0.44 ± 0.02
+–
+–
+–
+–
+Privileged CADRL [5]
+1.0 ± 0.00
+0.0 ± 0.00
+0.90 ± 0.00
+0.05 ± 0.00
+0.98 ± 0.00
+0.00 ± 0.00
+0.95 ± 0.00
+0.00 ± 0.00
+models are trained without dropout; robustness therefore
+arises purely from the inference-time design.
+Figure 4 shows representative trajectories under increasing
+dropout rates. Even with communication disabled for 75%
+of an episode, agents reliably reach their goals without
+collisions. At extreme dropout levels (95%), performance
+degrades, with single agent completing the task. This be-
+havior is expected given the deliberately limited local ob-
+servations, which are insufficient to fully infer interaction-
+relevant properties of neighboring agents in the absence
+of communication. The observed robustness stems from
+the receding-horizon inference mechanism. When commu-
+nication is available, agents refine short-horizon action se-
+quences using communication-conditioned flow matching.
+When messages are unavailable, agents fall back to warm-
+started action plans inferred in previous timesteps, providing
+a temporally coherent default behavior. In addition, the policy
+can optionally perform a lightweight refinement step by per-
+turbing the warm-started plan and denoising it conditioned on
+the latest local observation alone, enabling limited adaptation
+even without new messages.
+Fig. 5.
+Success rate vs. communication dropout (50 runs per condition; 4
+communicating agents per run; aggregated over 200 agent trials).
+Figure 5 reports success rates averaged over 50 ran-
+domized evaluation episodes (200 agent trials per condi-
+tion). Performance degrades smoothly as communication
+dropout increases, demonstrating graceful degradation under
+moderate communication loss. Initial states, goal locations,
+and robot size are randomized across runs; the mean of
+such configurations is used for qualitative visualization in
+Figure 4.
+C. Flexible Coordination via Flow Matching
+An emergent property of our communication-conditioned
+generative policy is its ability to smoothly interpolate be-
+Fig.
+6.
+Trajectories
+generated
+by
+blending
+unconditioned
+and
+communication-conditioned velocity fields with guidance weight w. In-
+creasing w strengthens the influence of inter-agent messages, yielding a
+continuum from independent (w = 0.0) to strongly coordinated (w = 2.0)
+behavior. The policy is trained with four agents and evaluated zero-shot on
+a two-agent collision avoidance scenario.
+tween unconditioned and communication-conditioned action
+generation at inference time, in a manner reminiscent of
+classifier-free guidance (CFG), also recently used as policy
+improvement operator [23]. Our policy is trained to model
+both an unconditioned velocity field uθ(o(t)
+i , A(t)
+τ,i, τ, ∅),
+corresponding to a behavior based solely on local ob-
+servations, and a communication-conditioned velocity field
+uθ(o(t)
+i , A(t)
+τ,i, τ, ¯m(t)
+i ) that incorporates aggregated inter-
+agent messages. At inference, these outputs can be combined
+via a guidance formulation
+ˆuθ = (1 −w) uuncond
+θ
++ w ucond
+θ
+,
+where w controls the influence of communication. Setting
+w = 0 recovers purely local observation-driven, interaction-
+agnostic behavior, while w = 1 yields fully communication-
+conditioned action generation; intermediate and extrapolated
+values induce a continuous spectrum of interaction behaviors.
+As illustrated in Fig. 6, varying w ∈{0.0, 0.5, 1.0, 2.0}
+produces progressively more coordinated trajectories in a
+two-agent collision avoidance scenario. Although flexible
+conditioning is not an explicit training objective, it emerges
+from jointly modeling conditioned and unconditioned flows
+and generalizes zero-shot when a policy trained with four
+agents is evaluated on two agents, underscoring the repre-
+sentational flexibility induced by the flow-matching design.
+
+
+D. Real-World Multi-Robot Navigation
+Fig. 7.
+Zero-shot deployment on four Thymio robots swapping diagonal
+positions. Five keyframes are overlaid to illustrate temporal progression
+(increasing robot opacity indicates later times), with arrowed trajectory seg-
+ments and colored triangular markers denoting agent indices and headings.
+We next deploy the policy trained entirely in simulation
+directly on physical Thymio robots, without additional fine-
+tuning. Each robot uses local state estimates and executes the
+communication-conditioned policy in a fully decentralized
+manner. For robust transfer, instead of applying the raw
+predicted controls, we treat the predicted short-horizon action
+sequence as a local plan. We forward-propagate the controls
+using Eq. (1) to obtain a look-ahead waypoint and track it
+with a simple proportional controller. This reduces sim-to-
+real transfer to waypoint tracking while leaving all multi-
+robot interaction and collision avoidance to the learned
+policy. No additional safety layers, privileged information
+or centralized coordination signals are used in this low-level
+controller. Figure 7 shows four robots swapping diagonal
+positions, requiring tight mid-field interactions. The task is
+completed zero-shot, demonstrating transferable multi-agent
+coordination under real-world sensing and actuation noise.
+V. CONCLUSION
+We present a decentralized framework for communication-
+conditioned multi-agent collision avoidance based on flow-
+matching generative policies. By conditioning short-horizon
+action sequence generation on learned inter-agent messages,
+the proposed approach enables interaction-aware decision-
+making under partial observability without centralized con-
+trol at execution time. Our formulation leverages offline
+demonstrations from a privileged expert while allowing
+communication to emerge end-to-end, resulting in a flexible
+inference mechanism that interpolates between independent
+and coordinated behavior. Combined with receding-horizon
+generation, this design yields smooth closed-loop behav-
+ior and graceful degradation under severe communication
+dropouts. Empirical results in dense multi-agent simulation
+and zero-shot real-robot deployment demonstrate that the
+proposed method achieves near-expert performance while
+retaining scalability and robustness. We believe this work
+highlights the promise of generative policies as a principled
+foundation for communication-aware multi-agent autonomy
+and opens avenues for extending flow-based decision-making
+to more complex interactive robotic systems.
+REFERENCES
+[1] F. A. Oliehoek, C. Amato et al., A concise introduction to decentral-
+ized POMDPs.
+Springer, 2016, vol. 1.
+[2] J. Van den Berg, M. Lin, and D. Manocha, “Reciprocal velocity obsta-
+cles for real-time multi-agent navigation,” in 2008 IEEE international
+conference on robotics and automation.
+Ieee, 2008, pp. 1928–1935.
+[3] J. Van Den Berg, S. J. Guy, M. Lin, and D. Manocha, “Reciprocal
+n-body collision avoidance,” in Robotics Research: The 14th Interna-
+tional Symposium ISRR.
+Springer, 2011, pp. 3–19.
+[4] ——, “Optimal reciprocal collision avoidance for multi-agent naviga-
+tion,” in Proc. of the IEEE International Conference on Robotics and
+Automation, Anchorage (AK), USA, 2010.
+[5] M. Everett, Y. F. Chen, and J. P. How, “Collision avoidance in
+pedestrian-rich environments with deep reinforcement learning,” Ieee
+Access, vol. 9, pp. 10 357–10 377, 2021.
+[6] Y. Shaoul, I. Mishani, S. Vats, J. Li, and M. Likhachev, “Multi-
+robot
+motion
+planning
+with
+diffusion
+models,”
+arXiv
+preprint
+arXiv:2410.03072, 2024.
+[7] Z. Bai, G. Wu, M. J. Barth, Y. Liu, E. A. Sisbot, K. Oguchi, and
+Z. Huang, “A survey and framework of cooperative perception: From
+heterogeneous singleton to hierarchical cooperation,” IEEE Transac-
+tions on Intelligent Transportation Systems, 2024.
+[8] A. Filotheou, A. Nikou, and D. V. Dimarogonas, “Decentralized
+control of uncertain multi-agent systems with connectivity mainte-
+nance and collision avoidance,” in 2018 European Control Conference
+(ECC).
+IEEE, 2018, pp. 8–13.
+[9] J. Jiang and Z. Lu, “Learning attentional communication for multi-
+agent cooperation,” Advances in neural information processing sys-
+tems, vol. 31, 2018.
+[10] C. Guan, F. Chen, L. Yuan, Z. Zhang, and Y. Yu, “Efficient com-
+munication via self-supervised information aggregation for online
+and offline multiagent reinforcement learning,” IEEE Transactions on
+Neural Networks and Learning Systems, 2024.
+[11] J. Sohl-Dickstein, E. Weiss, N. Maheswaranathan, and S. Ganguli,
+“Deep unsupervised learning using nonequilibrium thermodynamics,”
+in International conference on machine learning.
+pmlr, 2015, pp.
+2256–2265.
+[12] J. Ho, A. Jain, and P. Abbeel, “Denoising diffusion probabilistic
+models,” Advances in neural information processing systems, vol. 33,
+pp. 6840–6851, 2020.
+[13] Y. Lipman, R. T. Chen, H. Ben-Hamu, M. Nickel, and M. Le, “Flow
+matching for generative modeling,” arXiv preprint arXiv:2210.02747,
+2022.
+[14] X. Liu, C. Gong, and Q. Liu, “Flow straight and fast: Learning
+to generate and transfer data with rectified flow,” arXiv preprint
+arXiv:2209.03003, 2022.
+[15] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake,
+and S. Song, “Diffusion policy: Visuomotor policy learning via action
+diffusion,” arXiv preprint arXiv:2303.04137, 2023.
+[16] E. Terzi, L. Fagiano, M. Farina, and R. Scattolini, “Learning multi-
+step prediction models for receding horizon control,” in 2018 European
+Control Conference (ECC).
+IEEE, 2018, pp. 1335–1340.
+[17] Y. Li, S. Ren, P. Wu, S. Chen, C. Feng, and W. Zhang, “Learning
+distilled collaboration graph for multi-agent perception,” Advances in
+Neural Information Processing Systems, vol. 34, pp. 29 541–29 552,
+2021.
+[18] P. Veliˇckovi´c, G. Cucurull, A. Casanova, A. Romero, P. Lio,
+and
+Y.
+Bengio,
+“Graph
+attention
+networks,”
+arXiv
+preprint
+arXiv:1710.10903, 2017.
+[19] G. Hinton, O. Vinyals, and J. Dean, “Distilling the knowledge in a
+neural network,” arXiv preprint arXiv:1503.02531, 2015.
+[20] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N.
+Gomez, Ł. Kaiser, and I. Polosukhin, “Attention is all you need,”
+Advances in neural information processing systems, vol. 30, 2017.
+[21] C. Zheng, S. Park, S. Levine, and B. Eysenbach, “Intention-
+conditioned
+flow
+occupancy
+models,”
+arXiv
+preprint
+arXiv:2506.08902, 2025.
+[22] D. A. Pomerleau, “Alvinn: An autonomous land vehicle in a neural
+network,” Advances in neural information processing systems, vol. 1,
+1988.
+[23] K. Frans, S. Park, P. Abbeel, and S. Levine, “Diffusion guid-
+ance is a controllable policy improvement operator,” arXiv preprint
+arXiv:2505.23458, 2025.
