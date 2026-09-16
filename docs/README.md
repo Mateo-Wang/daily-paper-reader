@@ -4,11 +4,11 @@
     <h3 class="dpr-home-frontier-title">AI 前沿</h3>
     <a class="dpr-home-frontier-history" href="#/frontier/README">历史精选 <span aria-hidden="true">›</span></a>
   </div>
-  <p class="dpr-home-frontier-summary">本周精选 <strong>1</strong> 篇前沿论文 · 累计共推荐 <strong>3</strong> 篇前沿论文</p>
+  <p class="dpr-home-frontier-summary">本周精选 <strong>1</strong> 篇前沿论文 · 累计共推荐 <strong>4</strong> 篇前沿论文</p>
   <div class="dpr-home-frontier-week">
-    <span class="dpr-home-frontier-week-label">└─ 2026 第 37 周</span>
+    <span class="dpr-home-frontier-week-label">└─ 2026 第 38 周</span>
     <ul>
-    <li class="dpr-home-frontier-item"><a href="#/frontier/2026-W37/deepseek-ai-deepseek-v4-flash-vision-exp">deepseek-ai/DeepSeek-V4-Flash-Vision-Exp</a></li>
+    <li class="dpr-home-frontier-item"><a href="#/frontier/2026-W38/deepseek-ai-deepseek-v4-1-flash">deepseek-ai/DeepSeek-V4.1-Flash</a></li>
     </ul>
   </div>
 </section>
