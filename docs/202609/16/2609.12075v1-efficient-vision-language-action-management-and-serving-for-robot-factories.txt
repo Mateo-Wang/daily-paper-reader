@@ -1,0 +1,625 @@
+Title: Efficient Vision-Language-Action Management and Serving for Robot Factories
+
+URL Source: https://arxiv.org/pdf/2609.12075v1
+
+Published Time: Mon, 14 Sep 2026 00:06:35 GMT
+
+Number of Pages: 15
+
+Markdown Content:
+# Efficient Vision-Language-Action Management and Serving for Robot Factories 
+
+Dionysios Adamopoulos 
+
+Max Planck Institute for Software Systems 
+
+Nattapol Chanpaisit 
+
+Max Planck Institute for Software Systems 
+
+Basel Fakhri 
+
+Max Planck Institute for Software Systems 
+
+Christina Giannoula 
+
+Max Planck Institute for Software Systems 
+
+Abstract 
+
+Vision-Language-Action (VLA) models show impressive robotic manipulation capabilities via a two-stage design: a Vision-Language Model (VLM) stage followed by an Action Diffu-sion Transformer (ADiT) stage. Since robots must meet strict latency deadlines and Service-Level Objectives (SLOs) for safety and task effectiveness, VLA inference is inherently latency-critical. Meeting these SLOs requires high-end GPUs, yet weight, cost, and power constraints preclude integrating such GPUs on-robot. Recent works therefore offload VLA in-ference to local edge servers that serve many robots across a VLA model. However, current VLA systems lack support for multi-request, multi-model execution on a multi-GPU server under SLOs, while existing serving systems for multi-stage models are optimized for throughput and stage disaggre-gation across separate GPUs, which are ill-suited for the millisecond-scale stages of VLA models. We design Robion, the first VLA serving and management system for multi-robot, multi-model requests on multi-GPU edge servers that meets SLOs. Robion serving engine disaggregates the VLM and ADiT stages within a GPU via two streams, dynamically restricting the SMs on VLM stream so ADiT always finds SMs to run alongside it, and co-locates multiple models by sharing these streams across them, prioritizing requests by least remaining SLO time. Robion’s management engine en-ables flexible model placements on multi-GPU servers, and integrates an intelligent traffic controller that maximizes per-model batching under the chosen placement while bounding each GPU’s load to meet SLOs. For individual models, Robion serves on average 6.7 × and 1.5 × higher robot load within 98% SLO attainment over vLLM-Omni, the most widely used multi-stage serving system, and Monolithic, which runs VLM and ADiT as a single pipeline, respectively. In a large-scale experiment of serving 8 different models on a 4-GPU server, Robion can serve up to 64 robots within 98% SLO attainment. 
+
+1 Introduction 
+
+Physical Artificial Intelligence (AI) has emerged as a new frontier of AI, enabling autonomous agents, such as robots, to perceive complex environments, reason about sophisti-cated tasks, and execute actions in real-world settings. These capabilities powered by robotics AI models [1–14] that inte-grate perception, reasoning, planning, and action. As physi-cal AI matures, highly automated robot AI factories [11] are expected to become increasingly prevalent. Leading compa-nies, including BMW [15], Amazon [16], and DHL [17], are incorporating robotic fleets across manufacturing facilities and warehouses, where robots perform assembly-line tasks. At the forefront of physical AI models are Vision-Language-Action ( VLA ) models [1–11]. VLA models connect visual perception and language-based reasoning to physical action, translating observations and task instructions into manipula-tion actions. VLA models are unlocking increasingly sophis-ticated capabilities, including object relocation [5, 8, 9, 11], sorting [9, 11], packing [5, 6], and assembling [5, 7, 11], estab-lishing them as a critical foundation for robot AI factories. Prior works [11, 18, 19] propose deploying a local edge server within a robotic factory to run VLA inference for many robots, driven by three factors. First, VLA inference is inherently latency-critical, subject to strict latency and safety guarantees; missing latency deadlines can cause task failures, e.g., stop-and-go behavior or movement jerkiness [18, 20–22], unsafe navigation [23], or broader disruption, e.g., halting the assembly line [11, 24]. Meeting these deadlines requires powerful GPUs: Fig. 2 shows that edge GPUs, such as the Jet-son AGX Thor, incur up to 3 × higher latency than high-end GPUs (RTX 6000 Pro or H100). Second, integrating high-end GPUs onto robots is impractical due to strict weight, cost, power, and thermal constraints [11, 18]; the added weight can compromise robot stability, and the added cost may be prohibitive. Third, on-robot inference substantially increases power consumption, reducing robot battery life and opera-tional duration by up to 45% [18], resulting in battery replace-ments and higher operating costs that compound across a multi-robot factory. These three factors make the case for a 
+
+local edge server in a robot factory that serves VLA inference for many robots at a cost-effective, practical deployment. To realize this edge server deployment, we analyze VLA models and their deployment scenario on server-class GPUs, and identify three design considerations (§2.4) for efficient VLA serving. First, since robots must adhere to strict latency deadlines [19, 25–28] for both safety and task effectiveness, an effective serving system must meet per-request Service-Level Objectives (SLOs). Second, VLA architectures [1–11] 
+
+> 1arXiv:2609.12075v1 [cs.DC] 10 Sep 2026 Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula
+
+comprise two distinct stages: a Vision-Language Model ( VLM )followed by an Action Diffusion Transformer ( ADiT ). The VLM stage is compute-intensive , dominated by high-arithmetic-intensity GEMM kernels, while the ADiT stage is memory-intensive , dominated by low-arithmetic-intensity small ma-trix and element-wise vector kernels. These distinct profiles motivate stage disaggregation in VLA serving: separating the VLM and ADiT into two independently managed exe-cution pipelines with stage-specific runtime optimizations. Third, VLA models are small-scale [19], typically 1-5 bil-lion parameters (e.g., 450M for SmolVLA, 4.7B for Xiaomi-Robotics-0), requiring ∼10GB of memory including inference-time tensors, far below the 80-120GB capacity of server-class GPUs. Therefore, a cost-effective VLA serving system can co-locate multiple VLA models per server-class GPU to exploit its available memory capacity. Prior works [11, 20, 29] handle model placement of various robotic models (VLAs, World Action Models, and others) [11], reduce the actions robots take to complete tasks [29], or re-order VLA requests to favor robots with fewer pending ac-tions [20]. None of them addresses concurrent execution and GPU sharing across multiple robot requests and VLA mod-els under SLOs. A few existing serving systems [30–32] for multi-stage models disaggregate heterogeneous stages across 
+
+separate GPU devices. As we demonstrate in §2.5 and §5, these systems are neither suitable nor efficient for VLA mod-els. First, they are optimized for throughput, whereas VLA serving is inherently latency-critical. Second, VLA stages exhibit low GPU utilization, e.g., for 𝜋 0 model on an RTX 6000 Pro at batch size 4, average tensor core utilization is 52% and only 15% for the VLM and ADiT stages, respectively. Placing the two stages on separate GPUs thus leaves most GPU compute resources underutilized. Third, even when both stages run on a single GPU, these systems incur sub-stantial request inspection overhead: to batch requests, the ADiT stage continuously inspects a buffer to check for newly arrived requests that completed the VLM stage, and merges them into its currently running batch. The inspection over-head is minimal for models with stages spanning hundreds of milliseconds, but becomes dominant for VLA models, whose stages execute in only a few milliseconds. We propose Robion, the first VLA serving and manage-ment system to handle multi-robot requests for multiple models on a multi-GPU edge server while meeting SLOs, re-alizing the paradigm of local edge servers in robot factories. Robion serving engine has three components. First, we disaggregate the VLM and ADiT stages within a GPU using two CUDA streams, executing them concurrently across in-dependent request batches to exploit their complementary resource demands and improve GPU utilization. Second, we execute VLM and ADiT stages in synchronized steps ( lock-steps ) and leverage spatial Streaming Multiprocessor (SM) partitioning: we restrict the number of SMs the compute-intensive VLM stream can occupy, so ADiT always finds SMs available to run alongside it. We design a profiling-assisted method that dynamically selects this SM restriction for the VLM stream at each lockstep to further improve per-formance. Third, we share a single VLM stream and a single ADiT stream across multiple co-located models on a GPU, so a VLM stage of one model can run concurrently with an ADiT stage of a different model, and prioritize requests with the least remaining SLO time to provide SLO-aware serving. Robion management engine has two components. First, we enable programmer-configurable placement across GPUs: models can be co-located on a GPU, replicated across GPUs, or served by partitioning the server’s GPUs into disjoint groups, each serving fine-tuned variants of a single VLA ar-chitecture. Second, we design an intelligent traffic controller for heterogeneous robot populations across co-located and replicated models, formulating traffic assignment as an inte-ger program that concentrates each model’s requests onto a single model copy on a GPU to increase per-model batching, while bounding each GPU’s load to prevent SLO violations. We evaluate Robion across four VLA models, heteroge-neous robot populations, varying SLO deadlines, diverse model co-location and placement configurations, and two hardware platforms. For individual models, Robion signifi-cantly outperforms both vLLM-Omni, the most widely used serving system with stage disaggregation, and Monolithic ,which executes VLM and ADiT as a single pipeline, serving 6.7 × and 1.5 × more robot load within 98% SLO attainment, re-spectively. When co-locating multiple VLA models on a GPU, spanning fine-tuned variants and different architectures, and serving up to 18 robots, Robion achieves 2.1 × lower SLO miss ratio than Monolithic on average, while vLLM-Omni remains fully saturated (100% miss ratio). In a large-scale experiment of serving 8 different models on a 4-GPU server, Robion can serve up to 64 robots within 98% SLO attainment. Overall, we make the following contributions: 
+
+• We investigate the design considerations for efficient VLA serving and propose Robion, the first SLO-aware, multi-model VLA serving and management system. 
+
+• We disaggregate VLM and ADiT stages via GPU streams, running them concurrently for independent requests. We dynamically restrict the SMs of the VLM stage, so ADiT always finds SMs to run alongside it. We share a VLM and an ADiT stream across co-located models of a GPU, and prioritize requests with the least remaining SLO time. 
+
+• We enable flexible model placement on GPUs, and design a traffic controller for heterogeneous robot populations across co-located and replicated models that increases per-model batching and bounds GPU loads to prevent SLO violations. 
+
+• We evaluate Robion on diverse models, robot popula-tions, and deployments, showing significant SLO attain-ment improvements over existing serving systems. 
+
+> 2Efficient Vision-Language-Action Management and Serving for Robot Factories
+
+2 Background & Motivation 
+
+2.1 Vision-Language-Action (VLA) Models 
+
+VLA models [1–11] have emerged as the leading approach for robotic manipulation tasks, such as object relocation [5, 8, 9, 11], sorting [9, 11], packing [5, 6], and assembling [5, 7, 11]. A VLA model takes as input camera images and a text prompt, and outputs an action chunk for the robot to execute. State-of-the-art VLA models [5–10] typically follow a two-stage architecture of a Vision–Language Model ( VLM ) and an Action Diffusion Transformer ( ADiT ), as shown in Fig. 1. During inference, VLM processes the camera images and text prompt, and creates intermediate tensors (e.g., hidden states or a small KV cache), that are then forwarded to ADiT. ADiT executes a fixed number of diffusion steps (typically 5-10) to produce a chunk of 10-50 future actions [5–10]. Key characteristic of VLA models is that both stages are light-weight, each typically takes a few milliseconds on a high-end GPU [5, 19], unlike LLMs that can take several seconds [33]. Robotic manipulation proceeds in repeated rounds of VLA inference and action execution [5, 8, 11, 19, 29]: each round, the model processes the latest camera observations (the text prompt stays fixed for the task) and generates a new action chunk, which the robot executes sequentially before the next invocation. Since each call yields multiple future actions, the model need not run continuously: e.g., 𝜋 0 is invoked once every 500ms (2Hz), while inference runtime is ≤100ms [5]. VLM  ADiT 
+
+> Camera images
+> Text prompt
+> intermediate
+> representation
+> generated
+> actions
+> VLA Model
+> to be executed
+> Inference Input Robot
+> new inference
+> invocation
+> diffusion steps
+
+Figure 1. High-level architecture of a VLA model and its iterative inference loop with a robot. 
+
+2.2 The Edge Server for VLA Inference 
+
+VLA inference is an inherently latency-critical workload [19, 25–28], subject to strict safety deadlines and Service-Level Objectives (SLOs). Failing to meet these deadlines can cause task failures, stop-and-go behavior or movement jerkiness [18, 20–22], unsafe navigation [23], or broader environment dis-ruption, e.g., halting assembly lines in robot factories [11, 24]. Due to strict weight, cost, and power constraints [11, 18], robots typically cannot integrate high-end GPUs onboard, instead rely on low-area embedded GPUs, e.g., the NVIDIA Jetson series. Prior works [11, 18, 19] show that offloading inference to edge servers with GPUs more powerful than what robots can integrate balances compute demand with VLA latency constraints. Fig. 2 shows end-to-end inference latency for 4 models on three deployment scenarios: (i) on-robot inference on a Jetson AGX Thor (70W power budget, no network cost); (ii) inference on an edge server with an RTX 6000 Pro GPU, communicating with robot over WiFi 7; and (iii) inference on edge server with an H100 GPU, also over WiFi 7. Despite network cost, server inference on high-end GPU yields up to a ∼3× lower latency than on-robot inference, even for lightweight architectures, e.g., SmolVLA. 0 Xiaomi-Robotics-0 SmolVLA GR00T N1.5 0.0 0.5 1.0    
+
+> Normalized End-to-End Latency
+> Jetson Thor Latency RTX 6000 Latency H100 Latency WiFi 7 Network Latency
+
+Figure 2. End-to-end inference latency for various VLA models across three different deployment scenarios. Running VLA inference on an embedded GPU per robot can also be impractical due to power costs: on-robot infer-ence highly increases power consumption [11, 18], reduc-ing the robot battery life and operational duration by up to 
+
+∼45% [18]. Instead, edge server offloading reduces inference latency, extends battery life, improves cost efficiency, and allows a single server to serve multiple robots at high utiliza-tion, being a practical deployment target for VLA inference. 
+
+2.3 Multi-Robot Serving Scenario 
+
+A robot factory comprises a set of tasks (packing, assembling etc.), with 𝑁 𝑖 robots assigned to task 𝑖 . A robot sends infer-ence requests to its task’s VLA model 𝑚 𝑖 at a task-dependent frequency 𝑓 𝑖 [5, 7, 11]. Models of different tasks may be fine-tuned variants of the same VLA architecture [5, 7–9] or different VLA architectures [11]. A robot factory can deploy a server (e.g., a local edge server) with one or more high-end GPUs, that hosts all models, while robots communicate with it over a low-latency wireless network, e.g., WiFi 7 [11, 19] to send inference requests and receive action chunks. 
+
+2.4 Key Objectives for Efficient VLA Serving 
+
+Given the robot factory scenario, the VLA model characteris-tics, and the high-end GPU capabilities, we find three design considerations for efficient VLA serving on high-end GPUs. 
+
+1. SLO-Awareness: Robots must adhere to strict latency deadlines, since increased latency reduces robot responsive-ness and may cause task failure. Thus, an effective serving system must handle multi-robot requests while meeting per-request SLOs, e.g., achieving inference latency lower than that provided by an embedded GPU or on-robot SoC. 
+
+2. Stage Disaggregation: VLA models have two architec-turally distinct stages, VLM and ADiT. Fig. 3a shows roofline analysis of them on an RTX 6000 Pro GPU for 4 models. VLM is compute-intensive , dominated by high-arithmetic-intensity GEMM kernels, while ADiT is memory-intensive ,dominated by small matrix and element-wise vector opera-tions with low arithmetic intensity that underutilize tensor cores [11]. Serving these stages as a single unified inference pipeline can be inefficient: their distinct compute and mem-ory profiles call for separating them into independently man-aged execution pipelines ( stage disaggregation) to provide 
+
+stage-specific runtime optimizations. Moreover, executing the two stages independently allows their execution to be 
+
+> 3Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula
+
+overlapped across concurrent requests, exploiting their com-plementary resource demands to improve GPU utilization. 
+
+3. Multi-Model GPU Co-Location: Unlike LLMs that have hundreds of billions of parameters, VLA models have only 1-5 billion parameters (e.g., 450M for SmolVLA, 4.7B for the larger Xiaomi-Robotics-0), requiring ∼10GB to store their weights and a few additional MBs for inference-time tensors. This footprint is far smaller than the memory capacity of high-end GPUs, e.g., 96GB on the RTX 6000 Pro, 80GB on the H100. Dedicating a high-end GPU to a single VLA model would leave most of its memory capacity unused. Effective VLA serving systems can co-locate multiple models on GPU. 
+
+2.5 Limitations of Existing Systems 
+
+ROSA [11] handles the placement of heterogeneous robot models, including VLAs, World Action Models, safety models, and monitoring models, on multiple GPUs in a local cluster. Kairos [29] minimizes task completion time by modifying the VLA model itself to complete its task with fewer actions, while preserving task accuracy. Armory [20] scheduler pri-oritizes requests from robots with few pending actions, and ensures that all robots in a factory continue to make progress at each timestep. However, none of these systems optimize VLA inference time to meet request-level SLOs or leverage high-end GPUs to serve multiple models concurrently, and all treat the two VLA stages as a single execution pipeline. Prior works [30–32] design serving systems for models with multiple distinct stages, e.g., image generation mod-els [34–36] have an autoregressive language-model stage followed by a Diffusion Transformer (DiT) stage. These sys-tems share a common design shown in Fig. 3b (top): they ex-ecute each stage as a separate process , enabling independent scheduling strategies per stage, and use inter-stage buffers to transfer information (e.g., hidden states, KV caches) between stages. This design targets executing disaggregated stages on 
+
+separate GPUs , optimizes for throughput rather than latency, and is tailored to large-scale models whose stages run for hundreds of milliseconds, an order of magnitude longer than the millisecond-scale stages of VLA inference. (b) (a)                 
+
+> Process 1
+> Inter -Stage Buffer
+> Process 0 VLM 1 st req. VLM 2 nd req.
+> ADiT 1st req. VLM 1 st req.
+> 10 diffusion steps
+> ADiT 2nd req. VLM 2 nd req.
+> inspection
+> overhead
+> per step
+> 1-2 ms
+> Single
+> Process
+> Existing Systems with Stage Disaggregation
+> Monolithic System
+> ADiT 1st req. ADiT 2nd req.
+> batched reqs .
+
+Figure 3. (a) Roofline analysis of VLM and ADiT stages across four VLA models on an RTX 6000 Pro GPU. (b) Ex-isting systems with process stage disaggregation (top) vs monolithic single-process execution (bottom). These serving systems [30–32] are not suitable nor effi-cient for VLA models, for two reasons. First, VLA model stages exhibit low GPU utilization, making it wasteful to run them on separate GPUs: profiling 𝜋 0 model (3B params.) on RTX 6000 Pro at batch size 4 shows 52% average tensor core utilization for VLM stage, and only 15% for ADiT stage (27% at a fairly large batch size of 16), leaving most compute resources underutilized, especially in ADiT stage. Second, even when both VLA stages are configured to run on one GPU, inter-stage communication costs remain significant: the throughput-oriented design of these systems requires the ADiT process 1 to inspect the inter-stage buffer at every diffusion step to batch newly arrived requests from the VLM process 0. This inspection cost (Fig. 3b (top)) is on the order of milliseconds, which is very costly for VLA models, whose diffusion steps are also on the order of milliseconds (1-2 ms each step, ∼10 steps total), leaving little room to amortize it. For example, in vLLM-Omni [30, 37], the most widely used serving system with stage disaggregation, this buffer inspec-tion cost accounts for 30-35% of total VLA inference latency. Consequently, even the monolithic approach without stage disaggregation (Fig. 3b (bottom)) outperforms vLLM-Omni (See also §5.2). Overall, existing serving systems with stage disaggregation are designed to provide throughput on large-scale compute-heavy multi-stage models rather than low latency on short, lightweight VLA stages. 
+
+3 Robion: Design Overview 
+
+Robion is the first serving and management system to meet SLOs with high-end GPUs for multi-robot requests on multi-ple VLA models, enabling edge servers in robot factories. Robion serving engine integrates three techniques: 
+
+1. Fixed-Batch Intra-GPU Stage Disaggregation. We dis-aggregate VLM and ADiT stages within GPU as separate GPU streams to concurrently run them on independent re-quests. We support fixed-size batching, admitting requests only at the start of a stage, avoiding inspection and packing overheads during VLA stages’ millisecond-scale execution. 
+
+2. Guarded & Dynamic SM Partitioning on Locksteps. 
+
+We run concurrent VLM and ADiT stages in locksteps , ex-actly one VLM and one ADiT run per lockstep. We restrict the SMs the VLM stage can occupy, ensuring that ADiT finds available SMs to run concurrently. We dynamically set this SM restriction based on each lockstep’s VLM/ADiT batch-size combination to maximize performance. 
+
+3. SLO-Aware Dual-Stream Multi-Model Serving. We enable multi-model GPU co-location by sharing a VLM GPU stream and an ADiT GPU stream, among co-located mod-els. We serve requests by prioritizing those with the least remaining time before their SLO expiration to meet SLOs. Robion management engine integrates two techniques: 
+
+1. Flexible Model Placement. We enable programmer-configurable model placement across the local server’s GPUs. 
+
+> 4Efficient Vision-Language-Action Management and Serving for Robot Factories
+
+To efficiently accommodate different model architectures, we also support splitting GPUs into disjoint groups, each group serves only fine-tuned variants of a single VLA architecture. 
+
+2. Adaptive Traffic Controller. We propose a traffic adapter for varying robot populations sending requests to models co-located and/or replicated across GPUs. We formulate this multi-robot, multi-model, multi-GPU traffic assignment as integer program that increases per-model batching, while limiting each GPU’s load to avoid SLO violations. 
+
+4 Robion: Detailed Design 
+
+4.1 Robion Serving Engine 4.1.1 Fixed-Batch Intra-GPU Stage Disaggregation. 
+
+For a VLA model, Robion disaggregates VLM and ADiT stages within GPU to enable separate optimizations for each, overlap their executions for independent requests, and im-prove GPU utilization. We use two asynchronous GPU streams, e.g., CUDA streams, one for VLM and one for ADiT. However, supporting request batching introduces chal-lenges. First, continuous batching [38, 39] of throughput-oriented serving systems [30, 38–42] admits new requests into a running batch as they arrive. This requires inspect-ing for batching opportunities at each diffusion ADiT step (§2.5), and this inspection cost can be disproportionately expensive relative to ADiT’s step execution time, only 1-2 milliseconds. Moreover, admitting new requests into a run-ning ADiT batch requires packing their intermediate tensors, e.g., VLM-produced KV caches, with those of in-flight re-quests, incurring additional costs. Third, strict SLOs of VLA inference constrain how large the batch size can be: larger batches increase per-request latency. Overall, ADiT’s short execution time and the latency-critical VLA nature leave little room to amortize continuous batching costs. Therefore, Robion supports fixed-size stage batching for VLA stages: each stage executes on its own stream with a batch size fixed for the duration of the stage execution, while the two streams may have different batch sizes during run-time, allowing VLM and ADiT executions to overlap across independent, variable-sized request batches. Robion’s fixed-size stage batching eliminates the per-ADiT-step inspection overheads that prior serving systems [30–32] incur. Robion uses CUDA graphs [43], recorded at a one-time ini-tialization phase (§4.3) to eliminate per-kernel CPU launch overheads, when repeatedly executing VLA stages. ML serv-ing systems [30–32, 39–42] also have an initialization phase for runtime optimizations, including using CUDA graphs. Since VLA inference is latency-critical, small batch sizes (e.g., 1-8) are preferable, which, in practice, makes Robion record a small set of CUDA graphs during initialization, one for each combination of a stage and a batch size, and at runtime replays the corresponding graph on the appropriate stream. 
+
+4.1.2 Guarded & Dynamic Spatial SM Partitioning on Locksteps. Robion’s stage disaggregation on two GPU streams makes VLM stage eligible for concurrent execution with ADiT for independent multi-request batches, but does not guarantee it. The Problem: The VLM stage includes large kernels with numerous thread blocks, while the ADiT stage small kernels with only a few thread blocks. The GPU thread block scheduler dispatches thread blocks based on residual per-SM capacity: once thread blocks of a running kernel fully occupy all SMs, no capacity remains [44, 45] for a con-currently issued kernel to dispatch its thread blocks, thus their execution is serialized. In VLA models, a large kernel of the VLM stage has enough thread blocks to saturate all SMs, blocking any concurrently issued kernel of the ADiT stage from dispatching its thread blocks until the VLM kernel releases SMs. The Opportunity: Conversely, a kernel of ADiT stage has only a few thread blocks and occupies a few SMs, leaving the rest free for a concurrently issued kernel of VLM stage to dispatch its own thread blocks and run concurrently. Our Key Idea is guarded SM partitioning for the VLM stream: we restrict, at the granularity of the GPU stream, the number of SMs that the VLM stream, and hence every kernel of the VLM stage, can occupy, guaranteeing that the remaining SMs are always available for the ADiT stage’s con-currently issued kernels to dispatch their thread blocks. This guarantees concurrent execution of VLM and ADiT stages, exploiting their complementary resource demands: while VLM kernels operate on its fixed number of SMs, concur-rently issued ADiT kernels dispatch their thread blocks to the remaining SMs. This, however, raises a Key Challenge :how many SMs should the VLM stream be restricted to? Fig. 4a shows an example asynchronous execution of VLM and ADiT stages running on separate streams handling multi-request batches assuming a GPU with 188 SMs. The red rect-angles denote the optimal number of SMs to which the VLM stream should be restricted at time 𝑡 𝑖 to maximize perfor-mance, based on the batch sizes of the currently running VLM and ADiT stages. At time 𝑡 1, both running VLM and ADiT stages have batch size 1, and the optimal VLM restric-tion is 152 SMs. At time 𝑡 2, where the VLM and ADiT stages have batch size 2 and 1, respectively, the optimal VLM restric-tion is 176 SMs. Dynamically setting the VLM SMs, e.g., at 𝑡 2,requires preempting the running VLM stage and relaunching it once the new SM restriction is reconfigured. This degrades performance in one of two ways: either having VLM execu-tions without using CUDA graphs losing their performance benefits, since a stage recorded within a graph cannot be pre-empted, or if CUDA graphs are used, preemption forces the whole stage to restart its execution from scratch, discarding any progress already made. In short, dynamically setting the VLM SM restriction degrades performance, through either lost CUDA graph benefits or lost stage execution progress. Our Key Solution (Fig 4b bottom) is the synergy of (i) lockstep stage execution with (ii) profiling-assisted dynamic SM restriction. We enable dynamic SM restriction on VLM 
+
+> 5
+
+Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula (k+1)  VLM                                        
+
+> b = 2
+> (SM Restricted) Stream 0
+> Stream 1
+> Lockstep Execution Without SM Partition
+> max -batch = 2
+> Lockstep k Lockstep k+1 Lockstep k+2 FIFO Queue
+> with VLA requests
+> ADiT is blocked from VLM at each lockstep
+> kVLM
+> b = 1
+> (k+1) VLM
+> b = 2
+> (k+2) VLM
+> b = 2
+> Stream 1
+> Lockstep Execution with Profile -assisted Dynamic SM partitions
+> Lockstep k Lockstep k+1 Lockstep k+2 FIFO Queue
+> with VLA requests
+> performance gain
+> VLM SMs = 152 VLM SMs = 176 VLM SMs = 168
+> (k -1) ADiT
+> b = 1
+> kVLM
+> b = 1
+> (k+1) VLM
+> b = 2
+> kADiT
+> b = 1
+> (k+1) ADiT
+> b = 2
+> (k+2) VLM
+> b = 2 …
+> …
+> 152 176 176
+> Stream 1
+> 𝑡 1𝑡 2𝑡 3𝑡 4𝑡 5
+> 176 168
+> the optimal SM
+> count to restrict
+> for the VLM stream
+> Asynchronous Execution of VLM and ADiT Sages
+> Stream 0
+> (a) (b)
+> (k -1) ADiT
+> b = 1
+> kADiT
+> b = 1
+> (k+2) VLM
+> b = 2
+> (k -1) ADiT
+> b = 1
+> kADiT
+> b = 1
+> (k+1) ADiT
+> b = 2
+> (k+1) ADiT
+> b = 2
+> …
+> …
+> kVLM
+> b = 1
+> (SM Restricted) Stream 0
+
+Figure 4. (a) An example asynchronous execution of VLM and ADiT stages with variable-sized multi-request batches. (b) Lockstep execution of VLM and ADiT stages without SM Partitioning versus lockstep execution of VLM and ADiT stages with profile-assisted dynamic SM partitioning. stream without stage preemption, while leveraging CUDA graphs by executing VLM and ADiT stages as a sequence of 
+
+locksteps : at lockstep 𝑘 , the 𝑘 -th VLM stage with batch size 𝑏 𝑘 ,runs on one GPU stream concurrently with the ( 𝑘 -1)-th ADiT stage with batch size 𝑏 𝑘 −1 on the other stream. Incoming VLA requests are placed in a FIFO waiting queue. At the start of lockstep 𝑘 , we dequeue up to a max_batch requests, and admit them as a fixed batch size 𝑏 𝑘 to the VLM stage, while ADiT stage concurrently processes the ( 𝑘 -1)-th batch with batch size 𝑏 𝑘 −1. Requests that complete the VLM stage during lockstep 𝑘 -1 are held in a small temporary buffer and read by the ADiT stage at the start of lockstep 𝑘 . The max_batch is set by the programmer, and bounds the number of requests batched per lockstep. If fewer than max_batch requests are pending, we admit the largest power-of-2 batch size less than 
+
+max_batch to exploit pre-captured CUDA graphs. We use 
+
+max_batch =2 as the default, that retains SLOs under high request traffic (Fig. 8a). We advance to the next lockstep once both stages finish. Since the VLM and ADiT batch sizes vary across locksteps, the duration of each lockstep varies. Lock-steps are implemented via two CPU threads, one per GPU stream, that launch the 𝑘 -th VLM and ( 𝑘 -1)-th ADiT stages, respectively, and synchronize via a CPU thread barrier. As shown in Fig. 4b (top), within a lockstep, the larger VLM kernels occupy all SMs, blocking the smaller ADiT kernels, thus delaying them from being concurrently executed with VLM. However, each lockstep guarantees that exactly one 
+
+VLM and one ADiT stage run concurrently within that time window. This allows us to restrict the VLM stream’s SMs once, at the lockstep start, entirely avoiding mid-execution preemption of the running VLM stage. As shown in Fig. 4b (bottom), restricting the VLM stream to occupy up to a fixed number of SMs allows ADiT stage to begin execution imme-diately (at the lockstep start) on the rest SMs, rather than waiting for SMs to free up. Thus, the two stages make greater aggregated progress at each lockstep, shortening the lock-step’s duration compared to that without SM restriction. Robion finds the number of SMs to which the VLM stream is restricted at each lockstep, by performing offline profil-ing during its initialization phase (§ 4.3). Since one batched VLM stage co-executes with one batched ADiT stage per lockstep, and batch sizes are typically powers of 2 up to 
+
+max_batch , there are 𝑂 (𝑙𝑜𝑔 (max_batch )2) possible stage co-execution combinations. During profiling, we records CUDA graphs for both stages across all power-of-2 batch sizes up to max_batch , then enumerate every combination of batch sizes for VLM and ADiT that can co-occur in a lockstep. For each combination, we exhaustively search over SM restric-tions 1 for the VLM stream, at the granularity supported by the GPU (e.g., multiples of 8 SMs on NVIDIA GPUs), profiling each candidate SM count restriction on the device to identify the one that minimizes the lockstep’s execution time, i.e., the time for both co-running stages to complete. The best restric-tion found for each combination is stored in a lookup table. At runtime, when that combination occurs at a lockstep start, Robion directly applies the corresponding SM count restric-tion to the VLM stream. For example, in Fig. 4b (bottom), profiling found that limiting the VLM stream to 168 SMs minimizes lockstep time when VLM and ADiT use batch size 2. Robion applies this restriction at runtime, e.g., at lockstep 
+
+𝑘 +2. We implement the VLM stream SM restriction using CUDA Green Contexts [46] (we can use resource-partitioned execution contexts [47] for AMD GPUs). 
+
+4.1.3 SLO-Aware Dual-Stream Multi-Model Serving. 
+
+A high-end GPU of an edge server can co-locate multiple VLA models (§2.4) serving requests from robots for different tasks. Robion serves multiple co-located models on a GPU by retaining its dual-GPU-stream design: a single shared GPU stream for the VLM stage and a single shared GPU stream for the ADiT stage are reused across all models. Within each lockstep, the VLM stream executes exactly one batch of requests issued for a single VLA model, while the ADiT stream concurrently executes exactly one batch of requests issued for a VLA model, the same one or a different one. Robion maintains its dual-stream design as shared across models for two reasons. First, running exactly one compute-intensive VLM stage concurrently with exactly one memory-intensive ADiT stage at each lockstep exploits their comple-mentary compute and memory demands, improving GPU utilization across both resource dimensions. Instead, running multiple VLM or multiple ADiT stages concurrently creates contention for the same resources. Second, Robion aims to be 
+
+SLO-aware : different VLA models may have different SLOs, as they handle different tasks (e.g., packing vs. assembly) with different real-time responsiveness needs. This requires requests with stricter SLOs to be prioritized over those with more relaxed SLOs. Restricting each lockstep to a single VLM and a single ADiT stage allows Robion choose which pend-ing request to dispatch at the start of each lockstep, enabling SLO-aware prioritization of requests with tighter deadlines. 
+
+> 1
+
+Our profiler also considers the case of having no SM restriction for VLM. 6Efficient Vision-Language-Action Management and Serving for Robot Factories 
+
+Robion has one FIFO queue per co-located model and applies an earliest-SLO-first policy: at the start of each lock-step, it computes, for each queue, the remaining time of its head request until the SLO deadline, i.e., the SLO deadline minus the time the request has already waited since its ar-rival, and selects the FIFO queue whose head request has the least remaining time. Robion then dequeues a batch of up to 
+
+max_batch requests from that queue and admits them to the VLM stage, while the ADiT stage concurrently processes the batch that completed the VLM stage in the previous lockstep. To handle multiple co-located models, Robion extends its offline profiling to enumerate stage co-execution combina-tions across different VLA model pairs. This yields 𝑂 (𝑈 2 ·
+
+𝑙𝑜𝑔 (max_batch )2) combinations, where 𝑈 is the number of 
+
+distinct VLA architectures co-located on the GPU. When co-located models are fine-tuned variants of the same architec-ture, all such model pairs share identical lockstep runtimes for a given batch size combination, so Robion reuses the same profiling results across them. 𝑈 is small in practice. 
+
+4.2 Robion Management Engine 4.2.1 Flexible Model Placement. Robion supports flexi-ble, programmer-configurable model placement across the available server’s GPUs. Programmers can co-locate models of different architectures and fine-tuned variants of the same architecture on a GPU, and/or replicate models to multiple GPUs. Robion also supports partitioning the server’s GPUs into disjoint groups, each group is dedicated to serving fine-tuned variants of a single VLA model architecture, allowing co-location of these variants within a GPU. 
+
+4.2.2 Adaptive Traffic Controller. Robot factories com-prise heterogeneous task populations [11, 20], where differ-ent models are assigned different numbers of robots (§2.3). At initialization, Robion takes as input the robot population 
+
+𝑁 𝑖 and the request frequency 𝑓 𝑖 for each served model 𝑚 𝑖 ,and computes for every model 𝑚 𝑖 and each GPU 𝑗 hosting it, the number of robots 𝑟 𝑖 𝑗 to assign to that GPU. Since the total robot population for model 𝑚 𝑖 is 𝑁 𝑖 , the robots assigned across all GPUs 𝐺 for model 𝑚 𝑖 must sum to 𝑁 𝑖 (with 𝑟 𝑖 𝑗 =0 for a GPU 𝑗 not hosting the model 𝑚 𝑖 ): ∑︁   
+
+> 1≤𝑗 ≤𝐺
+
+𝑟 𝑖 𝑗 = 𝑁 𝑖 (1) Fig. 5 has a two-GPU server serving Models A and B of 6 and 2 robots, respectively. We assume each GPU can serve at most 4 robots, beyond this, queuing delays incur SLO misses. Fig. 5a shows a scheme where a GPU serves a single model: GPU 0 serves all 6 robots for Model A and GPU 1 serves all 2 robots for Model B. This scheme enables high batching capabilities per model, since each model’s FIFO queue accu-mulates sufficient pending requests from its dedicated traffic. However, GPU 0 serves 6 robots, exceeding its 4-robot capa-bility, thus these robot requests incur SLO violations. Fig. 5b shows a scheme where each model’s robots are split evenly across the two GPUs: each GPU serves 3 robots for Model A and 1 robot for Model B. This allows neither GPU to exceed its 4-robot limit. However, splitting robot populations across GPUs reduces the per-model traffic each GPU receives: the queue for Model B at either GPU, backed by 1 robot, accumulates few requests, thus lower GPU utilization (smaller batch sizes used due to infrequent request arrivals). Robion integrates an intelligent traffic adapter, shown in Fig. 5c, that combines the benefits of both prior schemes: high per-model batching and avoiding GPU overloads (keeping each GPU within its robot limit). It assigns each GPU to serve a single model whenever possible, concentrating that model’s requests into one FIFO queue to enable high batching as in Fig. 5a, while splitting a model’s robots across additional GPUs as needed to stay within each GPU’s limit, as in Fig. 5b. In our example, Robion assigns 4 robots for Model A to GPU 0, and the remaining 2 robots for Model A together with 2 robots for Model B to GPU 1. This concentrates traffic within per-model queues, e.g., GPU 0 is saturated with requests from 4 robots on Model A, achieving high batching while keeping both GPUs within their supported limits. High Batching ☺☺︎☺︎       
+
+> SLO Misses ☹
+> Low Batching ☹
+> No Overload ☺︎☺︎
+> High Batching ☺ ☺
+> No Overload ☺ ☺
+> (a)
+> Single model per GPU
+> (b)
+> Even Split of per-Model Robots Across GPUs
+> (c)
+> Robion's Adaptive
+> Traffic Controller
+> Model B
+> Model A
+> GPU 0
+> Model B
+> Model A
+> GPU 1
+> Model B
+> Model A
+> GPU 0
+> Model B
+> Model A
+> GPU 1
+> Model B
+> Model A
+> GPU 0
+> Model B
+> Model A
+> GPU 1
+> 6 robots for Mod. A 2 robots for Mod. B
+> 3 robots for Mod. A + 1 robot for Mod. B
+> 4 robots for Mod. A
+> 3 robots for Mod. A + 1 robot for Mod. B
+> 2 robots for Mod. A + 2 robots for Mod. B
+
+Figure 5. Traffic distribution strategies for two models on two GPUs: (a) each GPU serves only one model, (b) even robot split across GPUs, and (c) Robion traffic adapter. 
+
+Finding GPU Robot Limits. Robion needs to find the max-imum number of robots 𝐶 𝑖 a GPU can serve for each model 
+
+𝑚 𝑖 while sustaining a target SLO attainment (e.g., 98%). At initialization, Robion benchmarks each model 𝑚 𝑖 by simulat-ing robot traffic on GPU as described in §5.1, and increasing the number of robots until finding the largest value that still meets the target SLO attainment. Benchmarking happens once per model and is parallelized on the server’s GPUs. 
+
+Problem Formulation. Let 𝑀 denote the total number of models served by Robion. By capturing for a given model 
+
+𝑚 𝑖 the maximum number of robots 𝐶 𝑖 that a GPU 𝑗 can sustain, the ratio 𝑟 𝑖 𝑗  
+
+> 𝐶 𝑖
+
+shows how saturated a GPU is for traffic targeting the model 𝑚 𝑖 . To ensure that the assigned traffic to a GPU does not exceed its supported limit (avoiding SLO violations), we set the following constraint for every GPU 𝑗 :∑︁  
+
+> 1≤𝑖 ≤𝑀
+
+𝑟 𝑖 𝑗 
+
+𝐶 𝑖 
+
+≤ 1 (2) 
+
+7Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula 
+
+To concentrate all received requests on a single queue, Robion tries to minimize the sum of all pairwise products 
+
+(𝑟 𝑖 𝑗 · 𝑟 𝑘 𝑗 ) across all GPUs and distinct model pairs (𝑚 𝑖 , 𝑚 𝑘 ):
+
+𝑚𝑖𝑛 (∑︁   
+
+> 1≤𝑗 ≤𝐺
+
+∑︁ 1≤𝑖 <𝑘 ≤𝑀 
+
+𝑟 𝑖 𝑗 𝑟 𝑘 𝑗 ) (3) Each product 𝑟 𝑖 𝑗 · 𝑟 𝑘 𝑗 is non-zero only when robots target-ing the distinct models 𝑚 𝑖 and 𝑚 𝑘 are sending requests to the same GPU 𝑗 (i.e., both variables 𝑟 𝑖 𝑗 and 𝑟 𝑘 𝑗 are non-zero). In contrast, if in each GPU 𝑗 only one term 𝑟 𝑖 𝑗 is non-zero and others 0, i.e., only robots targeting model 𝑖 send requests to GPU 𝑗 , then every product term in (3) is zero ( minimum ). Hence, this objective favors an assignment of robots where each GPU serves requests targeting a single VLA model. Together, constraints (1) and (2), and the objective (3), de-fine an integer programming problem, which Robion solves during initialization. If constraints (1) and (2) cannot be sat-isfied, Robion informs the programmer that they need to select a different model placement or add more GPUs to the server. We implement our solver using OR-Tools [48]. 
+
+4.3 Initialization of Robion 
+
+Robion’s one-time initialization comprises four parts: (a) 
+
+graph capture records GPU graphs for VLM and ADiT at each supported batch size (§4.1.1), (b) profiling finds and stores the VLM SM restriction that minimizes lockstep time for each combination of co-executed stages and batch sizes (§4.1.2, §4.1.3), (c) benchmarking determines each model’s maximum robot population that a GPU can serve under a target SLO attainment (§4.2.2), and (d) solver execution computes robot-to-GPU assignments using (c) robot limits and the configured model placement (§4.2.2). For two VLA architectures with four fine-tuned variants each (8 models) on a 4 ×RTX 6000 Pro server (two disjoint GPU groups, four variants co-located per GPU), parts (a)-(d) take ∼4 mins, ∼3 mins, ∼1 hour, and 
+
+∼10 s, respectively. Parts (b) and (c) rerun only when the model set, max_batch , or GPU hardware changes, (d) reruns when robot populations change, and (a) reruns on every initialization, a short, standard overhead existing also in prior ML serving systems [30–32]. 
+
+5 Evaluation 
+
+5.1 Evaluation Methodology Models & Datasets. We evaluate four model architectures: 
+
+𝜋 0 (PI0 ) [5], SmolVLA (SVLA) [8], GR00T N1.5 (GR15) [7], and Xiaomi-Robotics-0 (XR0) [9]. Camera images and text in-structions for requests are drawn from the LIBERO dataset [49]. 
+
+Hardware Platforms. We use two servers: one equipped with 4 ×NVIDIA RTX 6000 Pro Blackwell GPUs (96GB each) and one with 4 ×NVIDIA H100 GPUs (80GB each). Unless otherwise stated, we use the first server for our evaluations. 
+
+SLO Metrics. We report SLO attainment ( SLO-AT ) /miss rates ( SLO-MR ). Unless otherwise stated, each model’s SLO deadline is its inference latency on an NVIDIA Jetson AGX Thor GPU (70W power mode): 156, 117, 50, and 53 ms for PI0, XR0, SVLA, and GR15, respectively. To evaluate SLO-AT we compare each request’s end-to-end latency, the sum of measured server-side inference latency and network latency, against the corresponding deadline. Unless otherwise stated, network latency follows the WiFi 7 configuration as in [19]. 
+
+Robot Traffic. Robots targeting a VLA model send inference requests at frequency 𝑓 . To simulate this traffic, we randomly sample an initial offset within time [0, 1/𝑓 ) for each robot, after which it sends requests at frequency 𝑓 . To account for variability in offset alignment, we repeat each experiment over five epochs, resampling robot offsets at the start of every epoch, and report the average results across epochs. Unless otherwise stated, we use 𝑓 =2Hz. 
+
+Comparison Points. We compare Robion with max_batch =2 over two systems: (i) Monolithic system executes the VLM and ADiT stages in a single, unified inference pipeline, and (ii) vLLM-Omni system [30], the most widely used serving system with model stage disaggregation, executes the VLM and ADiT stages as separate processes within a GPU. 
+
+5.2 Single Model Serving on a GPU 1) Performance. Fig. 6 compares the p99 latency and SLO-AT of all systems, when serving a single model on a single GPU under varying robot loads. vLLM-Omni Monolithic Robion                                             
+
+> PI0
+> 0100 200 300 400 500 0510 15 20 25
+> ∞∞∞
+> P99  Latency  (ms)
+> 0% 20% 40% 60% 80% 100% 0510 15 20 25
+> #Robots Served
+> SLO  Attainment  (%)
+> XR0
+> 0500 1000 1500 2000 010 20 30
+> ∞∞∞
+> 0% 20% 40% 60% 80% 100% 010 20 30
+> #Robots Served
+> SVLA
+> 0200 400 600 800 020 40 60
+> ∞∞∞
+> 0% 20% 40% 60% 80% 100% 020 40 60
+> #Robots Served
+> GR15
+> 0100 200 300 020 40 60
+> ∞∞∞
+> 0% 20% 40% 60% 80% 100% 020 40 60
+> #Robots Served
+
+Figure 6. P99 latency (top) and SLO-AT (bottom) of all sys-tems for various four models and robot loads. Dashed arrows show that the robot load has saturated the system. We draw three findings. First, Monolithic outperforms vLLM-Omni across all models and robot loads, sustaining on average 4.4 × more robot load within 98% SLO-AT. This is because vLLM-Omni’s per-diffusion-step inspection cost (§2.5) is expensive relative to VLA inference’s millisecond-scale runtime, negating the benefits of stage disaggregation. Second, Robion delivers the highest performance across all models and robot loads: at the highest robot load Monolithic sustains before saturation, Robion achieves 1.4 × lower p99 latency on average, and within 98% SLO-AT, sustains on av-erage 6.7 × and 1.5 × more robot load than vLLM-Omni and Monolithic, respectively, across all models. Third, Robion’s efficiency enables a single high-end GPU to outperform on-robot inference on an embedded Jetson AGX Thor GPU, while serving multiple robots: for all models, Robion achieves at least 98% SLO-AT, while serving an average of 20 robots. This can offer large financial benefits: given the cost of Jetson 
+
+8Efficient Vision-Language-Action Management and Serving for Robot Factories 
+
+AGX Thor and RTX 6000 Pro is ∼5.5k USD and ∼16k USD, respectively, Robion’s serving capability translates to ∼6.8 ×
+
+cost reductions in hardware equipment. Overall , Robion sig-nificantly outperforms existing serving systems, sustaining substantially higher robot loads, while consistently meeting SLOs across various model architectures. 
+
+2) Benefits of §4.1.1 and § 4.1.2 Key Techniques. Fig. 7 shows SLO-AT on PI0 and XR0 comparing (i) Monolithic , (ii) 
+
+Disjoint SM Part. which uses Robion’s lockstep execution to dynamically partition SMs (via profiling) into two disjoint ,non-overlapping sets for VLM and ADiT, (iii) Robion Stage Disaggr. which applies only intra-GPU stage disaggregation (§4.1.1) and (iv) Robion Guarded SM Part. which applies both stage disaggregation (§4.1.1) and VLM guarded & dynamic SM partitioning on locksteps (§4.1.2). Monolithic Disjoint SM Part. Robion:Stage Disaggr. Robion:Guarded SM Part.                
+
+> 0% 20% 40% 60% 80% 100% 4812 16 20
+> #Robots Served
+> SLO  Attainment  (%)
+> (a) PI0
+> 0% 20% 40% 60% 80% 100% 812 16 20 24 28
+> #Robots Served
+> (b) XR0
+
+Figure 7. SLO-AT on PI0 and XR0 for Monolithic, disjoint SM partitioning, Robion stage disaggregation only, and Robion stage disaggregation + guarded & dynamic SM partitioning. We make two observations. First, while Robion Stage Dis-aggr. increases SLO-AT over Monolithic, achieving 56% at 20 robots for PI0 and 39% at 24 robots for XR0, compared to 0% for Monolithic for both models, Robion Guarded SM Part. 
+
+improves even further, reaching 82% and 89% SLO-AT at the same loads and models. Second, Disjoint SM Part. performs worse than Robion Guarded SM Part. , achieving 67% at 20 robots for PI0 and 85% at 24 robots for XR0. This is primarily because partitioning the RTX 6000 Pro’s 188 SMs into two disjoint sets requires both sets to be multiples of 8, but 188 is not divisible by 8. Thus, Disjoint SM Part. rounds down to 184 SMs (nearest multiple of 8), leaving 4 SMs unused. 
+
+3) Max_Batch Size and SM Restriction Analysis. Fig. 8a shows Robion’s SLO-AT for PI0 across varying robot loads and max_batch configurations. Setting max_batch=1 results in poor SLO-AT, when serving more than 14 robots, whereas 
+
+max_batch=2 retains high SLO-AT even under high robot load (e.g., 98% at 18 robots). Fig. 8b shows the per-model num-ber of SMs to which the VLM stage is restricted via Robion’s one-time profiling, with max_batch=2 , across all batch size combinations for VLM and ADiT stage co-execution. Dashes 
+
+denote cases in which Robion does not restrict the SMs on VLM stage, as our profiling shows that the lockstep time is minimized without any SM restriction. We observe that different models and batch size combinations for stage co-execution require different SM count restrictions. Moreover, statically restricting the VLM stage to, e.g., 96 of the 188 avail-able SMs reduces the robot load that can be served within 98% SLO-AT by ∼18% on average across all models, which highlights the necessity of Robion’s dynamic SM restriction. 0% 25% 50% 75% 100% 14 16 18 20                                     
+
+> #Robots Served
+> SLO  Attainment  (%)
+> 1:1 1:2 2:1 2:2 PI0 176 144 -168
+> XR0 160 152 --
+> GR15 144 152 176 -
+> SVLA 96 104 96 96 (a) Maximum Batch Size (PI0) (b) VLM SM Restriction
+> VLM :ADiT Batch Size
+> max-b=1 max-b=2 max-b=4 max-b=8
+
+Figure 8. (a) Robion’s SLO-AT for PI0 across varying robot loads and max_batch values. (b) Robion’s per-model selected VLM SM restrictions with max_batch =2 for all batch size combinations for VLM and ADiT stages co-execution. 
+
+5.3 Multi-Model Co-Location and Serving on a GPU 1) Performance. Fig. 9 evaluates SLO-MR for Monolithic and Robion when co-locating multiple models on a single GPU, including fine-tuned variants of the same architecture and of different architectures, with robot populations across co-located models either balanced or highly skewed. Each x-axis tuple denotes a configuration: its length gives the num-ber of co-located models, and each entry gives that model’s robot population. We omit vLLM-Omni, which is already sat-urated (100% SLO-MR) across these configurations. Robion outperforms Monolithic across all multi-model configura-tions, achieving on-average 2.1 × lower SLO-MR under vari-ous robot-population distributions. We conclude that Robion effectively co-locates multiple models on a single high-end GPU, improving GPU utilization and cost-effectiveness. Monolithic Robion          
+
+> 0% 5% 10% 15%
+> 8.8 4.7 14 5.0 10 5.0 25 11
+> SLO  Miss  (%)
+> (8,8) (4,12) (4,4,4,4) (2,4,4,8) PI0
+> 0% 1% 2% 3% 4%
+> 2.4 1.3 3.1 2.1 2.52.5 3.1 2.5
+> (8,8) (4,12) (4,4,4,4) (2,4,4,8) XR0
+> 0% 5% 10% 15%
+> 3.7 1.5 8.3 3.7 9.1 6.0 89 7.8
+> (2,16) (8,10) (10,8) (16,2) PI0 +XR0
+
+Figure 9. SLO-MR of Monolithic and Robion for various configurations of co-located models on a single GPU and using different robot populations for each co-located model. 
+
+2) Analysis of Queue Selection Policies. Fig. 10 shows Robion’s SLO-AT under three queue-selection policies for choosing which per-model queue to serve next (§4.1.3): (i) 
+
+round-robin (RR ) cycles through each model’s queue in turn; (ii) largest-queue-first (LQF ) always serves the queue with the most pending requests; and (iii) earliest-SLO-first (ESF )is Robion’s policy (§4.1.3). We evaluate configurations of co-located models with equal or differing SLO deadlines, and with varying robot populations across co-located models. PI0-A @ 150 ms                 
+
+> PI0-B @ 150 ms XR0-A @ 150 ms
+> XR0-B @ 150 ms PI0-A @ 100 ms
+> PI0-B @ 200 ms XR0-A @ 70 ms
+> XR0-B @ 150 ms PI0 @ 150 ms
+> XR0 @ 110 ms
+> 2x fine-tuned models, same deadline 2x fine-tuned models, diff. deadline 2xVLA archs, diff. deadline
+> 8 + 8 4 + 12 10 + 10 8 + 12 8 + 8 4 + 12 10 + 10 6 + 14 8 + 10 10 + 8
+
+Figure 10. SLO-AT under three queue-selection policies, across multi-model co-location configurations with varying robot populations and SLOs per model. 
+
+9Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula 
+
+We make two observations. First, RR achieves better SLO-AT than LQF when co-located models have the same archi-tecture and SLOs. In this case, all model queues need to be prioritized equally, and RR captures this objective more ef-fectively than LQF . Second, ESF offers little advantage when co-located models have the same architecture and SLOs, but clearly outperforms the other policies once architectures or SLOs vary, because RR and LQF lack SLO-awarenes and cannot prioritize queues by the requests’ deadlines. Across all configurations, ESF achieves 1.06 × and 1.07 × higher av-erage SLO-AT than RR and LQF , respectively, confirming its robustness as Robion’s default policy. 
+
+5.4 Multi-GPU Model Serving & Traffic Control 1) Benefit of Robion’s Traffic Adapter. Fig. 11 evaluates Robion’s traffic adapter (§4.2.2) on a robot factory scenario with a 4-GPU server hosting 4 fine-tuned variants of PI0 (left) or XR0 (right), each GPU fits all 4 variants in its memory. Each x-axis tuple denotes the robot population per model, with robot request frequencies of 1 /2/2/4 Hz, across the 4 models, respectively. We compare three strategies: (i) single-model-per-GPU (SMG ) (Fig. 5a), where each model’s robots send all requests to a single dedicated GPU that only hosts that model, (ii) even-population-split (EPS ) (Fig. 5b), where each model is replicated on every GPU and its robot popu-lation is split evenly across them, and (iii) Robion (Fig. 5c) where each model is replicated on every GPU and its robot population is split across GPUs according to our integer pro-gram’s solution. The per-model GPU limits (§ 4.2.2) across the 4 robot populations with varying request frequencies are 
+
+(27 , 16 , 16 , 9) for the PI0, and (32 , 22 , 22 , 12 ) for the XR0. SMG EPS Robion            
+
+> 0% 10% 20% 40.5 7.4 4.1 60.4 8.0 1.1 70.4 9.1 1.6 1.5 6.2 1.5 43.1 13.0 5.6 4.5 16.5 2.7 47.1 21.8 4.4 17.0 17.4 2.6
+> SLO  Miss  (%)
+> (16,20,12,12) (20,8,8,20) (8,8,8,24) (28,16,16,8) (32,36,8,12) (40,20,24,8) (8,28,24,16) (20,28,28,8) PI0 XR0
+
+Figure 11. SLO-MR of three robot assignment strategies on a four-GPU server hosting four fine-tuned PI0 (left) and XR0 (right) variants, across varying robot populations. We make three observations. First, when a model’s robot population exceeds the GPU robot limit for that model, SMG 
+
+suffers substantial SLO-MR. For instance, at the (8, 8, 8, 24 )
+
+population distribution for PI0, the fourth model’s popula-tion (24 ) far exceeds the GPU robot limit for that model (9),and a single GPU cannot serve this excess traffic, resulting in a 70% SLO-MR. Second, when no model’s robot population significantly exceeds its GPU limit, e.g., the (28,16,16,8) popu-lation distribution for PI0, both SMG and Robion achieve very low SLO-MR, with Robion’s assignment converging to that of SMG , whereas EPS performs substantially worse, incurring 4.1 × more SLO-MR in this example. Third, Robion’s traffic adapter consistently and significantly outperforms the other two assignment strategies across all population distributions and both models, achieving on average 8.2 × and 4.4 × fewer SLO misses than SMG and EPS , respectively, combining the benefits of both approaches. 
+
+2) Analysis of Various Model Placements. Fig. 12 shows Robion SLO-AT for 8 fine-tuned VLA variants (4 from PI0, 4 from XR0), each with a different robot population, using a 4-GPU server under various model placements. We compare two placement strategies. Mix co-locates both architectures on every GPU: each GPU hosts 2 PI0 and 2 XR0 variants, with each variant replicated on 2 of the 4 GPUs. The alternative dedicates disjoint GPU groups per architecture, varying the group sizes: (i) Gr-1:3 assigns 1 GPU to PI0 and 3 GPUs to XR0, (ii) Gr-2:2 assigns 2 GPUs to each architecture, and (iii) 
+
+Gr-3:1 assigns 3 GPUs to PI0 and 1 GPU to XR0, replicating all variants of an architecture across its assigned GPUs. For each robot population distribution, we report the best-performing placement among (i)-(iii), denoted Best-Group , against Mix .GPU0  GPU1  GPU2  GPU3                                   
+
+> Mix
+> Gr-1:3
+> Gr-2:2
+> Gr-3:1
+> XR0:A
+> AC
+> C
+> ABD
+> D
+> BBD
+> D
+> B
+> AD
+> B
+> CAD
+> B
+> CAD
+> B
+> C
+> AD
+> B
+> CAD
+> B
+> CAD
+> B
+> C
+> AD
+> B
+> CAD
+> B
+> CAD
+> B
+> C
+> AC
+> C
+> A
+> AD
+> B
+> C
+> AD
+> B
+> C
+> AD
+> B
+> C
+> ABXR0:B CDXR0:C XR0:D
+> PI0:A ABPI0:B CDPI0:C PI0:D
+> Placement Group per GPU
+
+Figure 12. SLO-AT of Robion under mixed vs. disjoint-group model placement for 8 PI0/XR0 variants on a 4-GPU server. We draw three findings. First, the best-performing place-ment among Gr-1:3 , Gr-2:2 , and Gr-3:1 varies with the robot population distribution across models. Second, Mix consis-tently achieves lower SLO-AT than that of Best-Group place-ment, since differing stage runtimes across co-located archi-tectures introduce waiting delays for the model with shorter stage runtimes under Robion’s lockstep execution. Third, Robion scales to large robot AI factories with high SLO-AT: in this setup, it serves 8 different models, i.e., 8 manipulation tasks, for up to 64 robots (last column) within 98% SLO-AT on a single 4-GPU server. We conclude that Robion can accom-modate large-scale robot factories spanning diverse tasks while serving several tens of robots on one edge server. 
+
+3) Analysis of Intra- vs. Inter-GPU Stage Disaggrega-tion: Fig. 13 compares SLO-AT for PI0 on a 4-GPU server with Robion, which disaggregates the VLM and ADiT stages within each GPU and replicates PI0 at all 4 GPUs, against three inter-GPU disaggregation schemes that instead dedi-cate separate GPUs to each stage, with no model replication: (i) Dis-1:3 uses 1 GPU for the VLM stage and 3 for the ADiT stage, (ii) Dis-2:2 uses 2 GPUs for each stage, and (iii) Dis-3:1 
+
+uses 3 GPUs for the VLM stage and 1 for the ADiT stage. We make two observations. First, among the inter-GPU disaggregation schemes, Dis-1:3 performs worst, since run-ning the memory-intensive ADiT stage on 3 GPUs leaves all of them underutilized (§2.5). Second, Robion’s intra-GPU dis-aggregation outperforms all inter-GPU schemes, serving 72             
+
+> 10 Efficient Vision-Language-Action Management and Serving for Robot Factories Dis-1:3 Dis-2:2 Dis-3:1 Robion
+> 025 50 75 100 20 30 40 50 60 70 80 90
+> #Robots Served
+> SLO  Attainment  (%)
+
+Figure 13. SLO attainment of Robion versus inter-GPU stage disaggregation schemes for PI0 on a 4-GPU server. robots within 98% SLO-AT versus 60 for the best-performing inter-GPU scheme, Dis-3:1 . This is because intra-GPU disag-gregation replicates the entire model on all 4 GPUs, enabling independent request batches to run fully in parallel on all GPUs, while inter-GPU disaggregation replicates only a sin-gle stage across at most 3 GPUs. 
+
+5.5 Robion in an Enterprise Scenario on Cloud 
+
+Robion can also be used for cloud deployment: robot factory owners could rent cloud-hosted GPUs and use Robion to serve multi-robot inference requests for their VLA models on remote cloud servers. Fig. 14 shows Robion’s SLO-AT as the number of robots served for each model increases, using 4 VLA model architectures (PI0, XR0, GR15, SVLA), each placed on a separate GPU. We evaluate four configurations, combining two server setups, 4 ×RTX 6000 Pro and 4 ×H100, with two deployment settings, edge (WiFi 7 network [19]) and cloud (Fast Cloud network [19]). 4x H100, Edge 4x H100, Cloud 4x RTX 6000 Pro, Edge 4x RTX 6000 Pro, Cloud             
+
+> 0% 20% 40% 60% 80% 100% 0816 24 32 40 48 56 64
+> #Robots Served per Model
+> SLO  Attainment
+
+Figure 14. Robion’s SLO-AT serving 4 VLA models across different deployment settings and hardware platforms. We draw two findings. First, cloud deployment achieves substantially lower SLO-AT than edge deployment due to higher network latencies: at 24 robots per-model, cloud deployment achieves 23.6% and 18.4% lower SLO-AT on the 4 ×RTX 6000 Pro and 4 ×H100 server, respectively. Edge servers, that host server-class GPUs while avoiding the cloud’s network cost, are thus preferable. Second, on the edge de-ployment, the 4 ×H100 configuration serves 24 robots within 98% SLO-AT at about 2 × the cost of the 4 ×RTX 6000 Pro configuration, which serves 16 robots within 98% SLO-AT. 
+
+6 Related Work 
+
+To our knowledge, this is the first work to (i) investigate the design considerations for efficient VLA serving on edge servers in robot factories, and (ii) propose a serving and management system that meets SLO requirements for het-erogeneous multi-robot requests across multiple models on multiple GPUs. We briefly discuss prior work. 
+
+VLA Systems. ROSA [11] addresses model placement across a local cluster, Kairos [29] the task-level efficiency, and Ar-mory [20] the request scheduling to avoid robot starvation. These works operate at the model placement, task-planning, or request scheduling, treating the VLA stages as a single ex-ecution pipeline. None of them functions as a serving system capable of managing concurrent execution and GPU shar-ing across requests or models. Robion system that handles multiple concurrent requests across multiple VLA models, disaggregates VLA stages across GPU SMs, and meets SLOs. 
+
+VLA Model & Compilation Optimization. Prior works propose (i) action-chunking [5, 50–52] to generate future action sequences, (ii) model compression via distillation [53], visual-token pruning [54], and quantization [55, 56], or (iii) caching [57–59] and fused kernel optimizations [60, 61]. These optimize the VLA model or its compiled version, while Robion operates at the serving layer and can thus directly support these optimizations for further serving-level gains. 
+
+Serving Systems with Stage Disaggregation. Prior sys-tems [30–32] disaggregate multi-stage models to enable in-dependent scheduling. As we analyze in §2.5, these works primarily target stage disaggregation on separate GPU de-vices and larger-scale models whose stages run for hundreds of milliseconds. In Fig. 6, we quantitatively compare with vLLM-Omni [30], the most widely used among them, and show that Robion significantly outperforms it. VLA models with millisecond-scale stages cannot tolerate these systems’ design, which incurs high inter-stage communication costs. 
+
+DiT Serving Systems. A few works [62–67] serve DiT-based text-to-image and text-to-video models. These models consist of a single heavy DiT stage that dominates inference runtime (>99%), so these systems focus on multi-GPU paral-lelization of that single stage. VLA models are substantially smaller than DiT models and can fit on a single GPU, making cross-GPU parallelization unnecessary. VLAs also comprise two stages with distinct compute and memory character-istics. Robion serves them efficiently via intra-GPU stage disaggregation to enable independent stage scheduling. 
+
+GPU Sharing & ML Sharing Systems. GPU sharing mech-anisms [68, 69], NVIDIA’s MIG [70], MPS [71], and Green Contexts [72] allocate GPU resources across processes. Build-ing on them, ML sharing systems time-multiplex the entire device across models [73], spatially partition the SMs to dif-ferent models [74–79], or introduce a software scheduling layer between co-located kernels of different models and the native GPU scheduler [44, 80–84]. This layer intercepts ker-nel launches from co-located models, adding a few microsec-onds of dispatch overhead per launch [82]. Large models (e.g., LLMs) amortize this overhead over kernel runtimes of tens to hundreds of microseconds. However, VLA models have substantially shorter kernel times, 8–10 𝜇𝑠 , compara-ble to the dispatch overhead itself, making these systems ill-suited for co-locating VLA models on a GPU. Robion’s co-location mechanism operates at stage granularity rather than kernel-level, eliminating per-kernel dispatch overheads. 
+
+LLM Serving Systems. LLM serving systems optimize KV cache management [39, 85, 86], efficiently batch variable-length requests [87–90], and disaggregate the prefill and 
+
+> 11
+
+Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula 
+
+decode stages across GPUs [78, 91–93]. VLA models have a small KV cache, fixed-length requests, and fit on one GPU, eliminating the need for inter-GPU disaggregation. Thus, LLM serving systems would not benefit VLA models. 
+
+7 Conclusion 
+
+We explore the design considerations necessary for efficient VLA serving in robot factories. Building on them, we design Robion, an SLO-aware serving and management system for multi-robot requests across multiple VLA models on multi-GPU local edge servers. For individual models, Robion serves on average 6.7 × and 1.5 × higher robot load within 98% SLO attainment over vLLM-Omni, the most widely used multi-stage serving system, and Monolithic, which runs VLM and ADiT as a single pipeline, respectively. In a large-scale ex-periment of serving 8 different models on a 4-GPU server, Robion can serve up to 64 robots within 98% SLO attainment. We hope our work encourages further research on system and architecture design for physical AI in robot factories. 
+
+References 
+
+[1] Kento Kawaharazuka, Jihoon Oh, Jun Yamada, Ingmar Posner, and Yuke Zhu. Vision-language-action models for robotics: A review towards real-world applications. IEEE Access , 13:162467–162504, 2025. doi: 10.1109/ACCESS.2025.3609980. [2] Yueen Ma, Zixing Song, Yuzheng Zhuang, Jianye Hao, and Irwin King. A survey on vision–language–action models for embodied ai. IEEE Transactions on Neural Networks and Learning Systems , 37 (7), 2026. ISSN 2162-2388. doi: 10.1109/tnnls.2025.3650584. URL 
+
+http://dx.doi.org/10.1109/TNNLS.2025.3650584 .[3] Rui Shao, Wei Li, Lingsen Zhang, Renshan Zhang, Zhiyang Liu, Ran Chen, and Liqiang Nie. Large vlm-based vision-language-action mod-els for robotic manipulation: A survey, 2025. URL https://arxiv.org/ abs/2508.13073 .[4] Yifan Zhong, Fengshuo Bai, Shaofei Cai, Xuchuan Huang, Zhang Chen, Xiaowei Zhang, Yuanfei Wang, Shaoyang Guo, Tianrui Guan, Ka Nam Lui, Zhiquan Qi, Yitao Liang, Yuanpei Chen, and Yaodong Yang. A survey on vision-language-action models: An action tokenization perspective, 2025. URL https://arxiv.org/abs/2507.01925 .[5] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xi-aoyang Shi, James Tanner, Quan Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. 𝜋 0: A vision-language-action flow model for general robot control. In Robotics: Science and Systems (RSS) , 2025. URL https://arxiv.org/abs/2410.24164 .[6] Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi, Chelsea Finn, Niccolo Fusai, Manuel Y. Galliker, Dibya Ghosh, Lachy Groom, Karol Haus-man, Brian Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Devin LeBlanc, Sergey Levine, Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Allen Z. Ren, Lucy Xiaoyang Shi, Laura Smith, Jost Tobias Springenberg, Kyle Stachowicz, James Tanner, Quan Vuong, Homer Walke, Anna Walling, Haohuan Wang, Lili Yu, and Ury Zhilin-sky. 𝜋 0.5: A vision-language-action model with open-world gener-alization. In 9th Annual Conference on Robot Learning , 2025. URL 
+
+https://openreview.net/forum?id=vlhoswksBO .[7] NVIDIA, :, Johan Bjorck, Fernando Castañeda, Nikita Cherniadev, Xingye Da, Runyu Ding, Linxi "Jim" Fan, Yu Fang, Dieter Fox, Fengyuan Hu, Spencer Huang, Joel Jang, Zhenyu Jiang, Jan Kautz, Kaushil Kundalia, Lawrence Lao, Zhiqi Li, Zongyu Lin, Kevin Lin, Guilin Liu, Edith Llontop, Loic Magne, Ajay Mandlekar, Avnish Narayan, Soroush Nasiriany, Scott Reed, You Liang Tan, Guanzhi Wang, Zu Wang, Jing Wang, Qi Wang, Jiannan Xiang, Yuqi Xie, Yinzhen Xu, Zhenjia Xu, Seonghyeon Ye, Zhiding Yu, Ao Zhang, Hao Zhang, Yizhou Zhao, Ruijie Zheng, and Yuke Zhu. Gr00t n1: An open foundation model for generalist humanoid robots, 2025. URL 
+
+https://arxiv.org/abs/2503.14734 .[8] Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooij-mans, Steven Palma, Adil Zouitine, Michel Aractingi, Caroline Pas-cal, Martino Russi, Andres Marafioti, Simon Alibert, Matthieu Cord, Thomas Wolf, and Remi Cadene. Smolvla: A vision-language-action model for affordable and efficient robotics, 2025. URL https://arxiv. org/abs/2506.01844 .[9] Rui Cai, Jun Guo, Xinze He, Piaopiao Jin, Jie Li, Bingxuan Lin, Futeng Liu, Wei Liu, Fei Ma, Kun Ma, Feng Qiu, Heng Qu, Yifei Su, Qiao Sun, Dong Wang, Donghao Wang, Yunhong Wang, Rujie Wu, Diyun Xiang, Yu Yang, Hangjun Ye, Yuan Zhang, and Quanyun Zhou. Xiaomi-robotics-0: An open-sourced vision-language-action model with real-time execution, 2026. URL https://arxiv.org/abs/2602.12684 .[10] Xiaomi Robotics Team, Jun Guo, Piaopiao Jin, Jason Li, Peiyan Li, Yingyan Li, Futeng Liu, Wanli Peng, Optimus Qin, Yifei Su, Nan Sun, Qiao Sun, Runze Suo, Heyun Wang, Yunhong Wang, Rujie Wu, Caoyu Xia, Lina Zhang, Jack Zhao, Guoliang Chen, Wenlong Chen, Xinze He, Bin Li, Qing Li, Zhuorong Li, Heng Qu, Wenxuan Song, Diyun Xiang, Yifan Xie, Peiran Xu, Hangjun Ye, Wen Ye, Han Zhao, and Quanyun Zhou. Xiaomi-robotics-1: Scaling vision-language-action models with over 100k hours of real-world trajectories, 2026. URL 
+
+https://arxiv.org/abs/2607.15330 .[11] Wenqi Jiang, Jason Clemons, Rowland O’Flaherty, Hugo Hadfield, Alperen Degirmenci, Shuran Song, Yashraj Narang, and Christos Kozyrakis. Rosa: A robotics foundation model serving system for robot factories, 2026. URL https://arxiv.org/abs/2607.01088 .[12] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao, Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan, Chuning Zhu, Jiannan Xiang, Ayaan Malik, Kyungmin Lee, William Liang, Nadun Ranawaka, Jiasheng Gu, Yinzhen Xu, Guanzhi Wang, Fengyuan Hu, Avnish Narayan, Johan Bjorck, Jing Wang, Gwanghyun Kim, Dantong Niu, Ruijie Zheng, Yuqi Xie, Jimmy Wu, Qi Wang, Ryan Julian, Danfei Xu, Yilun Du, Yevgen Chebotar, Scott Reed, Jan Kautz, Yuke Zhu, Linxi "Jim" Fan, and Joel Jang. World action models are zero-shot policies, 2026. URL https://arxiv.org/abs/2602.15922 .[13] NVIDIA, :, Yan Wang, Wenjie Luo, Junjie Bai, Yulong Cao, Tong Che, Ke Chen, Yuxiao Chen, Jenna Diamond, Yifan Ding, Wenhao Ding, Liang Feng, Greg Heinrich, Jack Huang, Peter Karkus, Boyi Li, Pinyi Li, Tsung-Yi Lin, Dongran Liu, Ming-Yu Liu, Langechuan Liu, Zhijian Liu, Jason Lu, Yunxiang Mao, Pavlo Molchanov, Lindsey Pavao, Zhenghao Peng, Mike Ranzinger, Ed Schmerling, Shida Shen, Yunfei Shi, Sarah Tariq, Ran Tian, Tilman Wekel, Xinshuo Weng, Tianjun Xiao, Eric Yang, Xiaodong Yang, Yurong You, Xiaohui Zeng, Wenyuan Zhang, Boris Ivanovic, and Marco Pavone. Alpamayo-r1: Bridging reasoning and action prediction for generalizable autonomous driving in the long tail, 2026. URL https://arxiv.org/abs/2511.00088 .[14] Tianyuan Yuan, Zibin Dong, Yicheng Liu, and Hang Zhao. Fast-wam: Do world action models need test-time future imagination?, 2026. URL 
+
+https://arxiv.org/abs/2603.16666 .[15] Figure AI. F.03 arrives at BMW. https://www.figure.ai/news/f-03-at-bmw , June 2026. Accessed 2026-09-01. [16] Agility Robotics. Agility robotics broadens relationship with Amazon. https://www.agilityrobotics.com/content/agility-robotics-broadens-relationship-with-amazon , 2023. Accessed 2026-09-01. [17] Boston Dynamics. Stretch at DHL. https://bostondynamics.com/case-studies/stretch-at-dhl/ , 2024. Accessed 2026-09-01. 12 Efficient Vision-Language-Action Management and Serving for Robot Factories 
+
+[18] Sara Pohland, Xenofon Foukas, Ganesh Ananthanarayanan, Andrey Kolobov, Sanjeev Mehrotra, Bozidar Radunovic, and Ankit Verma. Offload or overload: A platform measurement study of mobile robotic manipulation workloads. Techni-cal Report MSR-TR-2026-14, Microsoft, March 2026. URL 
+
+https://www.microsoft.com/en-us/research/publication/offload-or-overload-a-platform-measurement-study-of-mobile-robotic-manipulation-workloads/ .[19] Wenqi Jiang, Jason Clemons, Karu Sankaralingam, and Christos Kozyrakis. How fast can i run my vla? demystifying vla inference performance with vla-perf, 2026. URL https://arxiv.org/abs/2602.18397 .[20] Rohan Bansal, David He, Nadun Ranawaka Arachchige, Zhenyang Chen, Soobum Kim, Kexin Rong, and Danfei Xu. Action chunk sched-uling for batched robot policy serving. In Lab-to-Production Workshop ,2026. URL https://openreview.net/forum?id=hxXIbCNwX9 .[21] Tiecheng Guo and Meng Guo. Action controlnet: A lightweight delay-aware adapter for smooth asynchronous control in vision-language-action models, 2026. URL https://arxiv.org/abs/2606.25985 .[22] Yongsheng Zhao, Lei Zhao, Baoping Cheng, Gongxin Yao, Xuanzhang Wen, and Han Gao. Vla-rail: A real-time asynchronous inference linker for vla models and robots, 2025. URL https://arxiv.org/abs/2512.24673 .[23] Noriaki Hirose, Catherine Glossop, Dhruv Shah, and Sergey Levine. Asyncvla: An asynchronous vla for fast and robust navigation on the edge, 2026. URL https://arxiv.org/abs/2602.13476 .[24] Teng Yan, Zhengyang Pei, Chengyu Shi, Yue Yu, Yikun Chen, Zilong Zhu, Zelin Fang, Kaile Guo, Zihang Wang, Peigen Tian, and Bingzhuo Zhong. Agile-vla: Few-shot industrial pose rectification via implicit affordance anchoring, 2026. URL https://arxiv.org/abs/2603.22899 .[25] Yuxiang Lu, Zhe Liu, Xianzhe Fan, Zhenya Yang, Jinghua Hou, Junyi Li, Kaixin Ding, and Hengshuang Zhao. Faster: Rethinking real-time flow vlas, 2026. URL https://arxiv.org/abs/2603.19199 .[26] Zhiyu Huang, Yun Zhang, Johnson Liu, Rui Song, Chen Tang, and Jiaqi Ma. Tic-vla: A think-in-control vision-language-action model for robot navigation in dynamic environments. In Proceedings of the International Conference on Machine Learning (ICML) , 2026. [27] Haoxuan Wang, Gengyu Zhang, Yan Yan, Yuzhang Shang, Ramana Rao Kompella, and Gaowen Liu. Real-time robot execution with masked action chunking. In Proceedings of the International Conference on Learning Representations (ICLR) , 2026. [28] Zhaoshu Yu, Bo Wang, Pengpeng Zeng, Haonan Zhang, Ji Zhang, Zheng Wang, Lianli Gao, Jingkuan Song, Nicu Sebe, and Heng Tao Shen. A survey on efficient vision-language-action models, 2026. URL 
+
+https://arxiv.org/abs/2510.24795 .[29] Yinwei Dai, Ganesh Ananthanarayanan, Landon Cox, Xenofon Foukas, Bozidar Radunovic, and Ravi Netravali. Kairos: A scalable serving system for physical ai, 2026. URL https://arxiv.org/abs/2605.11381 .[30] Peiqi Yin, Jiangyun Zhu, Han Gao, Chenguang Zheng, Yongxiang Huang, Taichang Zhou, Ruirui Yang, Weizhi Liu, Weiqing Chen, Canlin Guo, Didan Deng, Zifeng Mo, Cong Wang, James Cheng, Roger Wang, and Hongsheng Liu. vllm-omni: Fully disaggregated serving for any-to-any multimodal models, 2026. URL https://arxiv.org/abs/2602.02204 .[31] Atindra Jha, Naomi Sagan, Keisuke Kamahori, Irmak Sivgin, Rohan Sanda, Steven Gao, Mark Horowitz, Luke Zettlemoyer, Olivia Hsu, Jure Leskovec, Baris Kasikci, and Stephanie Wang. M*: A modular, extensible, serving system for multimodal models, 2026. URL https: //arxiv.org/abs/2606.12688 .[32] SGLang Project Contributors. SGLang-Omni: A high-performance serving framework for audio models and unified multimodal models, 2026. URL https://github.com/sgl-project/sglang-omni .[33] Krishna Teja Chitty-Venkata, Sylvia Howland, Golara Azar, Daria Soboleva, Natalia Vassilieva, Siddhisanket Raskar, Murali Emani, and Venkatram Vishwanath. Moe-inference-bench: Performance evalua-tion of mixture of expert large language and vision models, 2025. URL 
+
+https://arxiv.org/abs/2508.17467 .[34] Jin Xu, Zhifang Guo, Jinzheng He, Hangrui Hu, Ting He, Shuai Bai, Keqin Chen, Jialin Wang, Yang Fan, Kai Dang, Bin Zhang, Xiong Wang, Yunfei Chu, and Junyang Lin. Qwen2.5-omni technical report, 2025. URL https://arxiv.org/abs/2503.20215 .[35] Chaorui Deng, Deyao Zhu, Kunchang Li, Chenhui Gou, Feng Li, Zeyu Wang, Shu Zhong, Weihao Yu, Xiaonan Nie, Ziang Song, Guang Shi, and Haoqi Fan. Emerging properties in unified multimodal pretraining, 2025. URL https://arxiv.org/abs/2505.14683 .[36] Z.ai. GLM-Image: Auto-regressive for dense-knowledge and high-fidelity image generation. https://huggingface.co/zai-org/GLM-Image ,January 2026. AI model and model card, accessed 2026-08-16. [37] vLLM Project. vLLM-Omni: A framework for efficient model inference with omni-modality models. URL https://github.com/vllm-project/ vllm-omni .[38] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed serving system for Transformer-Based generative models. In 16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22) , 2022. [39] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention. In Proceedings of the 29th Symposium on Operating Systems Principles , 2023. doi: 10.1145/3600006.3613165. [40] Connor Holmes, Masahiro Tanaka, Michael Wyatt, Ammar Ah-mad Awan, Jeff Rasley, Samyam Rajbhandari, Reza Yazdani Am-inabadi, Heyang Qin, Arash Bakhtiari, Lev Kurilenko, and Yuxiong He. Deepspeed-fastgen: High-throughput text generation for llms via mii and deepspeed-inference, 2024. URL https://arxiv.org/abs/2401.08671 .[41] Qidong Su, Wei Zhao, Xin Li, Muralidhar Andoorveedu, Chenhao Jiang, Zhanda Zhu, Kevin Song, Christina Giannoula, and Gennady Pekhimenko. Seesaw: High-throughput LLM inference via model re-sharding. In Eighth Conference on Machine Learning and Systems ,2025. URL https://openreview.net/forum?id=YDksTjY3YY .[42] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav S. Gulavani, Alexey Tumanov, and Ramachandran Ramjee. Taming throughput-latency tradeoff in llm inference with sarathi-serve. In Proceedings of the 18th USENIX Conference on Operat-ing Systems Design and Implementation , OSDI’24, USA, 2024. USENIX Association. ISBN 978-1-939133-40-3. [43] Alan Gray. Getting started with CUDA graphs. https://developer. nvidia.com/blog/cuda-graphs/ , September 2019. NVIDIA Technical Blog. [44] Xiaodan Serina Tan, Pavel Golikov, Nandita Vijaykumar, and Gennady Pekhimenko. Gpupool: A holistic approach to fine-grained gpu sharing in the cloud. In Proceedings of the International Conference on Parallel Architectures and Compilation Techniques , PACT ’22, page 317–332, New York, NY, USA, 2023. Association for Computing Machinery. ISBN 9781450398688. doi: 10.1145/3559009.3569650. URL https://doi. org/10.1145/3559009.3569650 .[45] NVIDIA. CUDA C++ Programming Guide. https://docs.nvidia.com/ cuda/cuda-c-programming-guide/index.html , n.d. [46] NVIDIA Corporation. CUDA Driver API . URL https://docs.nvidia.com/ cuda/cuda-driver-api/ .[47] Advanced Micro Devices, Inc. Execution contexts. 
+
+https://rocm.docs.amd.com/projects/HIP/en/develop/how-to/hip_runtime_api/execution_context.html .[48] Laurent Perron and Frédéric Didier. Cp-sat. URL https://developers. google.com/optimization/cp/cp_solver/ .[49] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: benchmarking knowledge transfer for lifelong robot learning. In Proceedings of the 37th International Conference on Neural Information Processing Systems , NIPS ’23, Red Hook, NY, USA, 2023. Curran Associates Inc. 13 Dionysios Adamopoulos, Nattapol Chanpaisit, Basel Fakhri, and Christina Giannoula 
+
+[50] Wenxuan Song, Jiayi Chen, Pengxiang Ding, Han Zhao, Wei Zhao, Zhide Zhong, Zongyuan Ge, Jun Ma, and Haoang Li. Pd-vla: Acceler-ating vision-language-action model integrated with action chunking via parallel decoding. 2025 IEEE/RSJ International Conference on In-telligent Robots and Systems (IROS) , pages 13162–13169, 2025. URL 
+
+https://api.semanticscholar.org/CorpusID:276770282 .[51] Tony Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn. Learn-ing Fine-Grained Bimanual Manipulation with Low-Cost Hardware. In Proceedings of Robotics: Science and Systems , Daegu, Republic of Korea, July 2023. doi: 10.15607/RSS.2023.XIX.016. [52] Karl Pertsch, Kyle Stachowicz, Brian Ichter, Danny Driess, Suraj Nair, Quan Vuong, Oier Mees, Chelsea Finn, and Sergey Levine. Fast: Ef-ficient action tokenization for vision-language-action models, 2025. URL https://arxiv.org/abs/2501.09747 .[53] Xiangyu Huang, Zhenlin Hua, Han Zhou, Shounak Sural, and Ragu-nathan Rajkumar. Rt-vla: Real-time vision-language-action models via knowledge distillation, 2026. URL https://arxiv.org/abs/2606.14010 .[54] Titong Jiang, Xuefeng Jiang, Yuan Ma, Xin Wen, Bailin Li, Kun Zhan, Peng Jia, Yahui Liu, Sheng Sun, and Xianpeng Lang. The better you learn, the smarter you prune: Towards efficient vision-language-action models via differentiable token pruning, 2025. URL https://arxiv.org/ abs/2509.12594 .[55] Seongmin Park, Hyungmin Kim, Sangwoo Kim, Wonseok Jeon, Juy-oung Yang, Byeongwook Jeon, Yoonseon Oh, and Jungwook Choi. Saliency-aware quantized imitation learning for efficient robotic con-trol. In 2025 IEEE/CVF International Conference on Computer Vision (ICCV) , pages 13140–13150, 2025. doi: 10.1109/ICCV51701.2025.01221. [56] Justin Williams, Kishor Datta Gupta, Roy George, and Mrinmoy Sarkar. Lite vla: Efficient vision-language-action control on cpu-bound edge robots, 2025. URL https://arxiv.org/abs/2511.05642 .[57] Xiangyu Li, Huaizhi Tang, Xin Ding, Weijun Wang, Ting Cao, and Yunxin Liu. Oxygen: Unified kv cache management for vla inference under multi-task parallelism, 2026. URL https://arxiv.org/abs/2603. 14371 .[58] Liang Su. Execution-state capsules: Graph-bound execution-state checkpoint and restore for low-latency, small-batch, on-device physical-ai serving, 2026. URL https://arxiv.org/abs/2606.20537 .[59] Siyu Xu, Yunke Wang, Chenghao Xia, Dihao Zhu, Tao Huang, and Chang Xu. VLA-cache: Efficient vision-language-action manipulation via adaptive token caching. In The Thirty-ninth Annual Conference on Neural Information Processing Systems , 2025. URL https://openreview. net/forum?id=QZYZ0Xm58q .[60] Yunchao Ma, Yizhuang Zhou, Yunhuan Yang, Tiancai Wang, and Haoqiang Fan. Running vlas at real-time speed, 2025. URL https: //arxiv.org/abs/2510.26742 .[61] Krish Agarwal, Zhuoming Chen, Yanyuan Qin, Zhenyu Gu, Atri Rudra, and Beidi Chen. Flashrt: Agent harness for guiding agents to deploy real-time multimodal applications, 2026. URL https://arxiv.org/abs/ 2607.18171 .[62] Runyu Lu, Shiqi He, Wenxuan Tan, Shenggui Li, Ruofan Wu, Jeff J. Ma, Ang Chen, and Mosharaf Chowdhury. Tetriserve: Efficiently serving mixed dit workloads. In Proceedings of the 31st ACM Inter-national Conference on Architectural Support for Programming Lan-guages and Operating Systems, Volume 2 , ASPLOS ’26, page 1982–1997, New York, NY, USA, 2026. Association for Computing Machinery. ISBN 9798400723599. doi: 10.1145/3779212.3790233. URL https: //doi.org/10.1145/3779212.3790233 .[63] Fanjiang Ye, Zhangke Li, Xinrui Zhong, Ethan Ma, Russell Chen, Kai-jian Wang, Jingwei Zuo, Desen Sun, Ye Cao, Triston Cao, Myungjin Lee, Arvind Krishnamurthy, and Yuke Wang. Genserve: Efficient co-serving of heterogeneous diffusion model workloads, 2026. URL 
+
+https://arxiv.org/abs/2604.04335 .[64] Jiarui Fang, Jinzhe Pan, Xibo Sun, Aoyu Li, and Jiannan Wang. xdit: an inference engine for diffusion transformers (dits) with massive parallelism, 2024. URL https://arxiv.org/abs/2411.01738 .[65] Suyi Li, Lingyun Yang, Xiaoxiao Jiang, Hanfeng Lu, Dakai An, Zhipeng Di, Weiyi Lu, Jiawei Chen, Kan Liu, Yinghao Yu, Tao Lan, Guodong Yang, Lin Qu, Liping Zhang, and Wei Wang. Katz: Efficient workflow serving for diffusion models with many adapters. In 2025 USENIX An-nual Technical Conference (USENIX ATC 25) , pages 1037–1052, Boston, MA, July 2025. USENIX Association. ISBN 978-1-939133-48-9. URL 
+
+https://www.usenix.org/conference/atc25/presentation/li-suyi-katz .[66] Heyang Huang, Cunchen Hu, Jiaqi Zhu, Ziyuan Gao, Liangliang Xu, Yizhou Shan, Yungang Bao, Sun Ninghui, Tianwei Zhang, and Sa Wang. Ddit: Dynamic resource allocation for diffusion transformer model serving, 2025. URL https://arxiv.org/abs/2506.13497 .[67] Xinwei Qiang, Yifan Hu, Shixuan Sun, Jing Yang, Han Zhao, Chen Chen, Yu Feng, Jingwen Leng, and Minyi Guo. Gf-dit: Scheduling parallelism for diffusion transformer serving, 2026. URL https://arxiv. org/abs/2606.13501 .[68] Ivan Tanasic, Isaac Gelado, Javier Cabezas, Alex Ramirez, Nacho Navarro, and Mateo Valero. Enabling preemptive multiprogramming on gpus. In Proceeding of the 41st Annual International Symposium on Computer Architecuture , ISCA ’14, page 193–204. IEEE Press, 2014. ISBN 9781479943944. [69] Jason Jong Kyu Park, Yongjun Park, and Scott Mahlke. Chimera: Col-laborative preemption for multitasking on a shared gpu. In Proceedings of the Twentieth International Conference on Architectural Support for Programming Languages and Operating Systems , ASPLOS ’15, page 593–606, New York, NY, USA, 2015. Association for Computing Ma-chinery. ISBN 9781450328357. doi: 10.1145/2694344.2694346. URL 
+
+https://doi.org/10.1145/2694344.2694346 .[70] NVIDIA Corporation. Nvidia multi-instance gpu (mig) user guide. Available online, 2024. URL https://docs.nvidia.com/datacenter/tesla/ mig-user-guide/latest/index.html .[71] NVIDIA Corporation. Multi-Process Service (MPS) , 2026. URL https: //docs.nvidia.com/deploy/mps/index.html . Accessed: 2026-08-13. [72] NVIDIA Corporation. CUDA C++ Programming Guide: Green Contexts ,2026. URL https://docs.nvidia.com/cuda/cuda-programming-guide/ 04-special-topics/green-contexts.html . Accessed: 2026-08-13. [73] Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine Kauf-mann, Ymir Vigfusson, and Jonathan Mace. Serving DNNs like clock-work: Performance predictability from the bottom up. In 14th USENIX Symposium on Operating Systems Design and Implementation (OSDI 20) , pages 443–462. USENIX Association, November 2020. ISBN 978-1-939133-19-9. URL https://www.usenix.org/conference/osdi20/ presentation/gujarati .[74] Seungbeom Choi, Sunho Lee, Yeonjae Kim, Jongse Park, Youngjin Kwon, and Jaehyuk Huh. Serving heterogeneous machine learning models on Multi-GPU servers with Spatio-Temporal sharing. In 2022 USENIX Annual Technical Conference (USENIX ATC 22) , pages 199–216, Carlsbad, CA, July 2022. USENIX Association. ISBN 978-1-939133-29-53. URL https://www.usenix.org/conference/atc22/presentation/choi-seungbeom .[75] Fei Xu, Jianian Xu, Jiabin Chen, Li Chen, Ruitao Shang, Zhi Zhou, and Fangming Liu. igniter: Interference-aware gpu resource provisioning for predictable dnn inference in the cloud. IEEE Transactions on Parallel and Distributed Systems , 34(3):812–827, 2023. doi: 10.1109/TPDS.2022. 3232715. [76] Sudipta Saha Shubha, Haiying Shen, and Anand Iyer. Usher: holistic interference avoidance for resource optimized ml inference. In Pro-ceedings of the 18th USENIX Conference on Operating Systems Design and Implementation , OSDI’24, USA, 2024. USENIX Association. ISBN 978-1-939133-40-3. [77] Jiangfei Duan, Runyu Lu, Haojie Duanmu, Xiuhong Li, Xingcheng Zhang, Dahua Lin, Ion Stoica, and Hao Zhang. Muxserve: flexible spatial-temporal multiplexing for multiple llm serving. In Proceedings of the 41st International Conference on Machine Learning , ICML’24. JMLR.org, 2024. 14 Efficient Vision-Language-Action Management and Serving for Robot Factories 
+
+[78] Zejia Lin, Hongxin Xu, Guanyi Chen, Zhiguang Chen, Yutong Lu, and Xianwei Zhang. Bullet: Boosting gpu utilization for llm serving via dynamic spatial-temporal orchestration. In Proceedings of the 31st ACM International Conference on Architectural Support for Program-ming Languages and Operating Systems, Volume 2 , ASPLOS ’26, page 290–306, New York, NY, USA, 2026. Association for Computing Ma-chinery. ISBN 9798400723599. doi: 10.1145/3779212.3790135. URL 
+
+https://doi.org/10.1145/3779212.3790135 .[79] Shulai Zhang, Quan Chen, Weihao Cui, Han Zhao, Chunyu Xue, Zhen Zheng, Wei Lin, and Minyi Guo. Improving GPU sharing performance through adaptive bubbleless spatial-temporal sharing. In Proceedings of the Twentieth European Conference on Computer Systems (EuroSys ’25) , New York, NY, USA, 2025. ACM. doi: 10.1145/3689031.3696070. URL https://doi.org/10.1145/3689031.3696070 .[80] Foteini Strati, Xianzhe Ma, and Ana Klimovic. Orion: Interference-aware, fine-grained gpu sharing for ml applications. In Proceedings of the Nineteenth European Conference on Computer Systems , EuroSys ’24, page 1075–1092, New York, NY, USA, 2024. Association for Computing Machinery. ISBN 9798400704376. doi: 10.1145/3627703.3629578. URL 
+
+https://doi.org/10.1145/3627703.3629578 .[81] Kelvin K. W. Ng, Henri Maxime Demoulin, and Vincent Liu. Paella: Low-latency model serving with software-defined gpu scheduling. In 
+
+Proceedings of the 29th Symposium on Operating Systems Principles ,SOSP ’23, page 595–610, New York, NY, USA, 2023. Association for Computing Machinery. ISBN 9798400702297. doi: 10.1145/3600006. 3613163. URL https://doi.org/10.1145/3600006.3613163 .[82] Mingcong Han, Hanze Zhang, Rong Chen, and Haibo Chen. Microsecond-scale preemption for concurrent GPU-accelerated DNN inferences. In 16th USENIX Symposium on Operating Systems De-sign and Implementation (OSDI 22) , pages 539–558, Carlsbad, CA, July 2022. USENIX Association. ISBN 978-1-939133-28-1. URL 
+
+https://www.usenix.org/conference/osdi22/presentation/han .[83] Wei Zhao, Anand Jayarajan, and Gennady Pekhimenko. Tally: Non-intrusive performance isolation for concurrent deep learning work-loads. In Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Sys-tems, Volume 1 , ASPLOS ’25, page 1052–1068, New York, NY, USA, 2025. Association for Computing Machinery. ISBN 9798400706981. doi: 10.1145/3669940.3707282. URL https://doi.org/10.1145/3669940. 3707282 .[84] Patrick H. Coppock, Brian Zhang, Eliot H. Solomon, Vasilis Kypriotis, Leon Yang, Bikash Sharma, Dan Schatzberg, Todd C. Mowry, and Dimitrios Skarlatos. Lithos: An operating system for efficient machine learning on gpus. In Proceedings of the ACM SIGOPS 31st Symposium on Operating Systems Principles , SOSP ’25, page 1–17, New York, NY, USA, 2025. Association for Computing Machinery. ISBN 9798400718700. doi: 10.1145/3731569.3764818. URL https://doi.org/10.1145/3731569. 3764818 .[85] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang, Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind Krishnamurthy, and Luis Ceze. Flashinfer: Efficient and customizable attention engine for LLM inference serving. In MLSys 2025 , 2025. URL 
+
+https://openreview.net/forum?id=RXPofAsL8F .[86] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica, Joseph E. Gonzalez, Clark Barrett, and Ying Sheng. SGLang: Efficient execution of structured language model programs. In The Thirty-eighth Annual Conference on Neural Information Processing Systems ,2024. URL https://openreview.net/forum?id=VqkAKQibpq .[87] Ying Sheng, Shiyi Cao, Dacheng Li, Banghua Zhu, Zhuohan Li, Danyang Zhuo, Joseph E. Gonzalez, and Ion Stoica. Fairness in serving large language models. In Proceedings of the 18th USENIX Conference on Operating Systems Design and Implementation , OSDI’24, USA, 2024. USENIX Association. ISBN 978-1-939133-40-3. [88] Bingyang Wu, Yinmin Zhong, Zili Zhang, Shengyu Liu, Fangyue Liu, Yuanhang Sun, Gang Huang, Xuanzhe Liu, and Xin Jin. Fast-Serve: Iteration-Level preemptive scheduling for large language model inference. In 23rd USENIX Symposium on Networked Systems De-sign and Implementation (NSDI 26) , pages 57–74, Renton, WA, May 2026. USENIX Association. ISBN 978-1-939133-54-0. URL https: //www.usenix.org/conference/nsdi26/presentation/wu-bingyang .[89] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang, Yong Li, and Wei Lin. Llumnix: dynamic scheduling for large lan-guage model serving. In Proceedings of the 18th USENIX Conference on Operating Systems Design and Implementation , OSDI’24, USA, 2024. USENIX Association. ISBN 978-1-939133-40-3. [90] Hyungjun Oh, Kihong Kim, Jaemin Kim, Sungkyun Kim, Junyeol Lee, Du-seong Chang, and Jiwon Seo. Exegpt: Constraint-aware resource scheduling for llm inference. In Proceedings of the 29th ACM International Conference on Architectural Support for Program-ming Languages and Operating Systems, Volume 2 , ASPLOS ’24, page 369–384, New York, NY, USA, 2024. Association for Computing Ma-chinery. ISBN 9798400703850. doi: 10.1145/3620665.3640383. URL 
+
+https://doi.org/10.1145/3620665.3640383 .[91] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-anzhe Liu, Xin Jin, and Hao Zhang. Distserve: disaggregating prefill and decoding for goodput-optimized large language model serving. In Proceedings of the 18th USENIX Conference on Operating Systems Design and Implementation , OSDI’24, USA, 2024. USENIX Association. ISBN 978-1-939133-40-3. [92] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo Goiri, Saeed Maleki, and Ricardo Bianchini. Splitwise: Efficient gen-erative llm inference using phase splitting. In 2024 ACM/IEEE 51st Annual International Symposium on Computer Architecture (ISCA) ,pages 118–132, 2024. doi: 10.1109/ISCA59077.2024.00019. [93] Ruoyu Qin, Zheming Li, Weiran He, Jialei Cui, Heyi Tang, Feng Ren, Teng Ma, Shangming Cai, Yineng Zhang, Mingxing Zhang, Yong-wei Wu, Weimin Zheng, and Xinran Xu. Mooncake: A kvcache-centric disaggregated architecture for llm serving. ACM Trans. Stor-age , November 2025. ISSN 1553-3077. doi: 10.1145/3773772. URL 
+
+https://doi.org/10.1145/3773772 .15
