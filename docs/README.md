@@ -18,7 +18,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-16</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-17</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -28,7 +28,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-16 22:04:04 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-17 21:56:27 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-16 日报精选 19 篇机器人论文，精读 7 篇、速读 12 篇，聚焦世界模型与视觉语言模型驱动的新进展。最值得看的是 DIDO（9.0/10）把交互动态蒸馏进一步去噪的世界动作模型，以及 NavPatch（8.0/10）用视觉语言模型做物体级代价地图纠错。普通读者可先从这两篇精读入手，再按兴趣浏览速读中的世界潜在动作与移动操作记忆方向。</p>
+<p>2026-09-17 日报筛选 19 篇机器人学习论文，精读 7 篇、速读 12 篇。最值得关注的是 XPACE 的异构经验世界与动作联合建模，以及 RAF-VLA 面向端到端自动驾驶的未来表征对齐，两篇均获 9.0 分。普通读者可优先从这两篇精读入手，再按兴趣跟进具身导航与视触觉操作等速读方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -51,9 +51,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="DIDO: Distilling Interaction-Centric Dynamics into One-Step Denoising for World Action Models">DIDO: Distilling Interaction-Centric Dynamics into One-Step Denoising for World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="NavPatch: Evidence-Guided Object-Level Costmap Correction with Vision-Language Models">NavPatch: Evidence-Guided Object-Level Costmap Correction with Vision-Language Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="LieSpline-DP: Lie-Group B-Spline Diffusion Policy for Smooth Robot Manipulation">LieSpline-DP: Lie-Group B-Spline Diffusion Policy for Smooth Robot Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="XPACE: Joint World and Action Modeling from Heterogeneous Experience">XPACE: Joint World and Action Modeling from Heterogeneous Experience</span></li><li><span class="dpr-home-dashboard-paper-title" title="RAF-VLA: Representation Alignment with the Future for End-to-End Autonomous Driving">RAF-VLA: Representation Alignment with the Future for End-to-End Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Imitation Learning for Autonomous Driving in CARLA">Imitation Learning for Autonomous Driving in CARLA</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>7</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>6</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,7 +64,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="WLA$^3$: World Latent Action Modeling for Semantics, Dynamics, and Kinematics">WLA$^3$: World Latent Action Modeling for Semantics, Dynamics, and Kinematics</span></li><li><span class="dpr-home-dashboard-paper-title" title="MessyMem: Learning-from-Doing Memory for Mobile Manipulation">MessyMem: Learning-from-Doing Memory for Mobile Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Agent as Policy for Robotic Manipulation">Agent as Policy for Robotic Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="HarnessVLN: Unifying Training-Free Embodied Navigation through an Agent Harness">HarnessVLN: Unifying Training-Free Embodied Navigation through an Agent Harness</span></li><li><span class="dpr-home-dashboard-paper-title" title="World-Action Models for Robot Learning and Control: A Survey">World-Action Models for Robot Learning and Control: A Survey</span></li><li><span class="dpr-home-dashboard-paper-title" title="UniDex-ViTac: Learning Unified Visuo-Tactile Dexterous Manipulation Policy from Human Video Data">UniDex-ViTac: Learning Unified Visuo-Tactile Dexterous Manipulation Policy from Human Video Data</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
