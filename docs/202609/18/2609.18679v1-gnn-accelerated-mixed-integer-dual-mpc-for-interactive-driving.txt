@@ -1,0 +1,880 @@
+Title: GNN-Accelerated Mixed-Integer Dual MPC for Interactive Driving
+
+URL Source: https://arxiv.org/pdf/2609.18679v1
+
+Published Time: Thu, 17 Sep 2026 01:14:51 GMT
+
+Number of Pages: 9
+
+Markdown Content:
+# GNN-Accelerated Mixed-Integer Dual MPC for Interactive Driving 
+
+Yidan Zhu 1,∗, Shuhao Qi 2,∗, Luyao Zhang 3, Sofie Haesaert 2, Jonas M˚ artensson 1
+
+Abstract — In interactions with uncertain opponents, dual model predictive control (MPC) can improve performance through information-seeking actions that reduce uncertainty about opponents’ behavior. Its recent applications to au-tonomous driving, however, are limited to scenarios involving a single opponent on a single lane. This paper presents a mixed-integer dual MPC for multiple reactive opponents on multi-lane roads, jointly optimizing integer-valued maneuver deci-sions (lane changes and safe-region selections), and continuous motion over a scenario tree that samples plausible interac-tions with the opponents. As interaction complexity increases, solving the resulting mixed-integer nonlinear program becomes increasingly expensive. To reduce this computational burden, a graph neural network (GNN) predicts the optimal maneuver decisions, and high-confidence predictions are fixed before the reduced problem is solved. Simulations show that active probing behavior emerges in complex interactive scenarios, and that GNN guidance fixes 76 .3% of the integer decisions and reduces the solve time by 2.5× on average, with negligible degradation of optimality. 
+
+I. I NTRODUCTION 
+
+Advanced driver-assistance systems have been widely de-ployed in modern vehicles, yet fully autonomous driving still struggles in dense, interactive traffic [1], exemplified by the roundabout in Fig. 1. In such situations, the autonomous driving algorithm is often not confident enough to handle the risky interaction and requires the human driver to take over. What distinguishes interactive planning from conventional obstacle avoidance is that the surrounding vehicles are not only dynamic, but also reactive to the ego vehicle’s mo-tion [2], [3]. The ego vehicle must therefore actively interact with other road users, rather than passively avoid them. For example, when merging into a dense traffic flow, as in the upper panel of Fig. 1, a planner that does not account for the yielding reactions of other vehicles may never merge into the flow, an instance of the freezing robot problem [4]. Developing a controller that explicitly accounts for these reactions is thus critical for handling realistic traffic.    
+
+> ∗Indicates equally contribution. This work was supported by the Knut and Alice Wallenberg Foundation under the Wallenberg Artificial Intelligence, Autonomous Systems and Software Program (WASP), and by the European Union under the Horizon Europe project AIGGREGATE (Grant No. 101202457).
+> 1Yidan Zhu and Jonas M˚ artensson are with the Division of Decision and Control Systems, School of Electrical Engineering and Computer Science (EECS), KTH Royal Institute of Technology, Stockholm, Sweden, and are also affiliated with the Integrated Transport Research Lab and Digital Futures.
+
+{yidanz, jonas1 }@kth.se   
+
+> 2Shuhao Qi and Sofie Haesaert are with the Department of Electrical Engineering, Eindhoven University of Technology, Eindhoven, The Nether-lands.
+
+{s.qi, s.haesaert }@tue.nl                  
+
+> 3Luyao Zhang is with the Delft Center for Systems and Control, Delft University of Technology, Delft, The Netherlands.
+
+zly9706@gmail.com 
+
+Fig. 1: Interaction in a roundabout: the ego (green) enters the roundabout and moves to the inner lane to overtake, then probes to merge into the outer lane. If the opponent (orange) yields (cautious), the ego exits; otherwise (aggressive), it drives another lap. 
+
+Model predictive control (MPC) is well suited to au-tonomous driving thanks to its native handling of constraints and uncertainty [5]. Unlike Robust MPC , which computes control inputs against the worst-case behavior of surround-ing agents [6], Branch MPC [7] mitigates the resulting conservatism by enumerating a scenario tree of plausible trajectories of the surrounding agents. However, these con-trollers can only adapt passively to the surrounding agents; they cannot proactively influence them. More recently, the 
+
+dual-control effect [2], [8] has been introduced into MPC, termed Dual MPC [9], which couples estimation with control and generates behavior that simultaneously optimizes task performance and actively reduces uncertainty. In interactions with other agents, proactive behavior emerges from this coupling: the controller probes the opponent to reduce uncer-tainty about its hidden intent, and then exploits the resulting information to improve performance. Although Dual MPC exhibits such human-like proactive behavior, a gap remains in handling realistic interaction: due to the complexity of modeling multiple interacting agents and the structured road environment, existing approaches are often limited to a single surrounding vehicle and a single lane [3], [9]. The planning problem in multi-lane, multi-vehicle traffic is combinatorial in nature, involving not only continuous trajec-tory optimization but also discrete maneuver decisions [10], arXiv:2609.18679v1 [eess.SY] 16 Sep 2026 [11]. For instance, the ego vehicle must decide, for each approaching opponent, whether to yield or pass and whether to bypass it on the left or on the right; on a structured road such as that in Fig. 1, it must further choose whether to keep its lane, move to the inner lane to overtake, or move to the outer lane to exit. In practice, decision making and motion planning are commonly separated in a hierarchical frame-work [12], but this decoupling loses information between the layers: the decisions are neither optimal nor timely, and the trajectories may fail to realize them in highly dynamic situations [11], [13]. Thus, mixed-integer programming has been used to integrate the decision making and the trajectory optimization in a single optimization problem [11], [13], though without accounting for proactive interaction. However, such a mixed-integer program is NP-hard in general [14] and computationally intensive to solve [15]. The computational cost grows drastically with the complexity of the interactive scenario. In contrast, human drivers decide quickly even in complex interactive scenarios, thanks to experience and intuition. Learning-based methods bring a similar advantage to mixed-integer programs by exploiting the structure shared across instances to guide the solver. Graph neural networks (GNNs) have been used to learn branching policies [16], to predict variable biases that guide the branch and bound (B&B) [17], and to generate partial integer assignments that define smaller subproblems [18]. In this paper, we propose a dual MPC framework for interactive driving that accounts for the reactions of multiple surrounding vehicles and the structured road environment, and that generates reasonable interactive behavior, such as active information seeking, even in complex scenarios. To mitigate the computational burden, we design a learning-based pipeline that accelerates the solution of the resulting mixed-integer program with a GNN. Specifically, the GNN infers the optimal maneuver decisions to reduce the search space: those inferred with high confidence are fixed, and only the ambiguous ones are left to the B&B search. The predicted decisions also make the complex interaction interpretable, which matters in this safety-critical application. With GNN guidance, the solve time is reduced by 2.5× on average, with no loss of optimality. II. P ROBLEM FORMULATION 
+
+We present a problem formulation for interactive driving involving multiple vehicles and lanes. 
+
+A. System Model 
+
+The ego vehicle, denoted by V e, interacts with No sur-rounding opponent vehicles Vo = {V om | m = 1 , . . . , N o}.Throughout, a superscript identifies the agent and a sub-script the time step, so that (xet , uet ) denotes the ego and 
+
+(xom 
+
+> t
+
+, uom 
+
+> t
+
+) opponent V om , with the label shortened to o
+
+whenever a single opponent is considered. To keep the focus on the interaction among agents, every vehicle is modeled following [19] as a simplified linear time-invariant system, a double integrator sampled at interval ∆t,
+
+xit+1 = Axit + Buit, ∀i ∈ { e, o 1, . . . , o No }, (1) Cautious Aggressive                   
+
+> ˆτot
+> ˆνot
+> ˆτet
+> ˆνet
+> ∆so,e t
+> ∆do,e t
+> ℓ= 1
+> ℓ= 0
+> xyggcau gagg
+> Fig. 2: Interaction between the ego vehicle Veand an opponent
+> Voon a multi-lane highway. The path-aligned frames (ˆ τit,ˆνit),
+> i∈ { e, o }, are anchored at the lane-centerline projections Tit.
+
+where the state xi = [( pi)⊤, (vi)⊤]⊤ ∈ R4 collects the position pi = [ pix, p iy ]⊤ and the velocity vi = [ vix, v iy ]⊤ in global Cartesian coordinates, the control ui = [ aix, a iy ]⊤ ∈ R2
+
+is the acceleration, and A ∈ R4×4, B ∈ R4×2 are the state-transition and input matrices, shared by all vehicles. 
+
+B. Road Geometry and Path-Aligned Frames 
+
+Since driving unfolds along a road rather than in free space, we describe the motion of the vehicles relative to the lane structure of the road. The road has Nℓ lanes of width 
+
+W , indexed by ℓ ∈ L := {0, . . . , N ℓ − 1}. For each vehicle 
+
+i we build a path-aligned frame [20] on the centerline of the lane ℓit it currently occupies. Fig. 2 illustrates the path-aligned frames for a highway interaction. To describe its geometry, that centerline is parameterized by arc length s ∈
+
+[0 , L ], measured from the projection of the vehicle’s position onto it, through a map T i : [0 , L ] → R2 that takes s to a planar position, where L is the fixed length of the centerline segment. Its derivative is the unit tangent ˆτ i(s) = ( T i)′(s),and ˆνi(s) the unit normal, its counterclockwise quarter turn. Anchored at T i(s), this orthonormal pair defines the path-aligned frame at s and connects it to the global frame of (1). We write (ˆ τ it, ˆνit) and T it for the frame and anchor at the vehicle’s own projection, s = 0 , at the current time t.The lateral offset of vehicle i from the centerline of the lane it currently occupies is 
+
+ηit = (ˆ νit)⊤ pit − T it
+
+ . (2) Accounting for its width W i, vehicle i stays within the road boundaries as long as ηit ≤ ηit ≤ ηit, where 
+
+ηit := W i
+
+2 −
+
+
+
+ℓit + 12
+
+
+
+W, ηit := 
+
+
+
+Nℓ − ℓit − 12
+
+
+
+W − W i
+
+2 . (3) The same construction locates one vehicle relative to another: the longitudinal and lateral displacements and speeds of vehicle j in the frame of vehicle i are 
+
+∆si,j t = (ˆ τ it)⊤ pjt − pit
+
+, vi,j τ,t = (ˆ τ it)⊤vjt ,
+
+∆di,j t = (ˆ νit)⊤ pjt − pit
+
+, vi,j ν,t = (ˆ νit)⊤vjt . (4) A vehicle’s own longitudinal speed is abbreviated as viτ,t := 
+
+vi,i τ,t . The ego vehicle must keep a safe distance from sur-rounding vehicles, which requires the longitudinal and lateral displacements of the ego relative to each opponent to satisfy: 
+
+∆som,e t ≥ dτ or ∆dom,e t ≥ dν , (5) 2for all m ∈ { 1, . . . , N o} and all t ≥ 0, where the longitudinal and lateral margins dτ , d ν > 0 account for the vehicle length and width, respectively, plus a safety buffer. 
+
+C. Opponent Behavior Model 
+
+To account for the reactions of the surrounding vehicles, we model how each opponent V om responds to the ego vehicle’s motion. For simplicity, this paper ignores the in-teractions among opponents. Following the driver models in [9], [21], [22], we adopt a parametric model that emulates realistic driving through three features: responsiveness to the ego vehicle, a latent intention parameter that is not directly observable, and stochasticity. Thus, the opponent’s control input at time step t is modeled as 
+
+uom 
+
+> t
+
+= g(xom 
+
+> t
+
+, xet ; θm) + ϵom 
+
+> t
+
+, ϵom 
+
+> t
+
+∼ N (0, Σ) , (6) where g(·) is a parametric policy depending on the oppo-nent’s own state and on the ego state xet , θm is the latent intention parameter of opponent V om , and ϵom 
+
+> t
+
+is zero-mean Gaussian noise with covariance Σ, independent across vehicles and time steps, capturing behavioral variability. 
+
+An instantiation of the opponent model : Here we present a simple model for an opponent V o with a scalar latent parameter θ, interacting with the ego vehicle V e.The policy g(·) of (6) drives the opponent toward a commanded speed along its own path, 
+
+g xot , xet ; θ = Kp
+
+ vcmd  
+
+> t
+
+− voτ,t 
+
+ ˆτ ot , (7) with constant gain Kp > 0. V o reacts to the ego only when the ego lies in its interaction region. Since we assume that each opponent keeps its lane, the interaction region is the strip ahead of it: the ego lies in it if 
+
+0 < ∆so,e t ≤ dint and |∆do,e t | ≤ Wint , where dint > 0 is its longitudinal range and Wint > W its lateral half-width. The ego’s speed and displacements in the opponent’s frame follow from (4) as vo,e τ,t , ∆so,e t , and ∆do,e t . If the ego lies outside the interaction region, V o cruises at its desired speed, vcmd  
+
+> t
+
+= vo
+
+> des
+
+; if the ego lies inside it, the commanded speed is 
+
+vcmd  
+
+> t
+
+=
+
+vo,e τ,t + θ ∆v, |∆do,e t | > W/ 2,vo,e τ,t +Kg (∆ so,e t −ddes ), |∆do,e t | ≤ W/ 2, (8) where ddes > 0 is the desired gap to the vehicle ahead, 
+
+Kg > 0 the gap gain, vo 
+
+> des
+
+the desired speed, ∆v > 0 the speed offset, and θ ∈ Θ = {θcau , θ agg } = {− 1, +1 } the latent parameter. The first case describes the situation where the ego is outside the lane of V o and may merge into it, as shown in Fig. 2: if V o is cautious (θ = θcau ), it reduces its speed below that of the ego and opens a gap; if V o is aggressive (θ = θagg ), it targets a higher speed to close it. The second case applies when the ego occupies the lane ahead of V o and has become its leader: the opponent regulates its speed to maintain the gap ddes .
+
+D. Problem Statement 
+
+Given the reactive and uncertain opponents modeled by (6), the ego cannot simply predict their motion and plan around it. The hidden parameters θm that determine how each opponent responds are never observed directly. They are revealed only through the responses themselves, and those responses are triggered by the ego’s own motion. A controller is therefore required that accounts for this coupling between estimation and control while tracking a preferred lane ℓpref ∈L at a desired longitudinal speed ve 
+
+> des
+
+and satisfying the safety constraint (5) under the ego dynamics (1). It should operate in a setting with No reactive opponents and Nℓ lanes, rather than in the single-lane, single-opponent abstraction adopted in most prior work [3], [9]. Finally, the growth of the computational cost with the number of opponents and lanes should be mitigated for scalability. III. M IXED -I NTEGER DUAL MPC Unlike the prior work on dual MPC in [3], which is restricted to a single opponent in a single lane, we account for multiple lanes and multiple opponents by carrying the maneuver decisions as integer variables. These decisions are optimized jointly with the continuous motion over a scenario tree that enumerates the plausible future interactions. Along that tree, a belief over the latent intention parameter of (6) is propagated and updated from the observed actions. The remainder of this section specifies this mixed-integer dual MPC formulation. Following [23], [24], we retain both the Cartesian and the path-aligned frames and express each objective and constraint term in the more convenient one, with the vehicle states and their dynamics staying in the global Cartesian frame of (1) while the reference-tracking terms and the lane-structure constraints are expressed in path-aligned coordinates. 
+
+A. Integer Decision Variables 
+
+The combinatorial nature of planning for autonomous driving arises from two sources: the road structure, which forces a choice of the lane to occupy, and the surrounding vehicles, which forces a choice of the region to occupy relative to each of them, namely passing, merging ahead, or following behind. We represent both choices as integer variables, so that the continuous motion and the maneuver decisions are optimized jointly. The lane choice is formulated first, followed by the choice of the convex safe region to occupy relative to each opponent. 
+
+1) Lane-Change Decisions: At time t the ego occupies lane ℓet ∈ L . To describe the lane-change decision, we define two binary variables δ+ 
+
+> t
+
+, δ − 
+
+> t
+
+∈ { 0, 1}, marking a transition to the adjacent lane of higher and of lower index, respectively, following the mixed-integer lane encoding of [13]. The difference (δ+ 
+
+> t
+
+− δ− 
+
+> t
+
+) ∈ {− 1, 0, 1} is the signed lane change, negative for a move to the lower-index lane, zero for no change, and positive for a move to the higher-index lane. Since the ego cannot move to both adjacent lanes at once, the sum δ+ 
+
+> t
+
++ δ− 
+
+> t
+
+is bounded by one; the lane index then 3Fig. 3: Illustration of the four convex safe regions (front, back, inner, outer) used for mixed-integer obstacle avoidance. 
+
+advances by this signed change, 
+
+δ+ 
+
+> t
+
++ δ− 
+
+> t
+
+≤ 1, ℓet = ℓet−1 + ( δ+ 
+
+> t
+
+− δ− 
+
+> t
+
+) ∈ L . (9) 
+
+2) Safe-Region Selections: For each opponent V om , the collision-free set of relative positions admitted by (5) is non-convex. Following [25], we decompose it into four convex safe regions , one per maneuver q ∈ Q = {fr , bk , in , ou }:passing ahead of the opponent, following behind it, and passing on its inner or outer side, the side of the positive or the negative normal ˆνom 
+
+> t
+
+(Fig. 3). Binary selectors γq,m t ,one per region, mark which region the ego occupies relative to V om at time t. By (4), the ego’s position relative to that opponent is rmt =  ∆som,e t , ∆dom,e t
+
+⊤, and each region is the halfspace a⊤ 
+
+> q
+
+rmt ≥ dq , where afr = −abk = [1 , 0] ⊤ and 
+
+ain = −aou = [0 , 1] ⊤ select the longitudinal or the lateral offset, and dfr = dbk = dτ and din = dou = dν are the margins of (5). The selection is enforced via a big-M method [25], 
+
+X
+
+> q∈Q
+
+γq,m t = 1 ,
+
+a⊤ 
+
+> q
+
+rmt ≥ dq − M  1 − γq,m t
+
+, ∀q ∈ Q ,
+
+(10) for every opponent m and every time step t. The selector turns its halfspace on or off: at γq,m t = 1 the region is imposed as written, while at γq,m t = 0 a large enough M relaxes the bound past anything the ego can reach, so that region places no restriction. With the one-hot constraint, exactly one halfspace is imposed, expressing the non-convex union through linear constraints. With the above definitions, the ego’s binary decisions at time t are collected as 
+
+σet =  δ+ 
+
+> t
+
+, δ − 
+
+> t
+
+, {γq,m t }q∈Q , m =1 ,...,N o
+
+ ∈ { 0, 1}2+4 No . (11) 
+
+B. Belief Representation and Update 
+
+Since the hidden parameter θm of opponent V om is not directly observable, the ego maintains a belief over θ ∈ Θ,
+
+bmt (θ) = Pr  θm = θ | { xe
+
+> 0: t
+
+, xom 
+
+> 0: t
+
+}, where Pr( · | · ) denotes the conditional probability given the ego and opponent states observed up to time t. The belief is normalized so that P 
+
+> θ∈Θ
+
+bmt (θ) = 1 . As the interaction proceeds, the ego observes the opponent’s next state and recovers its realized input from the velocity increment, ˜uom 
+
+> t
+
+= ( vom 
+
+> t+1
+
+−vom 
+
+> t
+
+)/∆t,from which the belief is updated by Bayes’ rule, 
+
+bmt+1 (θ) = ρθ (˜ uom 
+
+> t
+
+| xom 
+
+> t
+
+, xet ) bmt (θ)
+
+P 
+
+> θ′∈Θ
+
+ρθ′ (˜ uom 
+
+> t
+
+| xom 
+
+> t
+
+, xet ) bmt (θ′) . (12) Here ρθ (˜ uom 
+
+> t
+
+| xom 
+
+> t
+
+, xet ) = N  ˜uom 
+
+> t
+
+| g(xom 
+
+> t
+
+, xet ; θ), Σ is the likelihood of the observed input under the opponent policy (6) with candidate value θ, so each observation                       
+
+> n0
+> n1
+> n2
+> n3
+> n4
+> n5
+> n6
+> n7
+> n8
+> n9
+> n10
+> n11
+> n12
+> n13
+> n14
+> L
+> uon1
+> uon2
+> uon3
+> uon4
+> uon5
+> uon6
+> uon7
+> uon8
+> uon9
+> uon10
+> uon11
+> uon12
+> uon13
+> uon14
+> xen0=xet
+> xom
+> n0=xom
+> t
+> bmn0=bmt
+> ℓen0=ℓet
+> uen0,σen0
+> branching horizon (Hb= 2 )propagation horizon (H−Hb= 2 )
+> k= 0 k= 1 k= 2 k= 3 k= 4
+
+Fig. 4: Example of a scenario tree with Hb = 2 and H = 4 . The root n0 is initialized from the current time t, and the edge into a node n carries the sampled opponent reaction uon. The blue uen and 
+
+σen are the decision variables at that node. 
+
+rescales the prior by how well it matches each candidate value. We write the update as bmt+1 = Ψ( bmt , ˜uom 
+
+> t
+
+, xom 
+
+> t
+
+, xet )
+
+with the operator Ψ( ·).
+
+C. Scenario Tree 
+
+To capture the multi-modal uncertainty of the interaction, the controller plans over a scenario tree [7], which enu-merates several plausible futures over a prediction horizon of H steps ahead of the current time t, indexed by k =0, . . . , H . As shown in Fig. 4, the tree has node set N =
+
+{n0, . . . , n N −1}: the root n0 is the current joint state at depth 
+
+k = 0 , the leaves L ⊂ N are the terminal nodes at depth H,and P(n), C(n) denote the parent and children of a node. The depth of a node is the step k it predicts. Branching at every step would grow the node count exponentially with the horizon, so, to keep a long horizon tractable, the tree is generated in two phases [9]: a branching horizon over the first Hb steps, in which every node has several children, one per sampled joint reaction of the interacting opponents, followed by a propagation horizon over the remaining steps up to H, in which every node has a single child. As shown in Fig. 4, every node n carries the joint state (xen, {xom 
+
+> n
+
+}No
+
+> m=1
+
+), the beliefs {bmn }No
+
+> m=1
+
+, and the ego’s lane index ℓen, together with the decisions taken there, the binary decisions σen and the input uen. The edges carry the uncertainty about the opponents: the joint opponent input 
+
+uon = ( uo1 
+
+> n
+
+, . . . , uoNo  
+
+> n
+
+) on the edge into n is one realization of (6) under a sampled hidden parameter θmn and a noise draw ϵom 
+
+> n
+
+for each opponent on that edge; both are drawn before the optimization and enter (16) as data. The states xen
+
+and xom 
+
+> n
+
+follow from the parent through the dynamics (1), the beliefs bmn through the update (12), and the lane index 
+
+ℓen through the recursion (9), with the consecutive time steps in these equations replaced by the parent P(n) and the node 
+
+n. At node n, the input uen and the binary decisions σen are optimized against the realizations at all its children C(n).The quantities of Sec. II-B are expressed in path-aligned frames and used in the road bound (3), the safe-region selection (10), the opponent behavior model (7), and the ego’s tracking objective defined below. Their frames are fixed before the solve: the frame of each vehicle i lies on the centerline of the lane ℓit it occupies at the current 4time t and the frame of horizon step k is taken at the nominal arc length sik along it, (ˆ τ ik, ˆνik) =  ˆτ i(sik), ˆνi(sik)
+
+anchored at T ik = T i(sik). Since every path-aligned quantity is a projection of the Cartesian states of (1), the frames of different vehicles are linked only through the global frame. 
+
+D. Control Objective 
+
+The control objective is a cost over the scenario tree, assembled from the terms introduced below. 
+
+1) Lane Selection: The ego often has to keep to a par-ticular lane to reach its destination, such as the exit lane of a roundabout. We therefore charge the assigned lane at each node for its distance from a preferred lane ℓpref ,
+
+Jpref  
+
+> n
+
+(ℓen) = λpref 
+
+ ℓen − ℓpref 2, with weight λpref ≥ 0. When the ego leaves ℓpref to overtake a vehicle, this term draws it back once the overtaking is complete. 
+
+2) Reference Tracking: The ego is expected to track the centerline of the assigned lane ℓen at a desired speed ve
+
+> des
+
+.Since the path-aligned frame of Sec. II-B stays on the centerline of the lane ℓet the ego currently occupies, the deviation from the assigned lane is obtained by shifting the lateral offset by the lane difference. At a node n ∈ N of depth 
+
+k, the ego’s lateral offset ηen and speed along the road veτ,n 
+
+are given by (2) and (4) with the state at node n and the frame of step k, and the tracking error for lane keeping and longitudinal speed there is 
+
+en =
+
+ ∆ηen
+
+veτ,n − ve
+
+> des
+
+
+
+, ∆ηen = ηen − (ℓen − ℓet ) W, (13) where ∆ηen is the deviation of the ego from the centerline of the assigned lane. Thus, the stage and terminal costs are the quadratic tracking terms, Jn(en, uen) = ∥en∥2 
+
+> Q
+
++∥uen∥2
+
+> R
+
+and JFn (en) = ∥en∥2 
+
+> Qf
+
+, with Q, Q f , R ⪰ 0 in R2×2.
+
+3) Safety Constraint Relaxation: Since the scenario tree randomly samples several opponent reactions, some of them improbable, the ego may be unable to satisfy the safety con-straints strictly for all of them. Thus, the road bound (3) and the safe region selected in (10) are softened by nonnegative slacks: ξrd  
+
+> n
+
+widens the road bound on both sides, and ξsf ,m n
+
+lowers the bound dq of the region selected for opponent 
+
+m. Stacked as ξn = ξrd  
+
+> n
+
+, ξ sf ,1 
+
+> n
+
+, . . . , ξ sf ,N o
+
+> n
+
+⊤ ≥ 0, the slacks are penalized at each node as Jslack  
+
+> n
+
+(ξn) = λ⊤
+
+> slack
+
+ξn, with 
+
+λslack > 0 chosen to strongly penalize constraint violations relative to tracking errors. 
+
+4) Node Weighting: The behaviors sampled at the nodes are not equally probable, so the node weights ωn are com-puted from the propagated belief on the tree. Since the noises in (6) are independent across vehicles, the opponents’ inputs along an edge are independent conditioned on the parent state, and the likelihood of the joint action uon on that edge is the product of the per-opponent likelihoods. Along the tree, the belief over the hidden parameter of each opponent is propagated by the update (12) as the interaction evolves with the sampled opponent reactions. Marginalizing each factor over the corresponding parent belief, and then normalizing over the children of the same parent, turns that likelihood into a parent-to-child transition probability, from which the node weight follows recursively from the root ωn0 = 1 ,
+
+¯ρn =
+
+> No
+
+Y
+
+> m=1
+
+X
+
+> θ∈Θ
+
+bm
+
+> P(n)
+
+(θ) ρθ
+
+ uom 
+
+> n
+
+| xom
+
+> P(n)
+
+, xe
+
+> P(n)
+
+,ωn = ωP(n)
+
+¯ρn
+
+P 
+
+> n′∈C (P(n))
+
+¯ρn′
+
+,
+
+(14) for n ∈ N \ { n0}, so that ωn is the probability of reaching node n and the weights sum to one at every depth of the tree, in particular over the leaves, P 
+
+> n∈L
+
+ωn = 1 . Hence, each node enters the cost with the probability of the sampled opponent reactions that lead to it: a plausible reaction weighs heavily in the optimization, whereas an improbable one weighs little. Collecting the terms above, the control objective over the scenario tree is 
+
+J = X
+
+> n∈N\L
+
+ωn Jn(en, uen) + X
+
+> n∈L
+
+ωn JFn (en)+ X
+
+> n∈N\{ n0}
+
+ωn
+
+ Jpref  
+
+> n
+
+(ℓen) + Jslack  
+
+> n
+
+(ξn). (15) 
+
+E. Complete Optimization Problem 
+
+Collecting the objective and the constraints above, the mixed-integer dual MPC problem solved at every time step t
+
+is the following mixed-integer nonlinear program (MINLP): 
+
+min  
+
+> ue,σe,ξ
+
+J by (15) s.t. xen0 = xet , xom 
+
+> n0
+
+= xom 
+
+> t
+
+, ℓ en0 = ℓet , b mn0 = bmt ,
+
+xen = Axe 
+
+> P(n)
+
++Bue
+
+> P(n)
+
+, xom 
+
+> n
+
+= Axom 
+
+> P(n)
+
++Buom 
+
+> n
+
+,
+
+uom 
+
+> n
+
+= g xom
+
+> P(n)
+
+, xe
+
+> P(n)
+
+; θmn
+
+ + ϵom 
+
+> n
+
+,bmn = Ψ  bm
+
+> P(n)
+
+, uom 
+
+> n
+
+, xom
+
+> P(n)
+
+, xe
+
+> P(n)
+
+,ℓen = ℓe 
+
+> P(n)
+
++ ( δ+ 
+
+> n
+
+− δ− 
+
+> n
+
+) ∈ L , ωn by (14) ,δ+ 
+
+> n
+
++ δ− 
+
+> n
+
+≤ 1, P 
+
+> q∈Q
+
+γq,m n = 1 ,ηet − ξrd  
+
+> n
+
+≤ ηen ≤ ηet + ξrd  
+
+> n
+
+,
+
+a⊤ 
+
+> q
+
+rmn ≥ dq − M  1 − γq,m n
+
+ − ξsf ,m n ,
+
+xen ∈ X , uen ∈ U , σen ∈ { 0, 1}2+4 No , ξn ≥ 0,
+
+(16) where the recursions of the states, opponent inputs, beliefs, and lane index hold at n ∈ N \ { n0}, and the remaining constraints at n ∈ N. Constraints indexed by m or q hold for every opponent m ∈ { 1, . . . , N o} and region q ∈ Q .The tracking error en and the path-aligned quantities ηen,
+
+veτ,n , rmn are given by (13), (2), and (4), the road bounds 
+
+ηet , η et by (3), and X , U are the admissible state and input sets. The variables ue, σe, and ξ collect uen, σen, and 
+
+ξn over the tree, whereas the states, lane indices, beliefs, and weights follow from them through the recursions. The sampled hidden parameters θmn and noise realizations ϵom
+
+> n
+
+of Sec. III-C, together with the path-aligned frames (ˆ τ ik, ˆνik)
+
+and anchors T ik , enter as constants fixed before the solve, so every path-aligned quantity is affine in the states, exactly on a straight path and to first order on a curved one. This formulation can exhibit the dual-control effect [5]. The belief propagation along the tree captures whether an 5Fig. 5: Solving the MINLP (16) under GNN guidance. The online execution pipeline is shown in teal and the offline training in gray. 
+
+opponent’s action is informative about the hidden parame-ters. The node weights (14), computed from the propagated beliefs, concentrate the objective on the plausible branches. Consequently, the optimization encourages ego behavior that sharpens the beliefs and fully exploits the belief state in planning. When the long-term gain outweighs the cost of probing, the ego elicits informative reactions from the opponents, which amounts to active information seeking. IV. GNN-G UIDED BRANCH AND BOUND 
+
+For the computationally demanding MINLP (16), standard solvers such as SCIP [26], which we use throughout, start from a root relaxation and close the optimality gap by B&B, whose search cost grows quickly with the problem size. We therefore propose to use a GNN to predict the integer decisions and fix those predicted with high confidence, which reduces the search space left to the solver. The overall framework is shown in Fig. 5. 
+
+A. GNN Design and Training 1) Input Representation: Following [16]–[18], we repre-sent the MINLP with a bipartite graph G = ( V, E, C). The node sets V and C encode the properties of the variables and constraints, respectively, while the edge set E encodes the relationships between them. Therefore, G captures the structure of the optimization problem. This graph is extracted from the root relaxation of the MINLP, in which the integer decisions are treated as continuous. 
+
+2) Output Representation: The GNN is designed to pro-cess the graph G and predict the optimal values of the binary decisions σen in (16). These binaries are constrained: at each node n, by (9) at most one of the lane-change binaries δ+ 
+
+> n
+
+and 
+
+δ− 
+
+> n
+
+is active, and by (10) exactly one selector γq,m n is active for each opponent m. Rather than predicting the binaries one by one, we predict the underlying maneuver decisions : for each node n, the signed lane change δ+ 
+
+> n
+
+−δ− 
+
+> n
+
+∈ {− 1, 0, +1 },and for each node n and opponent m, the safe region q ∈ Q 
+
+with γq,m n = 1 . Let Z denote the set of maneuver decisions in problem (16), z ∈ Z one such decision, and z⋆ its value in an optimal solution of (16). For each decision z, the GNN predicts the distribution of its optimal value, 
+
+pz (ζ) = Pr  z⋆ = ζ, (17) where ζ ranges over the values z can take, {− 1, 0, +1 } for a lane change and Q for a safe region. 
+
+3) GNN Architecture: Following [16], the GNN is de-signed as shown in Fig. 5: given the input graph G, the variable nodes V and the constraint nodes C are first em-bedded by separate multilayer perceptrons into V1 and C1,respectively. Next, in the constraint-side message passing, a multilayer perceptron computes a message for each edge from the embeddings of its two end nodes in V1 and C1 and its features in E, and each constraint node aggregates the messages on its edges to update its embedding, yielding C2.An analogous variable-side pass then aggregates messages from the updated constraint nodes to obtain V2. Finally, a multilayer perceptron maps each variable embedding in V2
+
+to a scalar score, and the distribution pz of a decision z is the softmax over the scores of the binaries that compose it, with a zero score for the no-change option of a lane decision. 
+
+4) Training Procedure: As shown by the gray offline pipeline in Fig. 5, training data are collected from closed-loop simulations with randomized traffic; each data point consists of the graph G of one MINLP (16) encountered in these simulations and the optimal values {z⋆}z∈Z of its maneuver decisions, obtained by solving the full problem with SCIP [26]. The GNN is trained by minimizing the cross-entropy − P 
+
+> z∈Z
+
+log pz (z⋆) of the predicted distributions at these labels, summed over all training problems. 
+
+B. GNN-Guided Variable Fixing 
+
+The distributions {pz }z∈Z predicted by the GNN are used to fix integer decisions, which results in a reduced optimization problem. For each decision z, the predicted value is bz = arg max ζ pz (ζ). If its probability satisfies 
+
+pz (bz) ≥ ¯p, the prediction is deemed confident enough to fix z to bz, and the corresponding entries of σen are fixed accordingly. Otherwise, the decision remains free and is left to the reduced MINLP. The threshold ¯p sets the balance: raising it fixes fewer decisions and leaves more of them free, while lowering it reduces the search space further at a higher risk of fixing a decision wrongly. The reduced MINLP, obtained by substituting the fixed assignments into (16), is solved with the SCIP solver. V. S IMULATION RESULTS AND VALIDATION 
+
+The implementation details, source code, and video demonstrations are available on the project website 1. In the 
+
+> 1https://anonymous.4open.science/api/repo/ mixed-integer-dual-mpc-project-3CA9/file/index.html?v=3f7e589b
+
+6following case studies, the opponents follow the behavior model in (7) and (8), with θ ∈ { θcau , θ agg } per opponent.       
+
+> Fig. 6: Representative closed-loop ramp-merging episode. The marked snapshots show the evolution of the interaction, while the lower panels report the ego’s emergent probing action, vehicle speeds, and belief convergence after probing.
+
+A. Case Study 1: Single-Opponent Ramp Merging 
+
+To clearly illustrate the active probing behavior of the dual MPC controller, we first test it in a single-opponent, single-lane ramp-merging scenario. The ego vehicle (green) travels along the on-ramp and attempts to merge into the mainline, where a single opponent (orange) with an unknown hidden parameter θ ∈ { θcau , θ agg } approaches the merging point at roughly the same time as the ego. The ego decides whether to merge ahead of or behind the opponent, depending on the opponent’s latent willingness to yield. Fig. 6 shows an episode that exhibits active probing. The MPC controller uses H = 15 , Hb = 2 , and ∆t = 0 .1 s .Before the interaction, the ego does not know the opponent’s true hidden parameter, and the belief remains neutral. At 
+
+t = 0 .8 s , driven by the dual-control effect, the ego accel-erates to elicit an informative response from the opponent. This maneuver sacrifices short-term tracking performance but is expected to reduce the long-term cost by reducing the uncertainty about θ. Once the ego observes that the opponent yields, its belief converges to the cautious mode. Consequently, at t = 5 .2 s , the ego holds the desired speed 
+
+ve 
+
+> des
+
+without braking and confidently merges ahead. This episode illustrates how proactive information seeking reduces uncertainty about the opponent’s intention and supports a more informed merging decision. 
+
+B. Case Study 2: Multi-Lane Multi-Opponent Highway 
+
+As shown in Fig. 7, this case study considers a three-lane highway with 8–20 surrounding vehicles traveling at 
+
+6–8 m /s. Their initial states and hidden parameters θ are sampled at random. To induce overtaking interactions, the ego vehicle’s desired speed is set to ve 
+
+> des
+
+= 10 m /s, above that of the traffic. At each MPC step, up to 5 surrounding vehicles are included as opponents in the optimization. With 
+
+H = 8 , ∆t = 0 .2 s , and Hb = 2 , the scenario tree contains 
+
+31 nodes and 819 integer variables. The GNN is trained on 
+
+1000 MINLP instances collected in the highway scenario and tested on 411 instances from newly generated scenarios. The confidence threshold is set to ¯p = 0 .95 . With this threshold, the fixing accuracy on the test set is 99 .95% , that is, only 
+
+0.05% of the fixed decisions differ from their optimal values. All computations are run on an Apple M1 Pro processor. 
+
+1) Interpretation of the Fixed Decisions: Fig. 7 illustrates how GNN guidance reduces the number of free integer variables considered by the optimizer. The purple and or-ange arrows mark the lane-change and safe-region decisions predicted by the GNN at the current step, respectively. In panel (a), the GNN leans toward a change to lane 2, but with low confidence, so the decision is left to the B&B search, and the optimized trajectory probes slightly toward lane 2. As V o1 accelerates to close the gap instead of yielding, the belief b1 
+
+> t
+
+(θagg ) converges to one, and in panel (b) the GNN prediction shifts toward staying in lane 1. Once V o1 has passed, in panel (c), the GNN again predicts the change to lane 2, and the ego carries it out. In these three snapshots, the lane-change decision is never fixed by the GNN, whereas the safe-region selections are fixed in all three snapshots, which saves solve time. The GNN thus indicates which decisions are critical in a given situation and which are not. This interpretation reflects an understanding of the interactive scenario, which is valuable for safety-critical applications. Note that the snapshots show only the current-step decisions, while the GNN predictions are less confident at deeper nodes. Over all instances, 76 .3% of the integer decisions are fixed at ¯p = 0 .95 .
+
+2) Speedup and Solution Quality: To evaluate the ac-celeration by GNN-guided fixing, Fig. 8 plots the solve time of the reduced problem after fixing against that of the full problem (16) for the MINLP instances collected from 13 trials of the highway case study. In 94 .4% of these instances, the reduced solve finishes faster than the full solve. The full solve times range from approximately 0.4 to 3 s 
+
+across the traffic situations, whereas the reduced solve times concentrate around 0.3–0.65 s . GNN-guided fixing reduces the solve time by 2.5× on average and by up to 10 × on the most demanding instances. The binned median curve stays nearly flat as the full solve time grows, which indicates that GNN-guided fixing mitigates the additional computational burden of the harder instances. Since GNN inference itself takes only a few milliseconds, this GNN guidance leads to a substantial saving in overall solve time, which is crucial for real-time deployment. Moreover, the speedup does not come at the expense of solution quality: on the test set, GNN fixing reaches a fixing accuracy of 99 .95% . Over the 411 
+
+test instances, GNN fixing degrades the objective by at most 
+
+0.0080% , so the reduced solve stays near-optimal. Despite the significant speedup, the reduced solve times still exceed 
+
+∆t = 0 .2 s on the Apple M1 Pro, so the controller does not yet run in real time. Hardware acceleration and parallel 7b 1          
+
+> t(μagg ) = 0 :50
+> 012
+> (a) t= 6 :2 s
+> Safe region selection b1
+> t(μagg ) = 1 :00
+> (b) t= 8 :4 s
+> Planned tree trajectory
+> (c) t= 15 :0 s
+> Lane decision confidence of GNN
+
+Fig. 7: Three snapshots of the highway case study. Orange arrows mark the safe-region selections, the purple arrows mark the candidate lane decisions, each shaded by the GNN confidence, and the teal polyline traces the planned trajectory along the scenario tree. 
+
+Fig. 8: Solve time of the GNN-reduced problem against that of the full problem, on logarithmic axes. The dashed diagonal marks equal solve time ( 1×) and the dotted diagonals 2×, 5×, and 10 ×
+
+speedups; the teal curve is the median within equal-count bins. 
+
+processing are left for future work. 
+
+C. Case Study 3: Multi-Lane Multi-Opponent Roundabout 
+
+Finally, we evaluate the proposed controller in a multi-lane roundabout in the high-fidelity simulator CARLA [27]. Unlike the previous case studies on straight roads, where the path-aligned frame (ˆ τ ik, ˆνik) is constant along the horizon, the frame rotates around the roundabout with the arc length, so the path-aligned frames and lane-reference geometry are adapted to the curved road. As shown in Fig. 1, the ego vehi-cle (green) enters the roundabout from the bottom and aims for the exit on the upper left. To track the desired speed ve
+
+> des
+
+,the ego first changes to the inner lane to avoid the slower vehicle ahead. It then encounters a circulating opponent (orange) with an unknown hidden parameter θ ∈ { θcau , θ agg },which may or may not yield to the ego. Driven by the dual-control effect, the ego actively probes the opponent to elicit an informative response. When the opponent is cautious, it yields, the belief converges to the cautious value, and the ego confidently exits the roundabout. When the opponent is aggressive, it does not yield; the ego therefore defers the exit and completes another lap before leaving the roundabout. The ego thus handles the interaction on the multi-lane, multi-opponent roundabout proactively, demonstrating the benefit of integer decisions in the dual MPC framework. VI. C ONCLUSION 
+
+To handle realistic traffic, in which the reactions of multiple opponents on multi-lane roads exhibit multi-modal uncertainty driven by hidden parameters, this paper presented a mixed-integer dual MPC framework for interactive driving. The formulation incorporates integer variables to handle the combinatorial nature of the interaction and generates proactive behavior by accounting for both tracking perfor-mance and uncertainty reduction. To address the increased computational cost of the resulting mixed-integer program, an interpretable GNN-guided variable-fixing scheme was proposed that fixes the high-confidence maneuver decisions and leaves only the ambiguous ones to the solver. This scheme reduces the solve time substantially and flattens its growth with the complexity of the interaction. REFERENCES [1] W. Wang, L. Wang, C. Zhang, C. Liu, and L. Sun, “Social interactions for autonomous driving: A review and perspectives,” Foundations and Trends® in Robotics , vol. 10, no. 3-4, pp. 198–377, 2022. [2] D. Sadigh, N. Landolfi, S. S. Sastry, S. A. Seshia, and A. D. Dragan, “Planning for cars that coordinate with people: leveraging effects on human actions for planning and active information gathering over human internal state,” Autonomous Robots , vol. 42, no. 7, pp. 1405– 1426, 2018. [3] S. Qi, Q. Aori, L. Zhang, M. Lazar, and S. Haesaert, “Situation-aware interactive MPC switching for autonomous driving,” arXiv preprint arXiv:2512.06182 , 2025. [4] P. Trautman and A. Krause, “Unfreezing the robot: Navigation in dense, interacting crowds,” in IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2010, pp. 797–803. [5] A. Mesbah, “Stochastic model predictive control with active uncer-tainty learning: A survey on dual control,” Annual Reviews in Control ,vol. 45, pp. 107–117, 2018. [6] J. Zhou, D. Tian, Z. Sheng, X. Duan, G. Qu, D. Zhao, D. Cao, and X. Shen, “Robust min-max model predictive vehicle platooning with causal disturbance feedback,” IEEE Transactions on Intelligent Transportation Systems , vol. 23, no. 9, pp. 15 878–15 897, 2022. [7] Y. Chen, U. Rosolia, W. Ubellacker, N. Csomay-Shanklin, and A. D. Ames, “Interactive multi-modal motion planning with branch model predictive control,” IEEE Robotics and Automation Letters , vol. 7, no. 2, pp. 5365–5372, 2022. [8] J. Knaup, J. D’sa, B. Chalaki, T. Naes, H. N. Mahjoub, E. Moradi-Pari, and P. Tsiotras, “Active learning with dual model predictive path-integral control for interaction-aware autonomous highway on-ramp merging,” in IEEE International Conference on Robotics and Automation (ICRA) , 2024, pp. 14 191–14 197. [9] H. Hu, D. Isele, S. Bae, and J. F. Fisac, “Active uncertainty reduction for safe and efficient interaction planning: A shielding-aware dual control approach,” The International Journal of Robotics Research ,vol. 43, no. 9, pp. 1382–1408, 2024. [10] R. Oliveira, S. H. Nair, and B. Wahlberg, “Interaction and decision making-aware motion planning using branch model predictive con-trol,” in IEEE Intelligent Vehicles Symposium (IV) , 2023, pp. 1–8. [11] R. A. Dollar and A. Vahidi, “Multilane automated driving with optimal control and mixed-integer programming,” IEEE Transactions on Control Systems Technology , vol. 29, no. 6, pp. 2561–2574, 2021. [12] B. Paden, M. ˇC´ ap, S. Z. Yong, D. Yershov, and E. Frazzoli, “A survey of motion planning and control techniques for self-driving urban vehicles,” IEEE Transactions on Intelligent Vehicles , vol. 1, no. 1, pp. 33–55, 2016. [13] R. Quirynen, S. Safaoui, and S. Di Cairano, “Real-time mixed-integer quadratic programming for vehicle decision-making and motion plan-ning,” IEEE Transactions on Control Systems Technology , vol. 33, no. 1, pp. 77–91, 2025. [14] R. M. Karp, “Reducibility among combinatorial problems,” in Com-plexity of Computer Computations , R. E. Miller and J. W. Thatcher, Eds. New York: Plenum Press, 1972, pp. 85–103. 
+
+8[15] G. L. Nemhauser and L. A. Wolsey, Integer and Combinatorial Optimization . New York: Wiley-Interscience, 1988. [16] M. Gasse, D. Ch´ etelat, N. Ferroni, L. Charlin, and A. Lodi, “Exact combinatorial optimization with graph convolutional neural networks,” 
+
+Advances in Neural Information Processing Systems , vol. 32, 2019. [17] E. B. Khalil, C. Morris, and A. Lodi, “MIP-GNN: A data-driven framework for guiding combinatorial solvers,” in Proceedings of the AAAI Conference on Artificial Intelligence , vol. 36, no. 9, 2022, pp. 10 219–10 227. [18] V. Nair, S. Bartunov, F. Gimeno, I. Von Glehn, P. Lichocki, I. Lobov, B. O’Donoghue, N. Sonnerat, C. Tjandraatmadja, P. Wang et al. ,“Solving mixed integer programs using neural networks,” arXiv preprint arXiv:2012.13349 , 2020. [19] J. A. Robbins, J. A. Siefert, S. Brennan, and H. C. Pangborn, “Mixed-integer MPC-based motion planning using hybrid zonotopes with tight relaxations,” IEEE Transactions on Control Systems Technology ,vol. 34, no. 3, pp. 1177–1192, 2026. [20] M. Werling, J. Ziegler, S. Kammel, and S. Thrun, “Optimal trajectory generation for dynamic street scenarios in a Frenet frame,” in IEEE International Conference on Robotics and Automation (ICRA) , 2010, pp. 987–993. [21] A. Muraleedharan, A.-T. Tran, H. Okuda, and T. Suzuki, “Scenario-based model predictive speed controller considering probabilistic constraint for driving scene with pedestrian,” in IEEE International Conference on Intelligent Transportation Systems (ITSC) , 2020. [22] W. Wang, J. Xi, and J. K. Hedrick, “A learning-based personalized driver model using bounded generalized Gaussian mixture models,” 
+
+IEEE Transactions on Vehicular Technology , vol. 68, no. 12, pp. 11 679–11 690, 2019. [23] X. Xing, B. Zhao, C. Han, D. Ren, and H. Xia, “Vehicle motion planning with joint Cartesian-Fren´ et MPC,” IEEE Robotics and Au-tomation Letters , vol. 7, no. 4, pp. 10 738–10 745, 2022. [24] R. Reiter, A. Nurkanovi´ c, J. Frey, and M. Diehl, “Frenet-Cartesian model representations for automotive obstacle avoidance within non-linear MPC,” European Journal of Control , vol. 74, p. 100847, 2023. [25] A. Richards and J. P. How, “Aircraft trajectory planning with collision avoidance using mixed integer linear programming,” in American Control Conference (ACC) , vol. 3, 2002, pp. 1936–1941. [26] C. Hojny et al. , “The SCIP Optimization Suite 10.0,” Optimization Online, Technical Report, Nov. 2025. [27] A. Dosovitskiy, G. Ros, F. Codevilla, A. Lopez, and V. Koltun, “CARLA: An open urban driving simulator,” in Proceedings of the 1st Annual Conference on Robot Learning . PMLR, 2017, pp. 1–16. 
+
+9
