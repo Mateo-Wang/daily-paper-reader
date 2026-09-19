@@ -1,0 +1,440 @@
+Title: VLM-MPPI: Grounding Natural Language in Behaviorally Diverse Trajectories for Aerial Navigation
+
+URL Source: https://arxiv.org/pdf/2609.18451v1
+
+Published Time: Thu, 17 Sep 2026 00:59:11 GMT
+
+Number of Pages: 8
+
+Markdown Content:
+# VLM-MPPI: Grounding Natural Language in Behaviorally Diverse Trajectories for Aerial Navigation 
+
+Hanbing Zhang 1, Fangguo Zhao 1, Zerui Li 2, Xin Guan 1, Peng Cheng 1, Shuo Li 1
+
+Abstract — We present a hierarchical UAV navigation frame-work that aligns natural-language intent with dynamically feasi-ble flight behaviors in cluttered indoor environments. To bridge the gap between abstract semantics and low-level control, we employ a parallelized ensemble of six behavior-conditioned Model Predictive Path Integral (MPPI) planners. Crucially, by designing mode-specific guiding costs and sampling biases, we induce distinct trajectory modes that converge to unique behavioral means, yielding a compact set of intentionally diverse candidates rather than mere stochastic variations. We project these 3D candidates onto the onboard first-person-view RGB stream, turning language grounding into a visual action selection problem. A pretrained vision–language model (VLM) asynchronously selects the candidate index given the overlaid FPV image and a natural-language prompt, while MPPI replans at 20 Hz and a PID-based low-level controller tracks the selected trajectory. We implement the full pipeline in NVIDIA Isaac Sim and on a real-world quadrotor platform equipped with LiDAR and RGB sensing. Experiments in both simulation and real-world flights show semantically meaningful behavior diversity, robust language alignment despite VLM latency, and safe, repeatable flight across all modes, achieving 100% task success in our evaluated scenarios. 
+
+I. I NTRODUCTION 
+
+In recent years, unmanned aerial vehicles (UAVs) have evolved from remotely piloted platforms into autonomous agents operating in complex, cluttered environments [1]. As they are increasingly used for tasks such as indoor inspection and search-and-rescue, human–robot interaction is shifting from purely geometric specifications toward rich, high-level semantic instructions [2], [3]. Beyond providing waypoints or goal poses, users now expect to influence how the vehicle moves using natural language commands such as “follow the corridor quietly,” “inspect the object on the left,” or “move conservatively through the crowd.” Executing such commands requires translating abstract human intent into precise, dynamically feasible control actions, a challenge that is particularly acute in constrained indoor environments [4], where the UAV must interpret visual context while strictly respecting kinematic and dynamic limits to ensure safe operation. Over the past decade, indoor UAV navigation has evolved from geometric planning to kinodynamic trajectory genera-tion with frequent replanning. Minimum-snap trajectories [5] 
+
+> 1
+
+Authors are with the College of Control Science and Engineering, Zhe-jiang University, Hangzhou 310027, China shuo.li@zju.edu.cn 
+
+> 2
+
+Zerui Li is with Australian Institute for Machine Learning, Adelaide University. This work was supported in part by the National Natural Science Foundation of China (NSFC) under Grants W2511069 and 62088101, and in part by the Zhejiang Key Laboratory of Airspace Perception and Autonomous Unmanned Systems. Right-Hug Left-Hug 
+
+Fig. 1. Real-world Deployment. Composite flight trajectories in a
+
+7 m × 4 m × 3 m cluttered environment. The system executes topologically distinct behavioral modes ( Right-Hug and Left-Hug ) tailored to varying prompts, demonstrating robust alignment between semantic intent and feasible motion. 
+
+enable real-time, dynamically feasible quadrotor motion through waypoints under corridor and input constraints. Fast-Planner [6] combines kinodynamic search with efficient B-spline optimization and time adjustment for fast, non-conservative replanning, while EGO-Planner [1] improves ef-ficiency via an ESDF-free gradient-based formulation guided by a collision-free reference and lightweight obstacle ex-traction. In parallel, MPPI [7] optimizes controls through massively parallel rollouts, and prior studies have shown performance comparable to optimization-based MPC in chal-lenging setting [8]; PA-MPPI [9] adds perception-aware costs to reveal unknown space when the goal is occluded, and AERO-MPPI [10] uses LiDAR-derived anchors to guide parallel MPPI optimizers toward diverse homotopy classes. Despite these advances, mainstream navigation pipelines arXiv:2609.18451v1 [cs.RO] 16 Sep 2026 remain largely semantics-agnostic, with behavior dictated by hand-designed objectives and manually crafted cost terms. As a result, natural language cannot directly specify flight style without manual cost design and tuning. To overcome the semantic limitations of traditional nav-igation frameworks, Vision-Language Models (VLMs) such as GPT-4o [11] and Gemini 2.5 [12] have recently been in-tegrated into autonomous systems. Pioneering works such as LM-Nav [13] and CLIP-Nav [14] leverage pre-trained mod-els to achieve zero-shot landmark navigation without task-specific training. Subsequent systems move toward context-aware planning; for example, CoNVOI [15] and Language-as-Cost [16] translate visual semantics into risk-aware, static costmaps that guide local planners. In aerial and large-scale navigation, foundation models are predominantly employed as high-level global planners. Specifically, architectures like Online-VLM-Planner [17] and UAV-VLPA* [18] generate discrete waypoints, whereas others are combined with low-level tracking controllers for tasks such as autonomous driv-ing [19], [20]. However, while effectively harnessing seman-tic priors, these methods predominantly yield geometric out-puts, such as discrete waypoints [21] or static costmaps [22], [23], which is derived from simplified kinematic models. Consequently, they fail to explicitly enforce the continuous dynamic feasibility and inertial constraints essential for safe aerial navigation. Moreover, the inherent inference latency of large foundation models fundamentally precludes their use in the high-frequency feedback loops essential for flight stabilization. To bridge this gap, we introduce a hierarchical framework that distinctly separates high-latency semantic reasoning from high-frequency dynamic generation. Instead of prompt-ing a model to synthesize geometric paths, we employ a parallel MPPI stack to continuously generate a compact set of behaviorally diverse, dynamically feasible candidates. By projecting these 3D trajectories onto the onboard FPV im-ages, we let the VLM select the optimal trajectory that guides the UAV toward the target while obeying the segmentation instructions.The key contributions of our work are as follows:  
+
+> •
+
+Hierarchical language-conditioned VLM–MPPI navigation framework. We reformulate language-conditioned UAV navigation as a trajectory selection problem, in which a Vision–Language Model selects the optimal trajectory from dynamically feasible candidates generated by MPPI to guide the UAV toward the target while complying with semantic instructions.  
+
+> •
+
+Behaviorally Diverse MPPI Ensemble for Trajectory Generation. We introduce a behaviorally diverse MPPI ensemble that exposes a discrete set of dynamically fea-sible motion primitives, enabling language-conditioned trajectory selection by a Vision–Language Model.  
+
+> •
+
+Simulation and Real-World Validation. We imple-ment the proposed VLM–MPPI stack in NVIDIA Isaac Sim and on a real-world quadrotor platform equipped with LiDAR and RGB sensing. Extensive experiments in both simulation and hardware demonstrate seman-tically meaningful behavioral diversity across modes, robust language alignment despite VLM latency, and safe, repeatable flight in cluttered indoor scenes. II. P RELIMINARIES 
+
+In this section, we briefly review the standard Model Predictive Path Integral (MPPI) algorithm [7], which serves as the mathematical foundation for our trajectory generators. Unlike traditional gradient-based Model Predictive Control (MPC) that often struggles with non-convex spatial land-scapes and requires strictly differentiable cost functions, MPPI leverages parallel Monte Carlo sampling to naturally handle complex environments and non-differentiable con-straints. We consider a generic discrete-time nonlinear dynamical system: 
+
+xt+1 = F(xt, ut), (1) where xt ∈ Rn is the system state and ut ∈ Rm is the control input. In the context of our aerial navigation task, we define the state as xt = [ p⊤ 
+
+> t
+
+, v⊤ 
+
+> t
+
+, ψ t]⊤ ∈ R7, comprising the 3D position, linear velocity, and yaw angle. The control input is defined as ut = [ a⊤ 
+
+> t
+
+, ˙ψt]⊤ ∈ R4, representing the command linear acceleration and yaw rate. Derived from the information-theoretic formulation of stochastic optimal control, MPPI seeks to find a nominal control sequence 
+
+U = {u0, . . . , uH−1} over a finite horizon H that minimizes the expected cost: 
+
+J(U) = EQ
+
+"
+
+ϕ(xH ) + 
+
+> H−1
+
+X
+
+> t=0
+
+
+
+q(xt) + 12 u⊤ 
+
+> t
+
+Σ−1ut
+
+#
+
+.
+
+(2) where ϕ(xH ) is the terminal state penalty, q(xt) is the state-dependent running cost, and the quadratic term penalizes control effort scaled by a positive definite covariance ma-trix Σ. The expectation EQ[·] is taken over the trajectory distribution Q, induced by injecting Gaussian noise into the nominal sequence U and propagating the dynamics in (1). In practice, MPPI approximates this expectation by simu-lating N parallel noisy trajectories. At each time step, control perturbations ϵ(n) 
+
+> t
+
+∼ N (0, Σ) are sampled to generate N
+
+candidate control sequences u(n) 
+
+> t
+
+= ut + ϵ(n) 
+
+> t
+
+. The dynamics are rolled out for each sequence to compute the cumulative trajectory cost S(n). The nominal control sequence is then updated via a probability-weighted moving average: 
+
+ut ← ut + η
+
+PNn=1 w(n)ϵ(n)
+
+> t
+
+PNn=1 w(n) , (3) where η ∈ (0 , 1] dictates the update step size, and the importance weights w(n) follow a Boltzmann distribution: 
+
+w(n) = exp 
+
+
+
+− 1
+
+λ
+
+
+
+S(n) − min  
+
+> j
+
+S(j)
+
+ 
+
+. (4) where λ > 0 strictly regulates the exploration-exploitation trade-off. While this standard MPPI formulation is highly effective for single-objective optimization, it inherently con-verges to a single behavioral mean. Readers are referred to [7] for details on MPPI. Projected image 
+
+Simulation (Isaac Sim ）
+
+Real-world 
+
+（D435+LiDAR ）
+
+State 
+
+Perception & State 
+
+FPV RGB Image 
+
+> 2: Left-Hug 4: High-Fly 1: Safe-Center 0: Shortest 5: Aggressive 3: Right-Hug
+> Goal
+
+Language prompt Selected ID 
+
+Cost ：
+
+> six candidate trajectories
+> Projected image
+
+Parallel Multi-Mode MPPI Visual-Semantic Grounding Fig. 2. System Architecture of the Language-Conditioned VLM-MPPI Framework. The pipeline integrates high-frequency dynamic planning with semantic visual reasoning. (Left) Perception & State: State estimation is obtained from Isaac Sim (simulation) or LiDAR-inertial odometry (real-world).     
+
+> (Middle) Parallel Multi-Mode MPPI: This module simultaneously optimizes distinct trajectory candidates. By incorporating mode-specific guiding terms
+> J(m)
+> guide into the cost function, we induce distinct behavioral modes that converge to unique spatial means, rather than relying on random stochastic variations.
+> (Right) Visual-Semantic Grounding: The 3D candidates are projected onto the FPV RGB image to reformulate navigation as a visual selection task. The
+> VLM (Gemini 2.5) interprets the user’s natural language prompt and selects the corresponding mode index, which is then tracked by a PID controller.
+
+III. M ETHODOLOGY 
+
+A. System Overview 
+
+As illustrated in Fig. 2, our system forms a closed-loop hierarchy that maps natural-language commands to dynamically feasible UAV motion. In this work, we define a ‘Mode’ as a distinct distribution of trajectories converging to a unique behavioral mean (e.g., adhering to a wall or main-taining high altitude). These modes are induced by parallel MPPI optimization threads, each governed by a specifically designed cost function J(k). Accordingly, at each planning step, trajectory candidates for six such behavioral modes are generated, with each mode consisting of 128 trajectories sampled from its specific distribution. We assume that these 6 modes are sufficient to span the major flight behaviors required for UAV navigation. For each mode, an optimal trajectory is obtained according to Eqs.2 - 4, conditioned on the target and the current environment, which is guaranteed to be collision-free by construction. This results in 6 feasible trajectory candidates at the current time step. These candi-dates are then projected onto the UAV’s first-person-view (FPV) image and provided to the Vision–Language Model (VLM), which selects the optimal trajectory based on the target and semantic instructions. The selected trajectory is subsequently executed by the UAV. To accommodate the relatively slow VLM while maintaining flight stability, we query the VLM on trajectories generated from a predicted future state along the currently executed MPPI trajectory, using an estimate of the VLM latency, while the MPPI planner and low-level controller run continuously at high rate on the last selected mode. 
+
+B. Parallel Behavior-Aware MPPI 
+
+To bridge the gap between continuous control and discrete semantic instructions, we employ a parallelized ensemble of 
+
+K = 6 MPPI planners. While standard MPPI typically con-verges to a single global minimum, our parallel architecture maintains independent sampling distributions to capture dis-tinct homotopy classes and behavioral styles. Specifically, we design six guiding modes to cover the full spectrum of spatial and dynamic maneuvers: Shortest and Safe-Center modes for baseline efficiency and safety; Left-Hug and Right-Hug modes for topological distinctness; High-Fly mode for vertical obstacle avoidance and Aggressive for higher speed flight. Each mode k optimizes a specific cost function J(k)
+
+tailored to a distinct behavioral mode. The total cost is defined as: 
+
+J(k)(xt, ut) = Jnav (xt) + Jcoll (xt) + λ · J(k)
+
+> guide
+
+(xt, ut) (5) where Jnav and Jcoll enforce common navigation goals and hard safety constraints based on the distance to the nearest obstacle. The coefficient λ weights the behavioral adherence against the primary navigation objective. To induce behav-ioral diversity, the guiding term J(k) 
+
+> guide
+
+for each mode is designed as follows: 
+
+1) Shortest: This mode prioritizes path efficiency. We minimize lateral deviation while rewarding forward velocity along the longitudinal direction nlong :
+
+Jshort guide = wlat || elat || 2 − αf wd (v⊤ 
+
+> t
+
+nlong ) (6) where elat is the lateral position error vector, and wlat , α f wd 
+
+are the lateral penalty weight and velocity gain, respectively. 2) Safe-Center: This mode maximizes safety by centering the drone in free space, leveraging the Euclidean Signed Distance Field (ESDF) for continuous collision awareness. We introduce a clearance reward based on the distance to the nearest obstacle d(xt), limited by a saturation threshold 
+
+dmax :
+
+Jsaf e guide = wcen || elat || 2 − wclr · min( d(xt), d max ) (7) Here, d(xt) denotes the signed distance queried from the ESDF map. The term wcen penalizes off-center drift, while 
+
+wclr weights the clearance reward to actively push the trajectory away from obstacle boundaries. 
+
+3) Left-Hug and Right-Hug: These modes enforce wall-following by penalizing deviations from a desired lateral clearance δref . Let elat be the scalar lateral deviation. The cost is: 
+
+Jhug guide = wtrk (elat − skδref )2 + wbarr · max(0 , −skelat )2
+
+(8) where sk = +1 for Left-Hug and sk = −1 for Right-Hug . The max( ·) function acts as a one-sided virtual barrier, penalizing the drone only if it crosses to the undesired side (opposite to the target direction sk). wtrk and wbarr weight the tracking error and barrier violation, respectively. 
+
+4) High-Fly: To enable vertical obstacle avoidance with-out hovering, we couple altitude tracking with a time-varying velocity incentive: 
+
+Jhigh guide = wz (zt − zref (t)) 2 − α(t)vlong + η(t)|| vt|| (9) Here, wz is the altitude tracking weight, and zref (t) inter-polates to the desired clearance altitude. The longitudinal velocity vlong = v⊤ 
+
+> t
+
+nlong is rewarded by a decaying weight 
+
+α(t), while the damping term η(t) grows over the horizon to ensure the drone stops precisely at the goal. 
+
+5) Aggressive: This mode encourages time-optimality by rewarding velocity along the geodesic direction g while relaxing safety margins: 
+
+Jaggr guide = −β v⊤ 
+
+> t
+
+g
+
+|| g|| + wsof t (ϵloose − d(xt)) 2+ (10) We use a reduced safety margin ϵloose < ϵnom (where 
+
+ϵnom denotes the standard safety distance) and a soft barrier function (using the (·)+ notation) to allow traversing narrow gaps at higher speeds, scaled by velocity gain β and collision weight wsof t .
+
+6) Distribution Biasing: Finally, we inject a time-decaying deterministic bias into the sampling distribution: 
+
+u(k) 
+
+> t
+
+∼ N (unom + γt · μ(k)
+
+> bias
+
+, Σ) (11) where γ ∈ (0 , 1) is a decay factor and Σ is the exploration covariance. This bias μ(k) 
+
+> bias
+
+guides the initial exploration into the desired homotopy class. 
+
+C. Visual–Semantic Grounding 
+
+To bridge the gap between the controller’s metric search space and the VLM’s semantic reasoning, we project the 3D MPPI candidate trajectories onto the UAV’s egocentric image plane. This reformulation transforms a continuous control problem into a discrete visual selection task, leveraging the VLM’s zero-shot spatial understanding capabilities. 
+
+1) 3D-to-2D Projection: Let T = {τ (0) , . . . , τ (K−1) }
+
+denote the set of candidate trajectories, where K = 6
+
+corresponds to the defined navigation modes. Each trajectory consists of a sequence of discrete waypoints pW ∈ R3 in the global inertial frame. We map these points to the image plane via a chain of rigid-body transformations. First, given the UAV’s estimated body pose (RW B , tW B ) in the world frame, a waypoint is transformed into the body frame as: 
+
+pB = R⊤
+
+> W B
+
+ pW − tW B 
+
+ (12) where tW B denotes the position of the body origin in the world frame. Subsequently, we apply the extrinsic calibration 
+
+(RCB , tBC ) to transform the point into the camera optical frame: 
+
+pC = RCB 
+
+ pB − tBC 
+
+ = [ xc, y c, z c]⊤ (13) where tBC represents the camera’s position relative to the body center. Finally, assuming a standard pinhole camera model with the optical axis aligned with the zc-axis, the pixel coordinates (u, v ) are obtained via: 
+
+u = fx
+
+xc
+
+zc
+
++ cx, v = fy
+
+yc
+
+zc
+
++ cy (14) where (fx, f y ) and (cx, c y ) are the focal lengths and principal points, respectively. To ensure visual consistency, a waypoint is valid only if zc > δ near (with δnear = 0 .05 m) and the projection lies within the image bounds. 
+
+2) Visual Prompt Construction: The projected trajectories are rendered as color-coded polylines overlaid on the raw RGB image, as illustrated in Fig. 3. To anchor the VLM’s semantic reasoning, we establish a fixed color–behavior map-ping. By omitting textual labels on the image, we maximize visual clarity and minimize occlusions of environmental features. Instead, the textual prompt provides descriptions of each navigation mode (0–5) and their corresponding colors. This design reformulates the navigation task into a multiple-choice selection problem, where the VLM identifies the most appropriate behavioral mode that aligns the visualized geometry with the user’s high-level instruction. 2: Left-Hug 4: High-Fly 1: Safe-Center 0: High-Fly 5: Aggressive 3: Right-Hug   
+
+> Fig. 3. Trajectory Projection for Visual Grounding. We project the 3D MPPI trajectory candidates onto the onboard FPV camera stream. The color-coded polylines serve as distinct visual prompts.
+
+IV. E XPERIMENTS 
+
+A. Experimental Setup 
+
+We evaluate the proposed framework in high-fidelity sim-ulation using NVIDIA Isaac Sim integrated with a ROS 1 communication stack. The UAV is modeled as a 6-DoF quadrotor controlled by a position–yaw PID controller run-ning at 50 Hz , which tracks reference poses generated by the planner and outputs body-frame velocity commands. Static indoor environments are pre-processed into signed distance fields (SDFs) for real-time collision checking. An onboard monocular camera provides 640 × 480 first-person-view (FPV) images. A dedicated projection node maps candidate trajectories from the multi-mode MPPI planner onto the image plane, providing spatial grounding for the high-level vision–language decision maker. The hierarchical control pipeline operates as follows. The parallel MPPI planner generates six behaviorally distinct trajectories at 20 Hz , while the low-level PID controller en-sures stable tracking. The planner samples N = 128 control sequences over a horizon of H = 32 steps. The resulting modes— Shortest , Safe-Center , Left-Hug , Right-Hug , High-Fly , and Aggressive —are rendered as an FPV overlay and passed, together with the user command, to a pre-trained Gemini 2.5 Flash Vision–Language Model, which selects the mode index to execute. In all experiments, the MPPI planner (implemented in PyTorch) and control stack run entirely on the CPU in real time; a single NVIDIA GeForce RTX 5090 GPU is used for Isaac Sim rendering. 
+
+B. Multi-Modal MPPI Behavior Characterization 
+
+Before integrating the VLM, we first characterize the behavioral modes induced purely by the Parallel Behavior-Aware MPPI. In a fixed indoor environment with a common start and goal, we execute 30 autonomous flight trials, running each mode independently for 5 runs under the same geometric goal. For each trajectory, we record the path length, average speed, average lateral offset from the nominal longitudinal axis, and the spatial root-mean-square error (RMSE) within the mode, which measures the dispersion of trajectories in configuration space.                                                                         
+
+> TABLE I QUANTITATIVE STATISTICS FOR EACH MPPI BEHAVIORAL MODE OVER
+> 5TRIALS (MEAN ±STANDARD DEVIATION ).
+> Behavioral Path Length Avg. Velocity Avg. Lat. Offset Intra-mode Mode [m] [m/s] [m] RMSE [m]
+> Shortest 8.30 ±0.08 1.06 ±0.02 0.15 ±0.03 0.091
+> Safe Center 8.36 ±0.07 0.97 ±0.03 0.19 ±0.01 0.090
+> Left Hug 8.83 ±0.34 1.03 ±0.05 0.46 ±0.03 0.131 Right Hug 8.91 ±0.12 1.01 ±0.03 0.88 ±0.03 0.158 High Fly 12 .49 ±1.22 0.95 ±0.02 0.33 ±0.03 0.215
+> Aggressive 8.39 ±0.23 1.27 ±0.02 0.17 ±0.04 0.215
+
+The resulting spatial distributions are visualized in Fig. 4, while Table I summarizes the quantitative statistics across all modes. The six MPPI modes realize clear and physi-cally consistent motion patterns that match their intended semantics. The Aggressive mode achieves the highest mean speed, 1.27 ± 0.02 m /s, corresponding to an increase of about 30% over the conservative Safe-Center baseline ( 0.97 ±
+
+0.03 m /s), while maintaining a path length comparable to the shortest route. The Left-Hug and Right-Hug modes exhibit well-separated average lateral offsets of 0.46 ± 0.03 m and 
+
+0.88 ±0.03 m , respectively, confirming that the guiding costs successfully encode distinct wall-following behaviors. At the same time, the intra-mode RMSE values remain small: the Shortest and Safe-Center modes yield mean spatial RMSEs of approximately 0.09 m , comparable to the UAV’s physical dimensions, and even the more aggressive modes stay below 
+
+0.22 m . All modes achieve collision-free navigation in all 30 rollouts, indicating that the induced behavioral diversity does not compromise safety. X [m] (Forward)    
+
+> 02468
+> Y [m] (Lateral)
+> 2.0
+> 1.5
+> 1.0
+> 0.5
+> 0.0 0.5 1.0
+> Z [m] (Height)
+> 0.0 0.5 1.0 1.5 2.0 2.5
+> Start Goal Shortest Safe-Center Left-Hug Right-Hug High-Fly Aggressive
+> Fig. 4. Behavioral Diversity: 3D visualization of 30 autonomous tra-jectories generated by the proposed multi-modal MPPI. Ground projections (z= 0 ) demonstrate clear spatial segregation among the trajectory clusters, confirming that the mode-specific guiding costs successfully induce physi-cally distinct behavioral distributions rather than mere stochastic variations.
+
+C. Quantitative Evaluation of Language-Conditioned Navi-gation 
+
+Building on the MPPI-only analysis, we now quantify the behavior of the full language-conditioned VLM–MPPI system. The dynamics model, MPPI hyperparameters, and indoor apartment layout remain unchanged; the only differ-ence is that the behavioral mode is selected online by the VLM in response to natural-language commands (e.g., “fly to the goal efficiently”, “fly along the right side”, “fly higher to avoid obstacles”). For each of the six modes, we execute five trials with fixed start and goal configurations, yielding 
+
+30 language-conditioned flights in total. Figure 6 provides a complementary top–down visualiza-tion of all 30 runs. For a fixed start and goal, the colored bundles form clearly separated geometric styles that match their intended semantics. The High-Fly mode is particularly illustrative: its trajectories split into two homotopy classes (passing left or right) while maintaining elevated altitude, showing that the prompt “fly higher” strictly constrains TABLE II 
+
+QUANTITATIVE EVALUATION ACROSS BEHAVIORAL MODES .Mode Time (s) Path Len. (m) Latency (s) Safety (m) Lat. Offset (m) RMSE (m) 
+
+Shortest 9.47 ± 0.35 8.41 ± 0.29 2.64 ± 0.25 0.03 ± 0.00 −0.13 ± 0.02 0.115 
+
+Safe Center 10 .75 ± 0.46 8.34 ± 0.14 2.86 ± 0.04 0.04 ± 0.00 −0.19 ± 0.01 0.058 
+
+Left Hug 11 .18 ± 1.14 8.85 ± 0.19 2.76 ± 0.16 0.03 ± 0.00 0.24 ± 0.02 0.110 
+
+Right Hug 11 .17 ± 1.15 8.94 ± 0.11 2.63 ± 0.12 0.03 ± 0.00 −0.64 ± 0.06 0.111 
+
+High Fly 16 .55 ± 3.78 10 .64 ± 1.24 2.75 ± 0.10 0.02 ± 0.00 0.13 ± 0.41 0.641 
+
+Aggressive 7.90 ± 0.24 8.26 ± 0.07 2.36 ± 0.15 0.03 ± 0.00 −0.15 ± 0.06 0.110 Shortest Safe Center Left Hug Right Hug High Fly Aggressive 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 20.0 
+
+> Total Time (s)
+> Operational Efficiency
+> Shortest Safe Center Left Hug Right Hug High Fly Aggressive 0.000 0.005 0.010 0.015 0.020 0.025 0.030 0.035 0.040
+> Safety Clearance (p05 margin - thresh) [m]
+> Safety Characterization
+> Shortest Safe Center Left Hug Right Hug High Fly Aggressive 0.0 0.5 1.0 1.5 2.0 2.5
+> Avg. Altitude (m)
+> Behavioral Signatures (Alt vs Vel)
+> 0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4
+> Avg. Velocity (m/s)
+
+Fig. 5. Quantitative behavior of the full language-conditioned VLM–MPPI pipeline. Data aggregates 5 trials per mode. Left (Operational Efficiency): 
+
+Active flight duration (excluding start/end idle periods). The Aggressive mode achieves the shortest duration, validating its time-optimality. Middle (Safety Characterization): The 5th -percentile safety clearance relative to the hard collision threshold ( dth = −0.12 m ). All modes maintain positive margins, demonstrating that behavioral diversity does not compromise safety. Right (Behavioral Signatures): Average altitude (bars, left axis) overlaid with average velocity (line, right axis). The High-Fly mode distinctly occupies the upper airspace ( ≈ 1.9 m ) at lower speeds, whereas Aggressive maintains nominal altitude but maximizes cruise velocity. These trends confirm that VLM-selected modes produce distinct behaviors while the MPPI backend ensures safety. 
+
+vertical behavior while leaving lateral route choice to the MPPI optimizer’s local minima. 
+
+Fig. 6. Top–down view of behavioral diversity (5 trials per mode). 
+
+The system consistently generates distinct geometric styles, such as wall-hugging and aggressive flight. 
+
+Figure 5 summarizes the aggregate performance metrics. The left panel confirms that the Aggressive mode is the fastest ( 7.90 ± 0.24 s), reducing active flight duration by approximately 17% compared to the baseline Shortest mode (9.47 ± 0.35 s), whereas High-Fly is the slowest ( 16 .55 ±
+
+3.78 s) due to the deliberate vertical maneuvers required to reach the clearance altitude. As shown in the middle panel, the Safety Characterization plots the 5th -percentile safety margin relative to the collision threshold; a key finding is that all behavioral modes maintain positive clearance values (0.02 –0.04 m above the hard threshold). This quantitatively validates the robustness of our hierarchical framework: de-spite the VLM triggering diverse and potentially aggressive behaviors, the underlying MPPI controller consistently en-forces safety constraints. Finally, the right panel highlights the decoupling of geometric and dynamic objectives: the High-Fly mode is characterized by its elevated altitude (≈ 1.9 m) and moderate speed, whereas the Aggressive 
+
+mode maintains a standard altitude but achieves the highest average velocity ( ≈ 1.05 m/s), significantly outpacing the conservative Safe-Center mode ( ≈ 0.78 m/s). Table II provides further numerical evidence of Intent Alignment and system performance. The recorded latency ( ≈
+
+2.4–2.9 s) primarily reflects the VLM inference and network transmission time; notably, the parallel MPPI planner ensures flight safety during these asynchronous updates. The Lat. Offset column reveals a significant sign difference between Left-Hug ( 0.24 ± 0.02 m) and Right-Hug ( −0.64 ± 0.06 m), Fly to the goal efficiently  Fly along the right side  Fly along the left side 
+
+Shortest  Left-Hug Right-Hug 
+
+Fly higher to avoid 
+
+obstacles 
+
+High-Fly 
+
+Reach the goal  point  as 
+
+quickly as possible 
+
+Aggressive 
+
+Fly safely first, then keep right after passing the dining table. 
+
+> Intent  Alignment
+
+Right-Hug 
+
+Safe-
+
+Center       
+
+> Scene Generalization Fig. 7. Qualitative results of language-conditioned UAV navigation. The figure illustrates how the proposed VLM–MPPI framework bridges high-level linguistic instructions with physical motion execution. Row 1 (Intent Alignment): topological path bifurcations (Shortest, Right-Hug, Left-Hug) in a fixed scenario under varied prompts. Row 2 (Scene Generalization): zero-shot adaptation across different indoor layouts, including high-altitude flight and aggressive maneuvering. The rightmost panel highlights a dynamic mode switch: the agent initially maintains a Safe-Center policy and then transitions to right-wall hugging upon receiving a mid-flight corrective command.
+
+confirming that the VLM’s selection successfully guides the MPPI optimizer into topologically distinct homotopy classes. Furthermore, the low intra-mode RMSE values ( ≈ 0.06 –
+
+0.12 m) for most modes indicate high repeatability. The larger RMSE for High-Fly ( 0.641 m) is expected, reflecting the greater kinematic freedom available in the collision-free space above the obstacles. Complementing these metrics, Fig. 7 visually demon-strates the system’s Intent Alignment and Scene General-ization. As shown in the top row, changing the prompt effectively alters the homotopy class (e.g., from Mode 0 to Mode 3) without changing the geometric goal. The framework also supports asynchronous mid-flight switching (Fig. 7, bottom right), validating the system’s responsiveness to evolving user intent. Overall, these results demonstrate that the VLM–MPPI system preserves the safety and consistency of the underlying controller while robustly aligning physical behaviors with high-level semantic instructions. 
+
+D. Real-World Experiments 
+
+To validate the Sim-to-Real transferability of our be-havioral shaping approach, we conducted flight tests on a custom-built quadrotor platform. The onboard computation is powered by an Intel NUC 13 (running Ubuntu 20.04 with ROS Noetic). State estimation is performed using the FAST-LIO2 algorithm [24], processing point clouds from a Livox Mid-360 LiDAR. For visual-semantic grounding, we utilize a RealSense D435 camera to employ its RGB image for VLM inference, verifying that our high-level decision-making relies on semantic reasoning rather than dense depth maps. Low-level attitude control is executed by a Betaflight flight controller via a serial interface. The experiments were performed in a 7 m×4 m×3 m indoor environment containing everyday obstacles such as chairs, a TV, and boxes. X [m]      
+
+> 1
+> 01234567
+> Y [m]
+> 2.0
+> 1.5
+> 1.0
+> 0.5
+> 0.0 0.5 1.0 1.5 2.0
+> Z [m]
+> 0.0 0.5 1.0 1.5 2.0 2.5 3.0
+> Start Goal
+> Mode: Left Hug Mode: Right Hug Mode: High Fly
+> Fig. 8. Real-World Trajectory Execution. Overlay of flown paths collected from the physical quadrotor. The system demonstrates robust behavioral segregation: Left-Hug (Blue) and Right-Hug (Yellow) maintain safe lateral clearances, while the High-Fly mode (Purple) effectively utilizes the vertical space ( z > 1.5 m ) to overfly obstacles, verifying the feasibility of 3D semantic navigation in physical environments.
+
+We evaluated three topologically distinct modes: Left-Hug, Right-Hug, and High-Fly, to verify that the distinct cost landscapes designed in simulation remain effective under real-world sensing noise and actuation disturbances. Fig. 8 visualizes the composite trajectories from multiple runs. TABLE III 
+
+REAL -W ORLD RESULTS .            
+
+> Mode Speed (m/s) Height (m) Offset (m)
+> Left Hug 0.32 1.58 −0.75
+> Right Hug 0.33 1.54 +0.39
+> High Fly 0.39 2.02 −0.28
+
+Table III summarizes the results. The system achieved a 100% collision-free rate across all 30 trials, validating the safety of the proposed planner. Although the average speed ( ≈ 0.35 m /s) was kept conservative for safety in the confined physical space, the behavioral distinctions re-mained prominent. The High-Fly mode reached an average altitude of 2.02 m, successfully clearing the vertical space above obstacles. The MPPI planner demonstrated strong robustness against disturbances through its high-frequency receding horizon replanning, ensuring collision-free flight in all trials. The Left-Hug and Right-Hug modes exhibited distinct average lateral offsets of −0.75 m and +0 .39 m 
+
+respectively. These results confirm that our cost function design is robust enough to enforce high-level behavioral constraints in the physical world without requiring extensive parameter retuning. V. CONCLUSION In this work, we presented a hierarchical framework for language-conditioned aerial navigation that effectively bridges the gap between high-level semantic intent and low-level dynamic control. The core novelty of our approach lies in the generation of behaviorally diverse navigation modes: rather than relying on stochastic exploration, we design mode-specific guiding costs that induce distinct behavioral distributions, each converging to a unique mean. This allows the system to offer a discrete menu of physically feasible modes to the VLM for selection. Extensive experiments in both Isaac Sim and on a real-world quadrotor platform demonstrate that this paradigm achieves robust intent align-ment in cluttered indoor environments. The system suc-cessfully grounds natural language commands into complex topological behaviors and zero-shot generalizations without requiring task-specific retraining. Future work will focus on extending the parallel MPPI formulation to handle dynamic obstacles (e.g., moving pedestrians) and integrating an on-board VLM for fully map-less navigation in unstructured environments. REFERENCES [1] X. Zhou, Z. Wang, H. Ye, C. Xu, and F. Gao, “Ego-planner: An esdf-free gradient-based local planner for quadrotors,” IEEE Robotics and Automation Letters , vol. 6, no. 2, pp. 478–485, 2020. [2] D. Driess, F. Xia, M. S. Sajjadi, C. Lynch, A. Chowdhery, B. Ichter, A. Wahid, J. Tompson, Q. Vuong, T. Yu, et al. , “Palm-e: An embodied multimodal language model,” arXiv preprint arXiv:2303.03378 , 2023. [3] J. Gu, E. Stefani, Q. Wu, J. Thomason, and X. Wang, “Vision-and-language navigation: A survey of tasks, methods, and future direc-tions,” in Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers) , pp. 7606– 7623, 2022. [4] J. Duan, S. Yu, H. L. Tan, H. Zhu, and C. Tan, “A survey of embodied ai: From simulators to research tasks,” IEEE Transactions on Emerging Topics in Computational Intelligence , vol. 6, no. 2, pp. 230–244, 2022. [5] D. Mellinger and V. Kumar, “Minimum snap trajectory generation and control for quadrotors,” in 2011 IEEE international conference on robotics and automation , pp. 2520–2525, Ieee, 2011. [6] B. Zhou, F. Gao, L. Wang, C. Liu, and S. Shen, “Robust and efficient quadrotor trajectory generation for fast autonomous flight,” IEEE Robotics and Automation Letters , vol. 4, no. 4, pp. 3529–3536, 2019. [7] G. Williams, A. Aldrich, and E. A. Theodorou, “Model predictive path integral control: From theory to parallel computation,” Journal of Guidance, Control, and Dynamics , vol. 40, no. 2, pp. 344–357, 2017. [8] F. Zhao, X. Guan, and S. Li, “Rethinking reference trajectories in agile drone racing: A unified reference-free model-based controller via mppi,” arXiv preprint arXiv:2509.14726 , 2025. [9] Y. Zhai, R. Reiter, and D. Scaramuzza, “Pa-mppi: Perception-aware model predictive path integral control for quadrotor navigation in unknown environments,” arXiv preprint arXiv:2509.14978 , 2025. [10] X. Chen, R. Huang, L. Tang, and L. Zhao, “Aero-mppi: Anchor-guided ensemble trajectory optimization for agile mapless drone navigation,” 
+
+arXiv preprint arXiv:2509.17340 , 2025. [11] J. Achiam, S. Adler, S. Agarwal, L. Ahmad, I. Akkaya, F. L. Aleman, D. Almeida, J. Altenschmidt, S. Altman, S. Anadkat, et al. , “Gpt-4 technical report,” arXiv preprint arXiv:2303.08774 , 2023. [12] G. Comanici, E. Bieber, M. Schaekermann, I. Pasupat, N. Sachdeva, I. Dhillon, M. Blistein, O. Ram, D. Zhang, E. Rosen, et al. , “Gemini 2.5: Pushing the frontier with advanced reasoning, multimodality, long context, and next generation agentic capabilities,” arXiv preprint arXiv:2507.06261 , 2025. [13] D. Shah, B. Osi´ nski, S. Levine, et al. , “Lm-nav: Robotic navigation with large pre-trained models of language, vision, and action,” in 
+
+Conference on robot learning , pp. 492–504, PMLR, 2023. [14] V. S. Dorbala, G. Sigurdsson, R. Piramuthu, J. Thomason, and G. S. Sukhatme, “Clip-nav: Using clip for zero-shot vision-and-language navigation,” arXiv preprint arXiv:2211.16649 , 2022. [15] A. J. Sathyamoorthy, K. Weerakoon, M. Elnoor, A. Zore, B. Ichter, F. Xia, J. Tan, W. Yu, and D. Manocha, “Convoi: Context-aware navigation using vision language models in outdoor and indoor envi-ronments,” in 2024 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pp. 13837–13844, IEEE, 2024. [16] M. Oh, C. Kim, S.-W. Seo, and S.-W. Kim, “Language as cost: Proactive hazard mapping using vlm for robot navigation,” arXiv preprint arXiv:2508.03138 , 2025. [17] K. Garg, D. S. K. Nair, S. Zhang, J. Arkin, and C. Fan, “Online motion planning for connected multi-robot systems using vision language models as high-level planners,” Proceedings of Machine Learning Research vol vvv , vol. 1, p. 21, 2026. [18] O. Sautenkov, A. Akhmetkazy, Y. Yaqoot, M. A. Mustafa, G. Tade-vosyan, A. Lykov, and D. Tsetserukou, “Uav-vlpa*: A vision-language-path-action system for optimal route generation on a large scales,” arXiv preprint arXiv:2503.02454 , 2025. [19] S. Wang, P. Typaldos, C. Li, and A. A. Malikopoulos, “Visiopath: Vision-language enhanced model predictive control for safe au-tonomous navigation in mixed traffic,” IEEE Open Journal of Control Systems , 2025. [20] Z. Hu, C. Tang, M. J. Munje, Y. Zhu, A. Liu, S. Liu, G. Warnell, P. Stone, and J. Biswas, “Composablenav: Instruction-following nav-igation in dynamic environments via composable diffusion,” arXiv preprint arXiv:2509.17941 , 2025. [21] K. Rana, J. Haviland, S. Garg, J. Abou-Chakra, I. Reid, and N. Suen-derhauf, “Sayplan: Grounding large language models using 3d scene graphs for scalable task planning,” in 7th Annual Conference on Robot Learning , 2023. [22] B. Chen, F. Xia, B. Ichter, K. Rao, K. Gopalakrishnan, M. S. Ryoo, A. Stone, and D. Kappler, “Open-vocabulary queryable scene representations for real world planning,” in 2023 IEEE International Conference on Robotics and Automation (ICRA) , pp. 11509–11522, IEEE, 2023. [23] W. Huang, C. Wang, R. Zhang, Y. Li, J. Wu, and L. Fei-Fei, “Voxposer: Composable 3d value maps for robotic manipulation with language models,” arXiv preprint arXiv:2307.05973 , 2023. [24] W. Xu, Y. Cai, D. He, J. Lin, and F. Zhang, “Fast-lio2: Fast direct lidar-inertial odometry,” IEEE Transactions on Robotics , vol. 38, no. 4, pp. 2053–2073, 2022.
