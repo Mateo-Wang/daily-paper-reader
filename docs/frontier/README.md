@@ -5,6 +5,7 @@
 ## 2026 第 38 周
 
 - [deepseek-ai/DeepSeek-V4.1-Flash](#/frontier/2026-W38/deepseek-ai-deepseek-v4-1-flash)  
+- [ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF](#/frontier/2026-W38/ista-daslab-qwen3-8-27b-gsq-rco-gguf)  
 
 ## 2026 第 37 周
 
