@@ -19,7 +19,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-19</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-20</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -29,7 +29,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-19 21:22:40 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-20 21:18:37 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -40,9 +40,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今天扫完19篇论文，精读7篇、速读12篇，9.0分的遮挡时空区域隐藏车辆轨迹搜索最抢眼。</p>
-<p>最值得看：复杂遮挡下的最坏情况轨迹搜索，以及VLA工程平台、实时VLA策略、触觉先验和米制精确操作等具身智能方向。</p>
-<p>普通读者可先读9.0分那篇理解安全搜索思路，再挑VLA或触觉速读，感受机器人如何从“能动作”走向“精细动作”。</p>
+<p>2026-09-20日报：筛读19篇，精读7篇、速读12篇，主线集中在机器人世界模型、VLA操作与导航。</p>
+<p>最值得看“世界模型+机器人”两条线：StrucPhysVideo的结构化物理动态，以及CSWAM面向OOD泛化的因果语义表示（均8.0/10）。</p>
+<p>普通读者可先读这两篇精读，再速览WorldContact、高自由度VLA后训练和越野导航三篇速读（均8.0/10）。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -54,9 +54,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Worst-Case Hidden-Vehicle Trajectory Search in Spatiotemporal Occlusion Regions">Worst-Case Hidden-Vehicle Trajectory Search in Spatiotemporal Occlusion Regions</span></li><li><span class="dpr-home-dashboard-paper-title" title="FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence">FluxVLA Engine: A One-Stop VLA Engineering Platform for Embodied Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="DriveMCP: An Agentic AI framework for Advanced Driver Assistance System">DriveMCP: An Agentic AI framework for Advanced Driver Assistance System</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="StrucPhysVideo: Learning Physical Dynamics from Structured Captions and Robot Actions">StrucPhysVideo: Learning Physical Dynamics from Structured Captions and Robot Actions</span></li><li><span class="dpr-home-dashboard-paper-title" title="CSWAM: Better Causal Semantic Representations for Out-of-Distribution Generalization in World Action Models">CSWAM: Better Causal Semantic Representations for Out-of-Distribution Generalization in World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="TAO-Force: Unifying Force-Aware Perception and Fast-Slow Control for Contact-Rich Manipulation">TAO-Force: Unifying Force-Aware Perception and Fast-Slow Control for Contact-Rich Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -67,9 +67,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="TacBPM: A Tactile-conditioned Behavior Prior Model for Dexterous Reorientation">TacBPM: A Tactile-conditioned Behavior Prior Model for Dexterous Reorientation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Reinforcement Learning for Real-Time Vision-Language-Action Policies">Reinforcement Learning for Real-Time Vision-Language-Action Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Acting in Meters: Learning Metric Interactions for Precise Robotic Manipulation">Acting in Meters: Learning Metric Interactions for Precise Robotic Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="WorldContact: A Contact-Centric World Model for Scalable Robot Learning">WorldContact: A Contact-Centric World Model for Scalable Robot Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Towards High-DoF Dexterous Manipulation through VLA Post-Training">Towards High-DoF Dexterous Manipulation through VLA Post-Training</span></li><li><span class="dpr-home-dashboard-paper-title" title="Feeling Terrain Before Crossing: World Models for Off-Road Navigation">Feeling Terrain Before Crossing: World Models for Off-Road Navigation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>12</strong></span></div>
 </section>
 </div>
 
