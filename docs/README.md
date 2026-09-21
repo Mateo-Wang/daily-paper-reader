@@ -19,7 +19,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-20</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-21</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 19 篇</strong>
@@ -29,7 +29,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-20 21:18:37 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-21 22:30:26 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -40,9 +40,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-20日报：筛读19篇，精读7篇、速读12篇，主线集中在机器人世界模型、VLA操作与导航。</p>
-<p>最值得看“世界模型+机器人”两条线：StrucPhysVideo的结构化物理动态，以及CSWAM面向OOD泛化的因果语义表示（均8.0/10）。</p>
-<p>普通读者可先读这两篇精读，再速览WorldContact、高自由度VLA后训练和越野导航三篇速读（均8.0/10）。</p>
+<p>今日筛读19篇自动驾驶与VLA论文，精读7篇，ZYT-World以满分10.0领跑闭环仿真世界模型方向。最值得关注的是实时可控世界模型用于闭环自动驾驶仿真，以及SC-IMM教师信号稳定端到端轨迹输出这两个方向。普通读者可优先看这两篇精读，速读里MoWAM的未来运动预测也值得顺带了解。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -54,9 +52,9 @@
     <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="StrucPhysVideo: Learning Physical Dynamics from Structured Captions and Robot Actions">StrucPhysVideo: Learning Physical Dynamics from Structured Captions and Robot Actions</span></li><li><span class="dpr-home-dashboard-paper-title" title="CSWAM: Better Causal Semantic Representations for Out-of-Distribution Generalization in World Action Models">CSWAM: Better Causal Semantic Representations for Out-of-Distribution Generalization in World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="TAO-Force: Unifying Force-Aware Perception and Fast-Slow Control for Contact-Rich Manipulation">TAO-Force: Unifying Force-Aware Perception and Fast-Slow Control for Contact-Rich Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ZYT-World: A Real-Time Controllable World Model for Closed-Loop Autonomous-Driving Simulation">ZYT-World: A Real-Time Controllable World Model for Closed-Loop Autonomous-Driving Simulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Stabilizing Trajectory Outputs in End-to-End Autonomous Driving via SC-IMM Based Teacher Signals">Stabilizing Trajectory Outputs in End-to-End Autonomous Driving via SC-IMM Based Teacher Signals</span></li><li><span class="dpr-home-dashboard-paper-title" title="ME-Dex 1.0: Bringing Heterogeneous Tactile Sensing into World Action Modeling">ME-Dex 1.0: Bringing Heterogeneous Tactile Sensing into World Action Modeling</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -67,7 +65,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="WorldContact: A Contact-Centric World Model for Scalable Robot Learning">WorldContact: A Contact-Centric World Model for Scalable Robot Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="Towards High-DoF Dexterous Manipulation through VLA Post-Training">Towards High-DoF Dexterous Manipulation through VLA Post-Training</span></li><li><span class="dpr-home-dashboard-paper-title" title="Feeling Terrain Before Crossing: World Models for Off-Road Navigation">Feeling Terrain Before Crossing: World Models for Off-Road Navigation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MoWAM: Explicit Future Motion Prediction for Efficient World Action Models">MoWAM: Explicit Future Motion Prediction for Efficient World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Catch Me If You Can: Real-Time Feedback Denoising for Responsive VLAs">Catch Me If You Can: Real-Time Feedback Denoising for Responsive VLAs</span></li><li><span class="dpr-home-dashboard-paper-title" title="FOCAL-VLA: Subtask-Guided Geometry Distillation and Implicit World Modeling for Vision-Language-Action Models">FOCAL-VLA: Subtask-Guided Geometry Distillation and Implicit World Modeling for Vision-Language-Action Models</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>12</strong></span></div>
 </section>

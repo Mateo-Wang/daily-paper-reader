@@ -1,0 +1,1223 @@
+Title: ZYT-World: A Real-Time Controllable World Model for Closed-Loop Autonomous-Driving Simulation
+
+URL Source: https://arxiv.org/pdf/2609.21712v1
+
+Published Time: Mon, 21 Sep 2026 01:02:11 GMT
+
+Number of Pages: 33
+
+Markdown Content:
+# ZYT-World: A Real-Time Controllable World Model for Closed-Loop Autonomous-Driving Simulation 
+
+ZYT AI Team 
+
+Generative world models offer controllable and repeatable closed-loop simulation for end-to-end and vision–language–action driving policies, but production deployment exposes three unresolved require-ments: faithfully reproducing a mixed fisheye–pinhole rig at native resolutions; reconciling causal, per-timestep interaction with long-horizon stability and low latency; and preserving scene identity when a location is revisited along a different trajectory. We present ZYT-World, a single architecture that natively generates four fisheye views with field of view (FoV) > 180 ◦ and three pinhole views. Projection-specific Plücker adapters encode cam-era geometry, ego-motion adaptive layer normalization (AdaLN) provides global motion control, and a lightweight pixel-aligned layout conditions traffic participants and signals through instance-level boxes, headings, colors, and directions. Heterogeneous training combines full-rig geometric coverage with high-resolution detail. Teacher forcing (TF), causal consistency distillation (CD), self-rollout distribution matching distillation (DMD), and RigCritic transform a 40-step bidirectional teacher into a one-step, per-latent streaming generator, with RigCritic evaluating the full seven-view rig jointly. A 19M-parameter variational autoencoder decoder (TinyVAE), W8A8 quantization, and our inference engine reduce decoding, backbone, and incremental-execution costs, respectively. Finally, cross-trajectory pairs derived from real captures train a plug-in implicit-memory module that pre-serves place-specific evidence when a location is revisited. On the internal multi-view test set, the one-step model retains more than 90% of the teacher’s PSNR and SSIM, while FID, FVD, and LPIPS stay within 11% of the teacher. Under the generator-only timing in Figure 2, it is 107.7 × faster than the 40-step bidirectional teacher. TinyVAE decodes 59.8 ×
+
+faster than the Wan decoder. 30 s rollouts and cross-trajectory revisits show the intended long-horizon and memory behavior. Videos and additional results are available at zyt-aim.github.io/ZYT-World. 
+
+## 1 Introduction 
+
+End-to-end and vision–language–action driving policies require controllable, repeatable, and affordable closed-loop evaluation. Road testing is expensive and sparsely samples safety-critical long-tail events, whereas open-loop metrics cannot capture compounding interaction errors. A generative world model instead synthesizes multi-view observations from visual history and planned ego-motion and alternates with the policy in the simulation loop [1, 20, 28, 56]. ZYT-World conditions on per-timestep pose increments; raw control commands must first be mapped into this representation. 
+
+1.1 Four requirements for a closed-loop world model 
+
+Because generated observations directly feed the policy, closed-loop utility depends on four capabilities. 
+
+Sensor interchangeability. Camera count, projection, calibration, native resolution, and pixel statistics should match the production rig so domain gaps do not enter the policy as perception errors. 
+
+Motion response and scene control. Each step depends only on history and current ego-motion, while roads, agents, and traffic lights remain editable for counterfactual long-tail scenarios. 1arXiv:2609.21712v1 [cs.CV] 18 Sep 2026 Spatiotemporal consistency. Geometry and layout must remain coherent across views, long rollouts, and revisits along different trajectories. 
+
+Real-time deployability. Generation plus decoding must fit the policy control period under a fixed compute budget. We report generator and decoder speedups separately; real-time throughput is 4 FPS for the full seven-view rig on the two-GPU setup in Figure 1. Left fisheye  Front fisheye  Right fisheye  Rear fisheye  Rear view      
+
+> 4×FISHEYE FOV > 180 °+ 3 ×PINHOLE
+> native heterogeneous resolutions
+> FRAME -WISE AUTOREGRESSIVE
+> causal streaming generation
+> PLUG -IN MEMORY MODULE
+> long -horizon consistency on revisits
+> 1-STEP DISTILLATION
+> one denoising step per latent
+> 2 GPU ·4FPS / 7 VIEW
+> real -time streaming inference
+> MINUTE -SCALE ROLLOUT
+> stays coherent for minutes
+
+Real worlds, in real time. 
+
+0 s  1 s  2 s 
+
+4 s  6 s  30 s 
+
+Front wide Front narrow 
+
+Figure 1 Native seven-view mixed fisheye–pinhole generation under per-latent, one-step, bounded-history rollout: 4 FPS for the full seven-view rig on two GPUs. Wan decoder TinyVAE decoder      
+
+> 010 20 30 40 50 60
+> Speedup over Wan (×)
+> 1.0× 59.8× FID FVD FDD Det F1 Sampson PSNR SSIM LPIPS
+> 0.25 0.5 0.75 10
+> TinyVAE decoder Wan decoder
+> Bi-dir 1-step-ar
+> 020 40 60 80 100
+> Speedup over Bi-dir (×)
+> 1.0× 107.7× FID FVD FDD Det F1 Sampson PSNR SSIM LPIPS
+> 0.25 0.5 0.75 10
+> 1-step-ar Bi-dir
+
+Figure 2 Decoder and generator efficiency: TinyVAE decoder versus Wan decoder (left), and one-step AR versus the 40-step bidirectional teacher (right). Per-metric trade-offs are in Sec. 7.2. 
+
+Prior driving world models address autoregressive prediction, controllable multi-view diffusion, and long-horizon extrapolation [10, 13, 19, 24, 35, 36, 38, 43, 53]. CausVid, Self Forcing, Causal Forcing++, ASD, One-Forcing, and AAD-1 further reduce the sampling cost of successive autoregressive units to a few steps or one step [6, 14, 18, 45, 49, 54]. ZYT-World targets the production setting in which four capabilities must coexist: native heterogeneous sensing, per-timestep control, cross-trajectory memory, and one-step streaming generation. Table 1 places it against public driving world models along these axes. 2Table 1 Public driving world models versus ZYT-World on camera rig, resolution, interaction granularity, long-horizon rollout, and few-step generation.                                                   
+
+> Work Camera rig Resolution Interaction granularity Long horizon (minute-scale) Few-step generation Vista [8] Front only 576 ×1024 Full clip ××
+> MagicDrive-V2 [7] 6 pinhole Up to 848 ×1600 Full clip ××
+> GAIA-2 (Wayve) [28] 5 cameras Unified 448 ×960 Full clip ××
+> Epona [51] Front only 512 ×1024 Frame-wise ✓×
+> X-World [56] 7 cameras (1 fisheye) Unreported Chunk-wise ×4 steps FAR-Drive [20] Pinhole (nuScenes) Unified 576 ×1024 Frame-wise ××
+> HorizonDrive [50] Pinhole (nuScenes) Unified 256 ×512 / 384 ×768 Chunk-wise ✓4 steps OmniDreams (NVIDIA) [1] 4 cameras, no fisheye Unified 704 ×1280 Chunk-wise ✓2 steps
+> ZYT-World (ours) 4 fisheye (FoV>180 ◦) + 3 pinhole ~720p, native 5:1–5:4 Frame-wise 1✓1 step
+
+1.2 Three coupled problems under a production sensor rig 
+
+Our production rig combines four cylindrical fisheye cameras with FoV > 180 ◦ and three pinhole cameras. All operate at approximately 720p, but their aspect ratios range from 5:1 to 5:4. This heterogeneity sharpens the preceding requirements into three coupled technical problems. 
+
+Native heterogeneous sensing. Fisheye and pinhole cameras have different ray geometry, and native resolu-tions yield unequal token sequences. Forcing a shared projection and resolution breaks interchangeability; modeling views independently weakens cross-view consistency. Sec. 3 treats geometry and control with projection-aware Plücker conditions, joint attention, and a unified dense interface; Sec. 5.1 treats mixed-resolution training. 
+
+From bidirectional multi-step to causal one-step generation. High-quality diffusion uses bidirectional attention and tens of evaluations, whereas a closed loop requires causal per-timestep response and low latency; step reduction also magnifies rollout error. Sec. 4 combines TF, CD, DMD, and RigCritic; Sec. 5–6 control training and inference cost through distributed execution, TinyVAE, W8A8, and our inference engine. 
+
+Generation versus reconstruction. A generative prior redraws a revisited road, and real logs rarely pair two trajectories through the same place. Sec. 2.4 renders novel trajectories from real-scene 4D Gaussian Splatting (4DGS), and Sec. 3.6 adds a zero-initialized plug-in memory path that restores place-specific geometry and is inherited by the autoregressive (AR) student through distillation. ZYT-World further extends the deployment stack to decoding and scene reconstruction. TinyVAE combines pixel, perceptual, and semantic supervision to approach the decoding quality of Wan at a fraction of the cost, while the memory path restores place-specific geometry on revisits. We report generator-only and end-to-end pipeline latency separately. Our main contributions toward controllable, long-horizon, and place-consistent generation on a production heterogeneous rig are: • Native heterogeneous-rig modeling (Sec. 3, Sec. 5.1). Dual Plücker adapters, ego-motion AdaLN, and pixel-aligned layout jointly model four fisheye and three pinhole views without homogenizing projection or resolution. • Causal one-step post-training (Sec. 4). TF, CD, DMD, and RigCritic convert a 40-step bidirectional teacher into a per-latent streaming generator whose bounded-history loop extends to minute-scale inference. • Plug-in implicit memory (Sec. 2.4, Sec. 3.6). Real-scene 4DGS provides cross-trajectory pairs; a zero-initialized residual path restores place-specific geometry and transfers to the AR student. • Perceptually faithful lightweight decoding (Sec. 6.1). The 19M TinyVAE is trained with pixel, percep-tual, and semantic supervision, yielding 59.8 × faster decoding and 26.8 × lower model memory with generation quality on par with the 555M Wan decoder. • Training–inference co-design (Sec. 5, Sec. 6.2–6.4). Multi-dimensional parallelism and memory optimiza-tion take seven-view HD training from out-of-memory to trainable on four GPUs; W8A8 and our inference engine cut per-forward and incremental-execution cost. The end-to-end system is summarized in Figure 3. 
+
+> 1
+
+Frame-wise (one VAE latent timestep) and chunk-wise (several) follow Causal Forcing++ [54]. 
+
+37-view Heterogeneous       
+
+> Camera Rig Bidirectional Pretrain → AR Model
+> Bidirectional Multi -view Pretrain ·Multi -Stage 3V→7V
+> AR Training & Distillation
+> S1 ·TF S2 ·CD S3 ·DMD S4 · RigCritic
+> Causal AR Model ·1 -step
+> TinyVAE Decoder Pluggable Multi -view Memory
+> Real -time Closed Loop
+> 7 Views ·Observation ·T
+> Action
+> Inference Engine
+> 7 Views ·Observation ·T+1 Figure 3
+
+ZYT-World pipeline: from heterogeneous multi-view data and bidirectional pretraining, through autoregres-sive distillation, to real-time closed-loop inference. 
+
+## 2 Data system 
+
+ZYT-World draws from the same onboard logs and capture pipeline used by the production driving stack, spanning multiple vehicle platforms. Every clip is collected under the compliance process of that stack and de-identified before use, and all subsequent processing and training run inside a controlled-access environment. This shared source aligns camera geometry, photometry, and perception-derived conditions with deployment. We do not preserve the raw fleet histogram: Sec. 2.3 deliberately rebalances weather, time of day, speed, and navigation actions. The following sections describe the rig and data scale (Sec. 2.1), conditioning signals (Sec. 2.2), cleaning and rebalancing (Sec. 2.3), and cross-trajectory pairs for memory training (Sec. 2.4). 
+
+2.1 Sensor configuration and scale 
+
+Each sample is an 81-frame, 10 FPS clip from seven synchronized surround cameras: front wide, front narrow, and rear view (pinhole), and front fisheye, left fisheye, right fisheye, and rear fisheye (cylindrical, FoV > 180 ◦). The four fisheye cameras cover the near field; front wide, front narrow, and rear view cover the forward, far, and rear ranges. Every view retains the production rig’s native resolution and aspect ratio (approximately 720p, from 5:1 to 5:4). We neither crop nor resample views to a common projection or resolution. The corpus contains millions of clips at two resolution tiers, supporting the staged curriculum in Sec. 5.2. 
+
+2.2 Conditioning signals 
+
+The model consumes four condition families, frame-aligned with the video, taken from onboard capture and online perception. There is no extra manual annotation, so supervision scales with the fleet. • Ego-motion. Per-frame ego-pose increments describe the vehicle trajectory and serve as the closed-loop motion condition (Sec. 3.4). • Camera parameters. Calibrated extrinsics and intrinsics are stored with each clip and used to build Plücker ray fields (Sec. 3.3), enabling unified modeling across vehicle platforms and camera layouts. • Scene layout. Dynamic agents and static road elements come from the online outputs of onboard perception, not offline HD labels. Trucks, cars, motorcycles, bicycles, and pedestrians use a fixed color per class; each 3D box also encodes position, size, and heading, so agents of the same class remain directionally editable. Traffic lights are localized by layout boxes, with markers encoding color and direction, enabling per-frame control of right-of-way. Light state directly governs stop, go, and turn decisions and is a key output of traffic-light perception, so fine alignment matters for closed-loop 4evaluation. The condition scales linearly with capture, but online perception inevitably produces misses, false positives, and jitter, so the model must be robust to condition noise (Sec. 3.5). • Text. Unlike general video generators that rely on dense scene captions, text here carries no scene semantics : it is only a camera identifier. Weather, lighting, and content are learned from pixels, avoiding large-scale VLM labeling. Fleet cleaning              
+
+> Raw E2E fleet set
+> Length ≥ 81 frames
+> Joint balancing
+> Sharpness ·~2% drop
+> Millions of clips
+> Post -balance training -set distribution
+> Time of day Day 66.8% Night 33.2%
+> 2 : 1
+> Weather Dry 93.7%
+> Rain 5.0 ·Fog 1.2 ·Snow 0.1%
+> Ego speed −16 –18 47.2% 18 –52 40.2% 52 –86 11.9%
+> >86 km/h 0.7%
+> Navigation action Straight 48.4% Left 24.0% Right 12.4%
+> U-turn 7.3 ·veer -right 6.5 ·veer -left 1.4%
+> Bypass object Car 60.8% Two -wheeler 18.5% Truck 12.8%
+> Pedestrian 4.8 ·tricycle 3.1%
+> Retain rare conditions ·Suppress redundant head classes
+
+Figure 4 Data cleaning pipeline and the rebalanced training distribution. 
+
+2.3 Cleaning and rebalancing 
+
+Data preparation comprises duration filtering, distribution rebalancing, and sharpness filtering (Figure 4). We first remove clips shorter than 81 frames. Rebalancing provides the largest reduction because fleet logs are strongly imbalanced: dry weather dominates rain, fog, and snow, daytime dominates night, and cruising dominates turns and lane changes. We jointly stratify weather, time of day, ego speed, and navigation action, retaining rare conditions while subsampling redundant common cases. In the resulting corpus, the day-to-night ratio is approximately 2:1; dry weather (clear, cloudy, and overcast) accounts for 93.7%, with rain, fog, and snow totaling about 6.3%; speeds above 86 km/h contribute less than 1%; straight driving accounts for nearly half of navigation actions, and left turns occur about twice as often as right turns; interacting agents are predominantly motor vehicles, with pedestrians and tricycles remaining rare. Finally, sharpness filtering removes approximately 2% of clips severely degraded by lens contamination or heavy precipitation. These statistics characterize the rebalanced training distribution, not generation quality within every tail category. 
+
+2.4 Training data for the memory module 
+
+When the ego vehicle revisits a road segment along a different trajectory, static geometry and object placement should remain consistent with prior observations. A rolling KV-cache alone cannot provide this behavior: once a place leaves its finite history window, a later visit is redrawn from the generative prior. ZYT-World therefore adds an explicit memory condition for place-specific evidence (Sec. 3.6). Training this path requires paired observations of the same location from different trajectories. Such supervision requires synchronized multi-view observations of the same scene from different trajectories, which production logs rarely provide as paired examples. We synthesize the missing view by having an end-to-end driving model propose a safety-constrained alternative path, reconstructing the captured dynamic scene with 4DGS [39], and rendering that path. We use the formulation of Wu et al. [39], in which a spatiotemporal voxel grid and an MLP predict time-varying deformations of canonical 3D Gaussians [17]. The renderings form the memory input, while observations from the original onboard trajectory provide the target, yielding same-location, different-trajectory pairs. Both branches originate from one real capture and thus avoid game-engine appearance, although the rendered memory branch does not exactly match real-image memory at 5inference. We construct nearly one million such pairs (Figure 5). same scene         
+
+> GT trajectory —the recorded drive, turning left into the rightmost lane
+> Sim trajectory —closed -loop rollout, same turn, inner lane beside the median
+> Same scene —static background and physical motion consistency
+> Closed -loop Rollout Build Training Pairs
+> 7-view real video + gt trajectory
+> CLOSED -LOOP ROLLOUT
+> 4DGS renderer E2E driving policy
+> observation
+> action
+> 7-view rendered videos + sim trajectories
+> N * Training pair
+> GT trajectory
+> Sim trajectory
+> ×N
+
+Figure 5 Construction of cross-trajectory memory training pairs. 
+
+## 3 One backbone: native views, dense control, pluggable memory 
+
+We parameterize ZYT-World as a single 5B-parameter video Diffusion Transformer (DiT) [26] that operates on a camera rig with heterogeneous projections and resolutions and accepts dense, pixel-aligned control (Figure 6). Within each view, spatiotemporal self-attention models temporal evolution; cross-view attention fuses spatial tokens at the same latent timestep (Sec. 3.1). Camera rays and layout wireframes share a dense token-level injection interface (Sec. 3.2), instantiated for camera geometry in Sec. 3.3 and scene layout in Sec. 3.5. Ego-motion enters the timestep embedding and modulates every layer through AdaLN (Sec. 3.4). A residual memory path provides cross-trajectory scene context (Sec. 3.6). Across these components, conditions are rendered on native pixel grids, aligned with latent tokens, and attached through zero-initialized residual adapters. This initialization preserves the pretrained mapping while allowing each condition to be enabled independently or composed with the others. 
+
+3.1 Backbone and multi-view attention 
+
+Each camera is encoded and patchified independently in three dimensions, preserving its native T × hv × wv
+
+token grid without cross-view padding or resampling. Intra-view positions use three-axis RoPE over (t, h, w ),following the video backbone; rotary positional embeddings themselves follow Su et al. [32]. 
+
+Per-view DiT. All cameras share a video DiT with spatiotemporal self-attention, text cross-attention, FFNs, and AdaLN-Zero. Timestep embeddings are token-wise to support the per-frame noise schedules of Sec. 4.1; AdaLN carries ego-motion, while text only identifies the camera. 
+
+Semantic slots. A seven-slot table E ∈ R7×d, indexed by camera identity rather than batch position, supplies view identity and lets 3V/7V subset training share parameters. 
+
+Geometry. Fisheye and pinhole grid coordinates are not comparable, so cross-view attention omits RoPE; token-level Plücker rays (Sec. 3.3) and view slots encode ray geometry and camera identity. 
+
+Cross-view attention. Fifteen independent modules are inserted every two layers and join spatial tokens only at the same latent timestep; temporal dependence remains in per-view attention. This reduces each sequence from T P 
+
+> v
+
+hv wv to P 
+
+> v
+
+hv wv . Let Xv,t ∈ Rhv wv ×d be the tokens of camera v at latent time t. Concatenation keeps native segment lengths: 6Zt =  X1,t ∥ X2,t ∥ · · · ∥ X7,t 
+
+ ∈ RL×d, L =
+
+7X
+
+v=1 
+
+hv wv . (1) Queries, keys and values Q, K, V are linear maps of Zt with head dimension dh. AdaLN supplies a residual scale γ; Wo is the attention output projection and W0 a zero-initialized residual projection. Token i belongs to camera view( i); N (v) is the set of cameras physically overlapping v. With additive mask log M and Iverson indicator ⊮[·],
+
+CVA( Zt) = Zt + γ ⊙ W0
+
+
+
+Wo softmax 
+
+ QK ⊤
+
+√dh
+
++ log M
+
+
+
+V
+
+
+
+, (2) 
+
+Mij = ⊮[view( j) ∈ N (view( i))] . (3) 
+
+N (v) retains 24 of the 42 directed inter-view pairs with physical overlap, removing 18 pair evaluations (approximately 43% of directed pairs). Intra-view mixing remains in per-view attention and is not part of this mask. The zero initialization W0 = 0 makes (2) an identity at the start of training; Q, K, V , Wo and qk-norm are copied from self-attention only to initialize the internal mapping. View 0 (pinhole ·front wide) 
+
+> noisy latent z_t
+> Patch embed ·p = 2
+
++View 0 emb.  t + e 
+
+DiT Block 2k 
+
+Self -Attention  
+
+> bidirectional ·3D RoPE
+
+Text Cross -Attn 
+
+> umT5 caption + camera ID
+
+Feed -Forward Net  
+
+> GELU MLP ×4
+
+DiT Block 2k+1 
+
+> identical sub -layer stack
+> Unpatchify
+
+View 1 (pinhole ·front narrow) 
+
+> noisy latent z_t
+> Patch embed ·p = 2
+
++View 1 emb.  t + e 
+
+DiT Block 2k 
+
+Self -Attention  
+
+> bidirectional ·3D RoPE
+
+Text Cross -Attn 
+
+> umT5 caption + camera ID
+
+Feed -Forward Net  
+
+> GELU MLP ×4
+
+DiT Block 2k+1 
+
+> identical sub -layer stack
+> Unpatchify
+> noisy latent z_t
+> Patch embed ·p = 2
+
++View 6 emb.  t + e 
+
+DiT Block 2k 
+
+Self -Attention 
+
+> bidirectional ·3D RoPE
+
+Text Cross -Attn 
+
+> umT5 caption + camera ID
+
+Feed -Forward Net  
+
+> GELU MLP ×4
+
+DiT Block 2k+1    
+
+> identical sub -layer stack
+> Unpatchify
+> Repeating unit ×15 (30 blocks total) ·Cross -view & memory inserted at odd blocks ( idx = 1, 3, …, 29)
+
+4 Memory Cross -Attention (Plug -in) 
+
+> Integrated before cross -view attention to retrieved log videos
+
+5 Cross -View Attention (FlexAttention ·Block -Sparse Co -Visibility Mask)           
+
+> Frame t, all views: hw0 hw1 hw2 hw3 hw4 hw5 hw6 pad →⌈L/128 ⌉·128
+
+1 Plücker Ray Adapters  
+
+> Token -wise Add → Latents
+> Pinhole (Plane) Fisheye (Cylinder)
+
+2 Layout Adapter 
+
+> Token -wise Add → Latents
+
+3 Ego -Motion AdaLN -Zero 
+
+> Modulates Scale ·Shift ·Gate (adaLN)
+
+5 Co -Visibility Sparse Mask       
+
+> Guides FlexAttention
+> 12 Edges ·5 Triangles
+> 0123456
+> 0
+> 1
+> 2
+> 3
+> 4
+> 5
+> 6
+> Coral = Co -Visible Pair
+
+View 6 (front fisheye) 
+
+Figure 6 Heterogeneous multi-view controllable DiT with plug-in memory. 
+
+The covisibility graph uses FlexAttention BlockMask [5]. The concatenated sequence alone is padded to a multiple of 128; masks are cached by token lengths and topology, and fully invalid blocks are skipped. Kernel and sequence-parallel details are in Sec. 5.3. 
+
+3.2 Unified injection of dense conditions 
+
+Camera geometry and scene layout are both dense, pixel-aligned conditions. We process them through a common interface: render each condition on the target view’s pixel grid, fold it onto the latent time axis with the VAE’s causal 4 × packing, map it to the DiT token grid with a lightweight adapter, and add it to the patch embedding. A zero-initialized output projection makes the inserted adapter initially approximate the pretrained backbone. This design supports initialization from Wan-series video-generation weights [34] while introducing control with minimal perturbation to the pretrained mapping. 7Both paths must land on the same token grid, which imposes a hard constraint. Let data-side downsample be d, PixelUnshuffle stride inside the adapter s, patch kernel k, VAE spatial compression r = 16 and DiT patch p = 2 . Then 
+
+d · s · k = r · p = 32 . (4) The camera and layout adapters satisfy (4) through different factorizations. The camera path uses (d, s, k ) = (4 , 4, 2) , moving part of the downsampling to data preparation and reducing condition pixels by 16 × (Sec. 3.3). The layout path uses (1 , 16 , 2) , preserving full-resolution rendering and applying lossless PixelUnshuffle within the adapter (Sec. 3.5). Temporal packing exactly mirrors the VAE’s nonuniform causal grouping: the first latent represents one RGB frame, so the condition path replicates that frame three times to fill the first four-frame group; subsequent frames are folded in groups of four along the channel axis (camera: 6 →24 channels; layout: 3 →12). This operation preserves temporal samples and lets the adapter mix them linearly rather than average them. Conditions are added after patch embedding and before the DiT blocks, only to the noisy stream; in the dual-stream formulation of Sec. 4.1, clean history receives no direct condition embedding. Let 
+
+g(v) ∈ { pinhole , fisheye } be the projection family of view v, Pv its Plücker ray field, Lv its layout wireframe, and zvt the noisy latent at latent time t. With projection-specific camera adapters Ag(v)cam and a shared layout adapter Alay ,
+
+hv 
+
+> noisy
+
+= PatchEmbed( zvt ) + Ag(v)cam (Pv ) + Alay (Lv ). (5) 
+
+3.3 Projection-aware Plücker ray fields 
+
+Camera conditioning must describe the observation ray associated with every pixel. Global text or low-dimensional ego-motion cannot provide this correspondence, particularly when the rig mixes projections. We adopt the six-dimensional Plücker line representation of Light Field Networks [30] and encode each pixel ray as a six-channel tensor. We extend that representation to the production rig in two ways: unprojection follows either the pinhole or cylindrical-fisheye camera model, and the resulting direction vector remains unnormalized. The representation dimension is shared across cameras; projection and calibration differences live in the ray values, which is our use of [30], not a claim made there. Construction begins with the pose chain. Per-frame IMU poses and calibrated static extrinsics define each camera pose Ti, which we immediately convert to the adjacent increment ∆Ti = T −1
+
+> i−1
+
+Ti. Both conditioning paths encode these frame-to-frame increments rather than absolute poses, so each condition states how the current frame moves relative to the previous one, matching the causality of per-frame autoregression (Sec. 4) and avoiding any coupling between scene identity and a global map frame. For Plücker encoding, directions are unprojected in the camera frame, rotated by the increment, and paired with the incremental camera center as the line origin o, which keeps o × d nonzero and comparable across timesteps. Given pose, pinhole and fisheye differ only in unprojection , mapping each pixel center to a camera-frame direction: • Pinhole: ˜d =   u+0 .5−cx 
+
+> fx
+
+, v+0 .5−cy 
+
+> fy
+
+, 1
+
+• Cylindrical fisheye (angle horizontally, linear height vertically): θ = u+0 .5−cx 
+
+> fx
+
+, h = v+0 .5−cy 
+
+> fy
+
+, ˜d =(sin θ, h, cos θ)
+
+Let Ri and camera center o be the rotation and translation of the increment ∆Ti. After unprojection, both camera types rotate the camera-frame direction and assemble the same unnormalized Plücker coordinates 
+
+d = Ri ˜d, p = o × d; d ∈ R6. (6) Unit-length rays would still encode field of view through the pixel-to-angle mapping; retaining magnitude instead preserves the pinhole constraint ˜dz = 1 and cylindrical norm ∥˜d∥ = √1 + h2 in the camera frame. For 8cylindrical unprojection ˜d = (sin θ, h, cos θ), cos θ < 0 when |θ| > π/ 2, representing rays that point behind the camera when FoV exceeds 180 ◦.A shared six-dimensional representation need not imply a shared encoder. In the camera frame, unnormalized pinhole directions satisfy ˜dz ≡ 1, whereas cylindrical directions satisfy ∥˜d∥ = √1 + h2. Although the first relation does not remain invariant after rotation into the shared frame, the two families retain different moment and norm statistics. We therefore use one adapter per projection family and dispatch through the semantic camera slot, making projection type explicit rather than requiring the backbone to infer it. 
+
+3.4 Ego-motion: global AdaLN modulation 
+
+Dense Plücker rays encode per-pixel geometry, but they do not provide a compact, frame-level motion signal. Moreover, the camera path uses data-side downsampling d = 4 to keep seven-view HD training within memory. We therefore inject planar ego-motion separately through AdaLN. The two paths are complementary: AdaLN provides global motion modulation, while Plücker rays preserve projection-specific spatial geometry. The AdaLN path takes three planar degrees of freedom from the same per-frame increment ∆Ti, never from absolute pose: longitudinal translation tx, lateral translation ty and yaw ψ; roll, pitch and vertical motion are not explicit conditions. The three quantities differ by 2–3 orders of magnitude; each is mapped into [−1, 1] by a scaled symlog, then packed by the VAE temporal scheme into 12 dimensions per latent timestep, and passed through Fourier features and an MLP to a motion embedding eego , which is added to the diffusion-timestep embedding to produce per-layer AdaLN coefficients. Per-feature affine modulation originates in FiLM [27]; our backbone uses DiT’s AdaLN-Zero form [26]. Because ego-motion is frame-global, we use it for full-frame scale/shift and leave per-pixel projection differences to the Plücker path. FiLM and AdaLN-Zero do not themselves prescribe this split [26, 27]. 
+
+3.5 Layout: pixel-aligned lightweight wireframe injection 
+
+Prior work represents structured scene control with instance tokens or scenario maps [1, 28, 56]. For a production heterogeneous rig, the additional requirement is to preserve projection-specific pixel alignment without expanding the backbone. Building on HorizonDrive’s lightweight condition mapping [50], we rasterize class, 3D extent and heading, and traffic-signal color and direction into a wireframe on each native camera grid. A shared adapter maps the rasterized condition once to the token grid and injects it at a single backbone location, bypassing the video VAE. After rasterization, adapter cost is independent of backbone depth and the number of instances; editing a condition requires re-rendering the wireframe, and object identity is not modeled explicitly. Upstream rendering uses camera calibration at native resolution. Color encodes agent class; boxes and markers encode extent and heading; traffic-light boxes and state markers place signal color and direction at the corresponding instance. Changing pose, size, heading, or state yields frame-wise counterfactual condi-tions. Wireframes share video preprocessing and are downsampled only by lossless PixelUnshuffle (Sec. 3.2, 
+
+(d, s, k ) = (1 , 16 , 2) ). Pure black maps exactly to zero, so missing, sparse, or locally dropped constraints need no extra mask. Pixel alignment is especially consequential for signals: small lamps and arrows directly govern right-of-way and stop–go behavior. Figure 7 compares mapping the same wireframe with a token-grid adapter versus the video VAE encoder: 47.2M versus 149.6M parameters and 2.5 TMAC ver-sus 366 TMAC. The adapter costs approximately 147 ×
+
+less compute despite only a 3.2× difference in the num-ber of parameters, because it avoids 3D convolution at pixel resolution. Projection distortion is already rasterized into each wireframe, so all seven views can share an adapter composed of PixelUnshuffle, a linear projection, and a zero-initialized 1 × 1 convolution. Layout adapter (ours) Video VAE encoder 050 100 150 Parameters (M)  
+
+> 47.2 M 149.6 M
+> 3.2× fewer
+> (a) Parameters
+> Layout adapter (ours) Video VAE encoder 10 0
+> 10 1
+> 10 2
+> 10 3
+> MACs (TMAC, log scale)
+> 2.5 TMAC 366 TMAC
+> 147× fewer
+> (b) Compute
+> Figure 7
+
+Compute cost of the layout path: lightweight adapter versus the video VAE encoder. 
+
+9Camera rays retain separate adapters because their input statistics differ by projection family. If wireframes are unavailable during training, we exclude the entire clip rather than mix conditioned and unconditioned views within one rig. At inference, missing timestamps use an all-zero layout to preserve tensor shape; this represents an unconstrained layout, not an inferred mask. 
+
+3.6 Memory: long-horizon scene fidelity across trajectories 
+
+Autoregression extends time; memory preserves place-specific geometry and layout when the scene is revisited along another trajectory. The 4DGS pairs of Sec. 2.4 provide cross-trajectory supervision, while the plug-in implicit path avoids explicit reconstruction. Figure 8 summarizes the pathway detailed below. 1 Memory  Latents Retrieval          
+
+> Spatial search Spatial latent * 3
+> 4 Memory latents
+> 2Two -level Position Embedding
+> Cross -frame ·Rt embedding
+> [R|t ]Fourier MLP +
+> In -frame ·2D RoPE
+> 3Memory Propagates to All Views
+> Memory cross -attn Cross -view attn Transformer block
+> Front
+> wide
+> Front
+> narrow
+> Front
+> fisheye
+> Left
+> fisheye
+> Right
+> fisheye
+> Rear
+> fisheye
+> Rear
+> view
+> Temporal latent * 1 Temporal align
+> K
+> only learned on front wide / front narrow · propagate by cross-view attention
+
+Figure 8 Memory-latent retrieval, two-level position embedding, and propagation to all views. 
+
+Module. Residual cross-attention is inserted before 15 odd backbone layers: target tokens query all tokens from four retrieved memory latents, batched per frame with FlashAttention [4]. When no memory is retrieved the tokens are set to zeros, a mixed-data dropout that keeps generation well-behaved with or without memory, and the path is carried through the distillation of Sec. 4. 
+
+Memory Latents Retrieval. For each target latent, 20 m and 45 ◦ gates filter candidates; heading then distance selects three spatial references separated by at least 1.5 m, and temporal alignment supplies the nearest-time reference. Selection is entirely data-side. 
+
+Two-level Position Embedding. Fourier–MLP features of relative rotation and translation encode cross-frame geometry, while 2D RoPE aligns pixels within each frame. Memory logs receive no absolute rollout time and always match the target patch grid. 
+
+Memory Propagates to All Views. Shared memory layers attach only to the front-wide and front-narrow slots and precede cross-view attention, which propagates retrieved evidence to the other five cameras without seven independent retrievals. 
+
+## 4 From bidirectional to autoregressive 
+
+This section turns a bidirectional, multi-step multi-view world model into a causal streaming generator for long-horizon generation and per-timestep interaction (the second problem in Sec. 1.2). AR post-training proceeds in four phases, distinct from the pretraining curriculum of Sec. 5.2: Sec. 4.1 TF aligns training with deployment-time causal visibility; Sec. 4.2 CD provides a few-step initialization; Sec. 4.3 DMD matches distributions on self-generated histories; and Sec. 4.5 stops DMD and applies RigCritic, an asymmetric adversarial refinement of the one-step generator. The pixel-domain perceptual loss in Sec. 4.4 is a generator regularizer used in DMD and RigCritic rather than a separate phase. All components share the same multi-view DiT, conditioning interface, and attention semantics. Section 4.6 then describes bounded-memory 10 inference for minute-scale streaming. In VAE latent space, let z1: V 
+
+> 1: T
+
+be the autoregressive context window of V cameras and c the control (camera, ego-motion, and layout). The model predicts the next multi-view latent at a latent timestep —a frame-wise autoregressive unit in the sense of Causal Forcing++ [54]—and appends it to the history buffer: 
+
+ˆz1: VT +1 ∼ pθ
+
+ z1: VT +1 | z1: V 
+
+> 1: T
+
+, cT +1 
+
+. (7) 
+
+4.1 Causalization and TF 
+
+At deployment, the KV-cache stores only denoised clean history; retaining noise on historical keys, as Diffusion Forcing permits [3], would mismatch this interface. We concatenate two streams. Clean tokens c0, . . . , c T −1
+
+are ground-truth latents at diffusion timestep 0, carry no direct control features, and supply only keys and values. Noisy tokens n0, . . . , n T −1 draw independent diffusion timesteps per latent and are the denoising targets. One or five RGB conditioning frames compress to nc ∈ { 1, 2} latents; the first nc noisy slots are replaced by ground truth, and the loss applies only for f ≥ nc. The autoregressive unit is one latent. Indices 
+
+i, j run over clean slots and f, g over noisy slots. The attention mask is 
+
+M (ci, c j ) = ⊮[j ≤ i], M (ci, n g ) = 0 ,M (nf , n g ) = ⊮[g = f ], M (nf , c j ) = ⊮[j < f ]. (8) (a)  (b)  (c)  (d)     
+
+> attend masked ×dead / residual island
+> Figure 9
+
+Teacher-forcing mask and condition-aware fixed-length pruning. 
+
+As shown in Figure 9, clean tokens attend only to causal clean history, including themselves; noisy tokens attend only to themselves and strictly earlier clean tokens. cT −1 is never consumed as a key and is never supervised. The first nc noisy condition slots are also unsupervised: n1 is unused when nc = 2 but is the first generated latent when nc = 1 . Pruning every currently unused token would vary the sequence length and trigger recompilation, so we prune only the intersection of the unused sets, always {cT −1, n 0}, and retain n1.Pruning precedes patchification and slices RoPE, timesteps, and all conditions identically, fixing the length at 2T − 2. For T = 21 , 42 latent entries become 40: 4.8% fewer tokens and ≈0.91 × quadratic-attention cost. Token-wise CPU fp64 and 12-step full-sequence checks match the unpruned path within 10 −5.Under rectified interpolation zτ = (1 − στ )z0 + στ ϵ at per-latent noise levels {τf }, training uses independent levels per latent and applies flow matching only to generated latents. Let vθ be the model’s velocity field and 
+
+wv a per-view loss weight (uniform unless noted): 
+
+LFM = E
+
+h X 
+
+> v
+
+wv vθ (zvτ , {τf }, c) − (ϵv − zv 
+
+> 0
+
+) 2 
+
+> f≥nc
+
+i
+
+. (9) An optional bell-shaped timestep weight emphasizes intermediate noise levels, where conditioning is most informative. Plücker rays, ego-motion, and layout are injected per latent timestep from pretraining Stage 1 (front three-view), so controllability is learned jointly with generation rather than added after seven-view training. 11 4.2 Causal CD 
+
+Starting DMD from a multi-step causal model leaves a large optimization gap, while storing full probability-flow ODE trajectories is expensive. Following Causal Forcing++ [54], we construct a few-step initialization with online CD. The shifted flow-matching grid is discretized into NCD = 48 levels t0 > t 1 > · · · > t NCD −1.Each iteration samples adjacent levels (ti, t i+1 ), and the frozen causal teacher flow vϕ takes one ODE step 
+
+Step , optionally with CFG. For AR unit k, ¯ck = ( c, z<k  
+
+> gt
+
+) combines the control with teacher-forced clean history: 
+
+˜zkti+1 = Step  zkti , v ϕ(zkti , t i, ¯ck), t i → ti+1 
+
+ . (10) Let Fθ (zt, t, ¯ck) denote the online student’s clean-latent prediction obtained from its flow field, θ− an ex-ponential moving average of θ, sg[ ·] a stop-gradient, and w(ti) a positive timestep weight. Adjacent-level consistency is 
+
+LCD = Ei
+
+"
+
+w(ti) X
+
+> v
+
+wv Fθ (zv,k ti , t i, ¯ck) − sg 
+
+h
+
+Fθ− (˜ zv,k ti+1 , t i+1 , ¯ck)
+
+i 2
+
+#
+
+. (11) Adjacent-level supervision decomposes full-trajectory regression into local consistency learning without pre-generating teacher trajectories. Frozen teacher, EMA student, and online student each process the full multi-view sequence in one forward and reuse the mask and fixed-length pruning of Sec. 4.1, preserving covisible interaction and a static input shape. The result is a stable causal few-step initialization for self-rollout DMD. 
+
+4.3 Self-rollout DMD for one-step generation 
+
+Causal CD is trained on ground-truth history, whereas deployment conditions on the model’s own predic-tions. We address this history shift by combining DMD/DMD2 distribution matching [47, 48], the causal-student/bidirectional-teacher asymmetry of CausVid [49], and the self-rollouts of Self Forcing [14]. AAPT pursues a similar train–inference alignment through student forcing and a training-time KV-cache in an ad-versarial framework [22]; here the cache is used within DMD. Starting from one clean conditioning latent, the student generates the remaining 20 latents in one step each, yielding ˆz0 = Gθ (ϵ, c) with an entirely self-generated history. The generator Gθ is strictly causal, whereas the frozen teacher and the online fake score model both attend bidirectionally over the full seven-view clip. We re-noise the student rollout at a random diffusion level 
+
+τ to obtain zτ ; μreal and μfake denote the frozen teacher’s and the online fake score model’s clean-latent (x0) predictions, not raw scores. The teacher may use classifier-free guidance with increment αcfg , so the conventional guidance scale is s = 1 + αcfg :
+
+μreal ← μcond real + αcfg 
+
+ μcond real − μuncond real 
+
+ . (12) With g ∝ μfake − μreal , the stop-gradient surrogate below moves ˆz0 toward the teacher prediction and away from the fake-model prediction, giving the usual x0-parameterized proxy for reverse-KL distribution matching [47, 48]. After per-sample normalization over latent axes (f, c, h, w ) with stabilizer ε > 0, the generator gradient is 
+
+∇θ LDMD = Eτ, ϵ
+
+ 
+
+g, ∂ˆz0
+
+∂θ 
+
+ 
+
+, (13) 
+
+g = μfake (zτ , τ, c) − μreal (zτ , τ, c)
+
+S , (14) 
+
+S = mean f,c,h,w (|ˆz0 − μreal (zτ , τ, c)|) + ε. (15) 12 We implement the same update through an equivalent stop-gradient surrogate: 
+
+Lsurr DMD = 12 ∥ˆz0 − sg[ˆ z0 − g]∥22 . (16) The generator and fake score model are updated alternately so that the latter tracks the evolving student distribution. On self-rollouts, the fake score vψ uses the base flow-matching objective: diffusion level 0 for the clean prefix zcond , τ for the generated region, and loss only on that region: 
+
+Lcritic (ψ) = Eτ
+
+"X
+
+> v
+
+wv [vψ ([ zv
+
+> cond
+
+, zvτ ], {0, τ }, c)] gen − (ϵv − ˆzv 
+
+> 0
+
+) 22
+
+#
+
+. (17) This DMD phase transfers clip-level distributional information from a bidirectional teacher to a strictly causal one-step generator while exposing the student to its own rollout history. It complements causal CD, which conditions on ground-truth prefixes, and provides the generator objective to which paired perceptual supervision is added. 
+
+4.4 Pixel-domain perceptual regularization 
+
+DMD aligns the global latent distribution, yet DMD-only long rollouts still show highlight bloom, blurred fine texture, and malformed small objects; the frozen teacher may itself drift from real observations. We therefore add a ground-truth-paired pixel-domain term to the generator: DMD constrains distribution, while perceptual supervision constrains local observation fidelity.  
+
+> Figure 10 One-step AR generation without (top) and with (bottom) pixel-domain LPIPS regularization. Green boxes mark local differences.
+
+Differentiable decoding of seven views at T = 21 makes the original Wan2.2 VAE impractical inside the training loop. We instead freeze Dlight from Sec. 6.1, aligned to the Wan VAE’s latent space and temporal upsampling. Prediction and target are prefixed by the same clean condition latent, decoded, and compared with frozen-AlexNet LPIPS [52]. Let Vs be the sampled views, F the valid frames after decoder warmup, and Dlight the frozen TinyVAE decoder of Sec. 6.1: 
+
+Lperc = 1
+
+|F| P 
+
+> v∈V s
+
+wv
+
+X
+
+> v∈V s
+
+wv
+
+X 
+
+> f∈F
+
+LPIPS  Dlight ([ zv
+
+> cond
+
+, ˆzv 
+
+> 1: T−1
+
+]) f , D light ([ zv
+
+> cond
+
+, zv 
+
+> 1: T−1
+
+]) f
+
+ . (18) The generator objective is 
+
+LG = Lsurr DMD + λperc Lperc , λperc = 0 .1. (19) Both branches use the same conditioning latent as a decoder prefix, preventing decoder cold-start state from creating a spurious discrepancy. With decoder warm-up window wdec = 3 , the first (wdec − 1) × 4 pixel frames 13 are discarded. Decoding runs in groups of three latents with streamed loss accumulation; the decode–pixel– LPIPS chain is activation-checkpointed, making peak memory approximately independent of rollout length. Each iteration samples three of the seven views for Lperc .Late in the rollout in Figure 10, the perceptual term reduces taillight bloom and ghosting while keeping body text, road markings, and small-object contours. This is evidence for those local failure modes, not a general frequency-response claim about DMD. 
+
+4.5 RigCritic: cross-view adversarial refinement 
+
+Sections 4.3–4.4 yield a stable one-step causal generator, but reverse KL DKL (qθ ∥pteacher ) is an expectation under the student: student samples that the teacher assigns low probability are penalized, whereas teacher modes rarely visited by the student contribute little gradient, leaving a mode-seeking bias. Adversarial train-ing restores real video as the reference [9]. DMD2 jointly optimizes distribution matching and an adversarial term [47, 48]. AAD-1 stabilizes an asymmetric GAN with ODE initialization and a short DMD warm-up, then stops DMD before motion collapse [18]. Driving failures often span cameras—fisheye and pinhole motion can disagree, or covisible regions can drift—so per-view discrimination is insufficient. We therefore introduce RigCritic. Following the staged schedule and generator–discriminator information asymmetry of [18], DMD updates end after Sec. 4.3; the final stage optimizes only the adversarial objective together with the perceptual term of Sec. 4.4. The discriminator scores the full latent clip—four fisheye and three pinhole views—as one rig sample, allowing cross-view geometry and temporal consistency to contribute directly to the adversarial gradient. Readout layers are selected by an influence probe rather than copied from fixed indices. The generator Gθ remains strictly causal. The discriminator Dψ is initialized from bidirectional Wan2.2 and uses APT’s learnable-query head [21] to pool full-clip, multi-view context; future information is therefore available only during training [18, 21]. Instead of copying the fixed readout layers used by APT or AAD-1, an input-dependent influence probe replaces each block with the identity, measures the resulting cosine shift in the final state, and selects taps across depth for appearance, motion, and semantics. Training clips are autoregressively unrolled with the bounded history of Sec. 4.6. Real and generated clips are noised at a random level τ ; unlike the shared noise of AAD-1 [18], independent noise samples yield zτ
+
+and ˆzτ around each distribution. The logistic objectives are: 
+
+LD 
+
+> adv
+
+= Ez∼pdata [softplus( −Dψ (zτ , τ, c))] + Eˆz∼Gθ [softplus( Dψ (ˆ zτ , τ, c))] , (20) 
+
+LG 
+
+> adv
+
+= Eˆz∼Gθ [softplus( −Dψ (ˆ zτ , τ, c))] . (21) The discriminator also applies finite-difference R1/R2 on real and generated samples, with objective LD 
+
+> adv
+
++
+
+λR(LR1 + LR2 ), where λR is the gradient-penalty weight. Finite-difference R1 comes from APT [21]; sym-metric R1/R2 follows AAPT and AAD-1 [18, 22]. Adversarial matching does not enforce local correspondence to paired ground truth, so RigCritic retains the Sec. 4.4 perceptual objective: 
+
+LG = LG 
+
+> adv
+
++ λperc Lperc . (22) The discriminator contributes clip-level gradients from real videos, while the perceptual loss anchors paired roads, text, and small objects. Both objectives are used only during training; deployment remains one-step, causal, and bounded in history. This completes the post-training sequence in Sections 4.1–4.5; Sec. 4.6 describes its long-horizon runtime. 
+
+4.6 Long-horizon inference and a bounded KV-cache 
+
+Closed-loop inference proceeds recursively over latent timesteps: predict the next seven-view latent, append it to history, and continue. There is no additional long-horizon training stage. Self-rollout (Sec. 4.3) and clip-level discrimination (Sec. 4.5) reduce the train–test history-source gap within the training window but 14 do not expose the model to arbitrary sequence lengths. At inference, seven fixed-capacity KV-caches keep per-step memory independent of rollout duration. Within the training window the history is a FIFO of length 
+
+T :
+
+z1: V 
+
+> 1: T
+
+← z1: V 
+
+> 2: T
+
+, ˆz1: VT +1 
+
+. (23)  
+
+> Training versus inference windows.
+
+The causal 4 × VAE maps 81 RGB frames to 21 latents ( ≈8.1 s at 10 FPS) and 301 frames to 76 latents ( ≈30 s). All AR post-training phases stop at T = 21 : TF and CD (Sec. 4.1–4.2) use full-clip teacher-forced forwards without a KV-cache, and the DMD self-rollout depth in Sec. 4.3 is also 21. The recurrence (23) describes that training-window FIFO. The 30 s result reuses the same per-step loop with a rolling cache of capacity W ≪ 76 ; it therefore measures extrapolation beyond the training window, not long-window training. Because per-step memory does not grow with duration, the identical loop continues at minute scale; we report 30 s as the documented qualitative horizon.  
+
+> Bounded KV-cache.
+
+Each view retains an S-latent attention-sink prefix and the most recent W − S latents (e.g., W = 7 , S = 3 ), evicting the oldest non-sink latent [41]. Heterogeneous views advance independently at token size hv wv . RoPE uses global latent indices: eviction removes KV content without re-indexing time, unlike StreamingLLM’s in-cache re-indexing [41]. Cross-view attention reads only the current timestep’s hidden states, not other views’ caches. The sink prefix—including the start-of-clip latent—is a video-specific scene anchor; that use is ours, not a claim of [41].  
+
+> Condition injection.
+
+Each step writes clean context at diffusion t = 0 without direct control embeddings, injects control only while denoising the current latent, and then replaces that cache slot with the clean prediction. Historical KV therefore stores clean context without explicit control features. Layout is sliced to the target length; missing timestamps are represented by an all-zero layout, matching the no-constraint pattern used during training. Camera poses must be available at every requested timestamp. 
+
+## 5 Training procedure and systems engineering 
+
+Sections 3–4 define the heterogeneous multi-view architecture and autoregressive post-training objectives. This section explains how we train these models on a production rig within a single-node memory budget. The scheduler (Sec. 5.1) treats each resolution–view-subset pair as an atomic sampling configuration, al-lowing full-rig topology coverage and high-resolution detail to be allocated independently. The curriculum (Sec. 5.2) progresses from three-view low resolution to a mixture of seven-view low resolution and three-view high resolution, followed by cosine learning-rate annealing. Our training framework (Sec. 5.3) makes these mixed configurations—and, separately, seven-view high-resolution autoregressive post-training—tractable. Scheduling determines the cost composition of each step, the curriculum determines its order, and systems optimization determines the feasible envelope. 
+
+5.1 Heterogeneous mixed training 
+
+A production camera system simultaneously has many views, unequal resolutions, and sparse effective cov-isibility. Always training at full-view high resolution on long sequences makes compute grow rapidly with spatiotemporal tokens; only lowering resolution loses distant agents, lane boundaries and fine motion cues needed for closed-loop driving. ZYT-World therefore decouples global geometric coverage from local detail: after entering the multi-view mixed stage, the low-resolution branch covers all seven cameras in the corre-sponding updates, while the high-resolution branch activates only strongly covisible view subsets. Both share backbone, camera semantic slots and CVA parameters, so raising resolution or changing the view combination does not require copying the model or redefining the network. In the 7-view mixed stage the scheduler samples “resolution configuration × view subset” as the atomic unit, alternating 1:1 between a low-resolution full-rig stream and a high-resolution subset stream. Five three-view combinations cover all 12 edges of the seven-camera covisibility graph (left of submodule 5 in Figure 6: front cluster, side-bridge cluster, rear cluster), with the full seven-view combination retained; the front combination most relevant to driving decisions is up-weighted. Intra-configuration bucketing keeps 15 sequence shape and attention masks static inside a batch; random interleaving across configurations prevents one view or resolution from dominating. When the high-resolution branch uses a shorter temporal extent we take the temporal prefix of the sample (first 41 of 81 frames) and rebuild camera and layout conditions with the same first frame as reference, so that the two streams stay strictly aligned on the prefix and the condition coordinate frame does not drift with the resolution configuration. Figure 11 reports steady-state cost under the sampling schedule, normalized to pretraining Stage 1 (3-view, 81-frame low resolution). Mixed configurations include 1:1 low/high alternation, and 41-frame high-resolution steps retain random 3-view/7-view subset sampling by training weight. Counting this schedule, the 41-frame mixed configuration costs 1.93 × a pretraining Stage-1 step on average; extending high-resolution context to 81 frames and fixing a 3-view subset raises the average to 2.66 ×.3V · 81f LR 7V · 81f LR ↔ 3V+7V · 41f HR 7V · 81f LR ↔ 3V · 81f HR 7V · 81f HR 0.0 0.5 1.0 1.5 2.0 2.5 3.0 Mean cost per update (× 3V LR)  
+
+> 1.00× 1.93× 2.66×
+> OOM
+> Mixed con fi gurations include 1:1 LR/HR alternation
+> Compute of the heterogeneous training schedule
+
+Figure 11 Average compute of heterogeneous training, normalized to a 3-view low-resolution update. 
+
+Direct 7-view, 81-frame high-resolution training exceeds the single-machine memory budget, so it has no comparable measured step cost. Heterogeneous scheduling therefore does more than shorten high-resolution sequences: it spends half of the updates at low resolution to keep full camera-topology coverage, and confines high-resolution compute to covisible subgraphs, gradually increasing spatiotemporal supervision inside a trainable memory envelope. 
+
+5.2 Staged curriculum 
+
+Pretraining follows a four-stage curriculum under a shared parameterization, with no architectural or weight remapping between stages. These pretraining Stages 1–4 are a data-and-resolution schedule and are not the TF/CD/DMD/RigCritic phases of Sec. 4. Pretraining Stage 1 trains front wide, front narrow, and front fisheye at low resolution while progressively introducing the Plücker-ray, temporal, and conditioning modules. Stage 2 adds seven-view, 81-frame low-resolution sequences and alternates them 1:1 with randomly sampled 3-view or 7-view, 41-frame high-resolution subsets. Stage 3 replaces the high-resolution branch with a curated 3-view, 81-frame subset, concentrating long-horizon, high-fidelity supervision on the front wide, front narrow, and front fisheye combination most relevant to driving decisions. Stage 4 retains the Stage 3 data mixture and cosine-anneals the learning rate from 10 −5 to 10 −6.Stage 1 Stage 2 Stage 3 Stage 4 050 100 150 200 250 300 FVMD ↓            
+
+> 240.1 195.6 193.8 192.5 95.0 92.5 84.6
+> (a) Motion quality per camera cohort
+> retained cameras cameras added at 7V
+> 100000 150000 200000 Training steps 1.00 1.05 1.10 1.15 1.20 1.25 1.30 1.35 FVMD, normalised to Stage 4
+> 3V → 7V
+> (b) Convergence across the view expansion
+> retained cameras cameras added at 7V
+> FVMD LPIPS Sampson PSNR SSIM 01234Quality improvement (%)  +3.8% +1.4% +2.7% +0.3% +0.3%
+> (c) Cosine re fi nement, Stage 3 → 4
+
+Figure 12 Pretraining-curriculum quality. (a) FVMD of already-trained vs newly merged cameras; (b) FVMD normal-ized to the pretraining Stage-4 final checkpoint; (c) relative improvement from the Stage-3 mean to the Stage-4 final checkpoint. 
+
+Figure 12 tracks a continuous pretraining trajectory with FVMD (lower is better). Cameras present since Stage 1 improve from 240.1 to 192.5 by Stage 4, indicating that rig expansion does not regress the original views. Cameras introduced in Stage 2 improve from 95.0 to 84.6; the two groups are not directly comparable in absolute value. Under seven-view evaluation, FVMD decreases from the Stage-2 mean of 123.0 to 116.5 at the final Stage 4 checkpoint ( −5.27%). Stage 3 adds longer high-resolution context and a curated subset, whereas Stage 4 retains the data mixture and only anneals the learning rate; from the Stage-3 mean to that 16 checkpoint, FVMD, LPIPS, Sampson, PSNR, and SSIM improve by 3.8%, 1.4%, 2.7%, 0.3%, and 0.3%. The trajectory supports learning the core spatiotemporal prior at low cost in the few-view, low-resolution regime before adding views and resolution without changing the architecture. 
+
+5.3 Distributed training and efficiency engineering 
+
+All optimizations in this subsection are implemented in our distributed training framework built on Megatron-Core [29]. The framework inherits TP, PP, SP, and DP; adds FSDP/HSDP; and rewrites scheduling, communi-cation, and memory management to fit the workload of multi-view video diffusion. Sections 5.3.1–5.3.4 apply to both heterogeneous pretraining and autoregressive post-training, whereas Reuse Rollout, No-Reshard, and Segmented Backward are specific to the latter. 
+
+5.3.1 Parallelism strategy 
+
+Training composes HSDP [55] with DeepSpeed-Ulysses all-to-all sequence parallelism [16]. HSDP shards parameters, gradients, and optimizer state within high-bandwidth groups and replicates them across groups; Ulysses redistributes activations between the sequence and attention-head dimensions. The corresponding process group is named SP in our framework, distinct from Megatron’s tensor-parallel sequence parallelism. Replicating KV heads when their count is smaller than or not divisible by the sequence-parallel degree (as in GQA/MQA) is our layout adaptation. all -gather  FWD  shard / free  held -full resident  
+
+> ×
+
+FLAG OFF ·full -shard  reshard cost  ×N           
+
+> ag FWD shd ···repeat N times · ··ag FWD shd ···ag FWD shd
+> wall -clock ≈
+
+N ×(allgather + FWD + shard)  
+
+> ✓
+
+FLAG ON ·stay -full  reshard cost  ×1         
+
+> ag ×1held -full —N×FWD continuous shd ×1
+> wall -clock ≈
+
+1×allgather + N ×FWD +  1×shard 
+
+Figure 13 FSDP No-Reshard: default per-forward reshard (top) versus keeping parameters unsharded (bottom). all -gather  FWD  shard  held -full  PG -drain  fsdp  restored  stay -full restored  
+
+> ×
+
+ON_GEN OFF ·grad reshard  reshard  ×N per rollout                 
+
+> critic ✓shd drain ag FWD shd ···N times · ··grad -exit FWD ···ag FWD shd bwd
+> gen rollout ≈ N×(ag + FWD + shd)
+> ✓
+
+ON_GEN ON ·grad stay -full  restore  ×1 per block                
+
+> critic ✓shd drain ag ×1held -full fsdp -re grad exit stay -full held -full +ctx drain shd bwd (re -gather)
+> gen rollout ≈ 1×(drain+ag) + N ×FWD + 1×(drain+shd)
+> ↑ restore repeats once per qualifying block
+
+Figure 14 Default reshard versus No-Reshard on the DMD generator rollout. 
+
+5.3.2 Compute optimization Frame-local memory attention. Each rank computes only its local frame’s block-diagonal memory attention, eliminating the full-query all-gather and redundant work. At SP=8, layer compute and peak query memory 17 fall to ~1/8, and memory-training throughput rises ~52%. 
+
+Reuse Rollout. Detached generator rollouts are cached in memory released after generator backpropagation and reused by the DMD fake score model without increasing peak memory, halving its forward-pass time. Batching views reduces the rollout segment to approximately one sixth of its original cost. 
+
+Condition rewrite. Batched, sequence-parallel Plücker/layout encoding and blocked-matmul convolution re-duce condition time by 88.7% and end-to-end step time by ~10%. 
+
+FlexAttention tuning. Jointly tuned forward/backward tiles, warps, stages, and mask blocks improve for-ward/backward by 33.4%/22.2% without changing attention semantics. 
+
+Memory-bound fusion. Fusing AdaLN, RoPE, normalization, and casts avoids repeated long-sequence traffic and cuts small-op hot-path share from ~26% to below 10%. 
+
+5.3.3 Communication optimization 
+
+Repeated FSDP all-gather accounted for 26.3% of rollout latency. No-Reshard keeps full parameters across the entire rollout, reducing aggregation from N times to one; backward restores standard sharding, and boundary synchronization fixes HSDP/sequence-parallel collective order (Figures 13–14). 
+
+5.3.4 Memory optimization Adaptive rematerialization. The system selects the minimum rematerialization depth from the current resolu-tion, duration, and view subset, separately balancing backbone, cross-view, and memory attention under one memory budget. 
+
+Async offload. Selected boundary activations move to host memory after forward and prefetch before back-ward, overlapping transfer with compute and saving ~30 GB in the full configuration. 
+
+Segmented backward. Cutting the graph at the generated latents, we first backpropagate through the fake score model and perceptual loss, and then through the generator. Peak memory decreases from MG +Mscore +
+
+Mperc to max( MG, M score + Mperc ), removing approximately 10 GB of graph co-residency while preserving parameter gradients. 
+
+5.3.5 End-to-end gains and equivalence boundaries 
+
+These optimizations make seven-view high-resolution autoregressive post-training feasible; the same configu-ration previously ran out of device memory. Once memory is no longer the bottleneck, the sequence-parallel degree can drop from 8 to 4, yielding 2.7 ×–6.3 × higher throughput at the same number of devices and global batch size. TF CD 0.0 0.5 1.0 1.5 2.0 2.5 Step-time speedup       
+
+> 1.35× 1.44× 2.08× 2.21× 1.99× 2.07×
+> (a) Fixed parallel con fi guration
+> AR distillation AR + memory, low-resolution step AR + memory, high-resolution step
+> AR AR + memory 01234567Throughput speedup at equal global batch
+> 3.15× 5.64× 2.68× 6.27×
+> (b) DMD, sequence parallelism 8 → 4
+> scorer step generator step
+
+Figure 15 Training-system speedups for AR post-training. (a) Step time at a fixed parallel configuration for TF and CD; (b) DMD throughput after sequence parallelism 8 → 4. Bars compare the AR configuration with and without the memory path. Dashed line: pre-optimization baseline. 
+
+18 Figure 15 reports end-to-end gains for AR post-training (TF, CD, DMD), not the pretraining Stages of Sec. 5.2. TF and CD improve by 1.35 × and 1.44 × at a fixed parallel configuration; with memory optimizations, low- and high-resolution steps reach 2.08 ×–2.21 × and 1.99 ×–2.07 ×. After SP 8 →SP 4, DMD scorer and generator steps improve from 3.15 ×/2.68 × to 5.64 ×/6.27 ×. Combined optimizations accelerate bidirectional pretraining by approximately 1.65 ×.Frame-local execution, condition encoding, and segmented backward preserve the underlying computation; rematerialization and offload alter only tensor residency. Fused kernels are validated within numerical tol-erance, while No-Reshard and Reuse Rollout are checked for collective ordering and cross-GPU gradient consistency. Because local speedups are not additive, Figure 15 reports the end-to-end AR-phase gains. 
+
+## 6 Real-time decoding and inference 
+
+Closed-loop deployment requires optimizing the entire latent-to-sensor path, not generation quality alone. TinyVAE reduces pixel-decoding cost; few-step post-training reduces backbone evaluations per latent timestep; W8A8 reduces the cost of each matrix multiplication; and our inference engine fuses operators, reuses tem-poral state, and schedules multi-view execution. These components target decoding, the number of sampling steps, numerical precision, and execution efficiency, respectively. 
+
+6.1 The TinyVAE decoder 
+
+The latency of the Wan decoder can hardly meet the real-time requirement of closed-loop simulation, so the decoding stage must be accelerated. TinyVAE must therefore approach the decoding quality of Wan in both pixel space and semantic space at a small fraction of the latency and GPU memory. TinyVAE has 19M parameters, less than 4% of the 555M-parameter Wan decoder. The Wan encoder is kept frozen and only the decoder is trained, so training reduces to deterministic regression from latents to pixels. We start from TAEHV super, the Wan-compatible release of TAEHV [2], which serves as the baseline.  
+
+> Notation.
+
+Let ˆx = Dlight (z) denote the clip decoded from the latent z and x the paired RGB clip, both with pixel values in [0 , 1] . A training batch contains N frames indexed by n ∈ { 1, . . . , N }, with ˆxn, xn ∈
+
+[0 , 1] 3×H×W . The color channel is indexed by c ∈ { 1, 2, 3} and the pixel position by (h, w ) ∈ { 0, . . . , H − 1} × {0, . . . , W − 1}, so that xn,c,h,w and ˆxn,c,h,w denote the entries of xn and ˆxn. 
+
+> Objective.
+
+The decoder minimizes 
+
+Ldec = α L1 + λp LLPIPS + λd LDINO + λg Lgrid , (24) with (α, λ p, λ d, λ g) = (0 .1, 0.1, 0.02 , 1) . The four terms address pixel fidelity, perceptual similarity, semantic consistency, and lattice-aligned residuals, respectively.  
+
+> Pixel term.
+
+The pixel term is the mean absolute error over frames, channels, and pixels, 
+
+L1 = 13N HW 
+
+X
+
+> n,c,h,w
+
+ˆxn,c,h,w − xn,c,h,w . (25) We use the L1 norm rather than MSE because, at matched gradient scale, MSE leaves stronger periodic residuals on smooth regions.  
+
+> Perceptual term.
+
+Let dLPIPS (·, ·) denote the frozen LPIPS distance with AlexNet features [52], evaluated on inputs mapped from [0 , 1] to [−1, 1] by x 7 → 2x − 1. The perceptual term is the mean over frames, 
+
+LLPIPS = 1
+
+N
+
+> N
+
+X
+
+> n=1
+
+dLPIPS 
+
+ ˆxn, xn
+
+. (26) This feature-space distance is correlated with human similarity judgments; without it the decoder converges toward a blurred pixel-average solution. 19 Semantic term. Let ϕℓ(xn) ∈ RK×C denote the patch tokens (excluding the class token) output by Transformer block ℓ of a frozen DINOv2 ViT-B/14 [25] and passed through the network’s final LayerNorm, where K is the number of patch tokens and C the embedding dimension. Each frame is bilinearly resized to 224 × 560 
+
+and ImageNet-normalized before encoding, giving K = 16 × 40 = 640 and C = 768 . Let S = {3, 6, 9, 12 } be the set of supervised blocks and ∥·∥ F the Frobenius norm. The semantic term is 
+
+LDINO = 1
+
+N |S| 
+
+> N
+
+X
+
+> n=1
+
+X
+
+> ℓ∈S
+
+∥ϕℓ(ˆ xn) − ϕℓ(xn)∥2F
+
+∥ϕℓ(xn)∥2F
+
+, (27) where the target tokens ϕℓ(xn) are treated as constants. Normalizing each block by the energy of its tar-get tokens equalizes the contributions of the four depths, and the mid-level blocks retain a sensitivity to structure and texture that the final block abstracts away. The term acts as a semantic regularizer: it leaves reconstruction PSNR/SSIM essentially unchanged while improving the distributional quality of generated frames.  
+
+> Lattice term.
+
+Let rn = ˆ xn − xn be the residual of frame n with entries rn,c,h,w , spatially cropped to H′ × W ′,where H′ and W ′ are the largest multiples of the lattice period P = 16 not exceeding H and W . Each pixel 
+
+(h, w ) is assigned the lattice phase (i, j ) = ( h mod P, w mod P ), and the residual is averaged over all pixels sharing the same phase: 
+
+mn,c,i,j = P 2
+
+H′W ′ 
+
+> H′/P −1
+
+X  
+
+> u=0
+> W′/P −1
+
+X
+
+> v=0
+
+rn,c, uP +i, vP +j , i, j ∈ { 0, . . . , P − 1}. (28) The phase-wise average preserves any residual component whose spatial period divides P , whereas residual content not aligned with the lattice is attenuated. Subtracting the per-frame, per-channel mean over the P 2
+
+phases, ¯mn,c = P −2 P 
+
+> i,j
+
+mn,c,i,j , removes the constant offset already penalized by L1 and retains only the periodic component. The lattice term is the L1 norm of the resulting phase-binned residual, averaged over frames, channels, and phases: 
+
+Lgrid = 13N P 2
+
+> N
+
+X
+
+> n=1 3
+
+X 
+
+> c=1
+> P−1
+
+X
+
+> i,j =0
+
+mn,c,i,j − ¯mn,c . (29) The L1 norm is used on the binned residual because the gradient of a squared norm vanishes as the residual amplitude tends to zero, so low-amplitude periodic residuals would not be removed. In practice, this term markedly suppresses checkerboard artifacts on smooth regions and also benefits perceptual and distributional quality. 
+
+6.2 Few-step AR inference 
+
+A few-step student generates synchronized seven-view latent timesteps rather than processing cameras se-quentially or entire videos as clips. Given bounded history Ht (Sec. 4.6) and control ct+1 , each denoising substep updates all views jointly, so every generated latent corresponds to the same physical time interval. For K denoising substeps of a distilled student Φθ,k , one latent timestep is updated as 
+
+z(0)  
+
+> t+1
+
+∼ N (0 , I), z(k+1)  
+
+> t+1
+
+= Φ θ,k 
+
+
+
+z(k)
+
+> t+1
+
+, Ht, ct+1 
+
+
+
+, k = 0 , . . . , K − 1, (30) where zt+1 stacks all seven views and Ht is the bounded KV history. The K intra-timestep denoising updates read historical KV without modifying it; noisy intermediates never enter the cache. New keys and values are committed only after the final clean latent. This solve-then-commit rule keeps cache semantics consistent across the 1-, 2-, and 4-step students. The 1/2/4-step operating points are separately distilled students, not early exits from one checkpoint. Gen-erating T latent timesteps costs KT backbone forwards, while the fixed history window is independent of T .Camera, layout, and ego-motion encodings are reused across substeps of a timestep; its final latent enters the cache and can be decoded immediately by TinyVAE. Comparisons in Sec. 7.2.3 disable memory. 20 6.3 W8A8 quantization 
+
+Few-step distillation cuts the number of forwards; W8A8 reduces each DiT forward. In closed-loop rollout, visual and control tokens vary strongly in scale across tokens, while activation statistics drift over generated time; naive per-tensor quantization is further dominated by fixed post-normalization outlier channels. We ad-dress channel outliers, token-wise dynamic range, and closed-loop distribution shift with three complementary mechanisms. SmoothQuant [40] transfers activation outliers on X onto weights W through per-channel scales s, with migration strength αsq ∈ [0 , 1] :
+
+Y = ( X diag( s)−1)(diag( s)W), sj = max( |Xj |)αsq 
+
+max( |Wj |)1−αsq . (31) At the algorithmic level, channel scales are absorbed offline into the preceding Linear and AdaLN affine parameters, adding no extra matrix multiplication [40]. When smoothing crosses a residual addition, the residual branch receives the same scaling to preserve algebraic equivalence. Activations use ZeroQuant-style per-token dynamic quantization [46], whereas weights use grouped static scales. Per-token scales absorb variation across token types and rollout time; grouped weight scales bound the error introduced after outlier migration. INT8 products accumulate in INT32. Let ˆX and ˆW be the smoothed activations and weights, ∆X,i the per-token dequant scale, and ∆W,g the scale of output-channel group g. In the inference-engine epilogue, ∆X is applied per row (token) and ∆W per group by broadcasting, not as a dense right multiplication: 
+
+∆X,i = max j | ˆXi,j |
+
+27 − 1 , ∆W,g = max (i,j )∈g | ˆWi,j |
+
+27 − 1 , Y ≈ diag(∆ X )( X8W8) ∆ W . (32) Here X8 and W8 are the INT8 tensors. Channel-outlier migration follows SmoothQuant [40] and is not part of the original ZeroQuant recipe. The three mechanisms address different error sources: per-token scaling adapts to variation across token types and rollout time; SmoothQuant handles persistent channel outliers along the reduction dimension; and grouped weight scales limit the error introduced by outlier migration. Calibration emphasizes self-rollouts, records statistics separately for visual, camera, and ego-motion tokens, and merges them using a robust quantile; online activation scales absorb residual temporal drift. Softmax, normalization statistics, and positional encoding remain in FP16/BF16 or FP32. Our engine implements the resulting INT8 GEMM and fused epilogue. 
+
+6.4 Inference engine 
+
+Seven-view autoregression multiplies kernel-launch and memory-traffic overhead across Transformer depth. The engine integrates W8A8 GEMM, intra-block fusion, cross-view scheduling, temporal-state reuse, and sequence parallelism into a static incremental execution path. A single GPU is the primary operating point; when the context exceeds its capacity, the same execution semantics extend across two GPUs along the sequence dimension.  
+
+> Fused low-bit execution.
+
+Weights are quantized offline and activations dynamically per token. Residual SmoothQuant scales that cannot be fully absorbed into Linear/AdaLN are applied inside the engine’s INT8 quantization kernel; per-column bias and dequantization scales are fused into the GEMM epilogue. BF16 rounding points match the unfused baseline to limit numerical drift.  
+
+> Fusion of memory-bound operators.
+
+Across 30 Transformer blocks, the engine fuses AdaLN addition and casting, replaces eight FP32 RoPE elementwise operations with one kernel that reuses Q/K sinusoids, fuses gated residuals, and removes redundant attention-path casts, avoiding large FP32 intermediates.  
+
+> Two-GPU incremental sequence parallelism.
+
+We extend the training-time DeepSpeed-Ulysses all-to-all lay-out [16] to inference: weights are replicated, tokens are sequence-sharded, and attention alternates between 21 sequence and head sharding. KV-caches remain head-sharded; each denoising step exchanges only the current timestep’s short QKV, so communication does not grow with accumulated context length. Incremental-cache sharding, communication, and state management are inference-side extensions of [16]. Correctness is validated hierarchically: low-bit and fused kernels against unfused layer outputs, incremental caching against full-sequence forwards, covisibility sparsity against dense attention, and complete rollouts for NaN/Inf and accumulated error. Local speedups are not additive; Sec. 7.2.3 reports the end-to-end few-step generator operating points. Taken together, our engine on two GPUs reaches a 2.72 × speedup— quantization and kernel fusion contribute 1.6 ×, dual-GPU sequence parallelism a further 1.7 × after commu-nication overhead—and is the 4 FPS seven-view operating point in Figure 1. 
+
+## 7 Evaluation and results 
+
+We evaluate ZYT-World as a sensor generator for closed-loop driving simulation: whether videos keep ap-pearance, temporal coherence, controllable content, and cross-view geometry, and whether latency meets the target. All numbers here are open-loop video, detector, geometry, and systems measurements on an internal split. 
+
+7.1 Evaluation protocol 
+
+The protocol is organized around four simulator failure modes. Appearance fidelity is measured with frame-level FID [12] and FD-DINOv2 (FDD) [31], together with paired PSNR, SSIM [37], and LPIPS [52]; PSNR is interpreted only under fixed content and distortion type [15]. Temporal coherence is measured with video-level FVD [33] and keypoint velocity- and acceleration-based FVMD [23]. Content alignment to the corresponding real video is measured with YOLO Det-F1, paired IoU, true-positive IoU, and object-count error. Cross-view geometry is measured with epipolar Sampson error [11]. Fixed-latent reconstruction comparisons additionally report character similarity per box (char_sim/box), since full-frame metrics do not necessarily reflect how faithfully small text is decoded. A fixed OCR engine detects and reads text boxes on the real frame (boxes it cannot reliably read there are discarded), then reads the same boxes on the decoded frame; each box scores 1 − ED( sdec , s real )/ max( |sreal |, |sdec |) with ED the Levenshtein distance, averaged over boxes per clip and then over clips. These are diagnostic proxies for simulator suitability, not a substitute for policy-level closed-loop evaluation. 170000 180000 190000 Training steps −10 −8 −6 −4 −2 0246Quality deviation from cohort mean (%)      
+
+> (a) Checkpoint-level resolution
+> FVMD (spread 16.3%) Sampson (spread 9.8%) Det-F1 (spread 1.1%)
+> 170000 180000 190000 Training steps 0.704 0.705 0.706 0.707 0.708 0.709 0.710 0.711 0.712 Det-F1 ↑
+> r = +0.90 with training step
+> (b) Detection consistency saturates
+> 115 120 125 130 FVMD ↓ 3.00 3.05 3.10 3.15 3.20 3.25 Sampson ↓
+> r = +0.74
+> (c) Cross-family agreement
+
+Figure 16 Checkpoint-level diagnostics on seven-view checkpoints. (a) Quality deviation from the cohort mean for FVMD, Sampson, and Det-F1 (faint: raw; thick: smoothed; spread in the legend); (b) Det-F1 versus training step; (c) FVMD versus Sampson. 
+
+Metric choice depends on the comparison. Across pretraining checkpoints, low-resolution loss correlates most strongly with FVMD and FVD, so temporal motion metrics are emphasized for convergence. Figure 16 diagnoses how well three metrics separate neighbouring seven-view checkpoints, where the evaluation protocol is fixed so spread reflects the metric rather than a change of configuration. Panel (a) plots FVMD, Sampson, and Det-F1 as quality deviation from the cohort mean: the faint traces are raw checkpoints and the thick traces are three-point smoothed; the legend reports relative spread. FVMD moves over a 16 .3% range, Sampson 9.8% , and Det-F1 only 1.1% . Panel (b) shows that Det-F1 still trends with training step ( r = +0 .90 )22 but saturates in a narrow band. Panel (c) shows that FVMD and Sampson co-vary ( r = +0 .74 ). Distillation compares the teacher and 1-, 2-, and 4-step students at a fixed 72-frame prediction horizon using FID, FDD, FVD, LPIPS, PSNR, and SSIM. Memory ablations use the same bidirectional 40-step sampler, so changes isolate the memory condition rather than the generation paradigm. TinyVAE is evaluated twice: decoding generated latents tests downstream generation quality, whereas fixed-latent reconstruction isolates decoder error. Detection metrics use a fixed YOLO evaluator on generated and corresponding real videos, with matched classes and confidence thresholds. We report precision, recall, Det-F1, paired IoU, true-positive IoU, and count error; these quantify detector-level content agreement rather than human perceptual quality. FDD uses frozen DINOv2 features [31] and is kept distinct from pixel-domain metrics. 
+
+7.2 Quantitative results 
+
+We split results by what actually changed, rather than ranking different generation paradigms in one table. Sec. 7.2.1 is the bidirectional pretraining trajectory and the selected base; Sec. 7.2.2 holds the 40-step bidi-rectional sampler fixed and adds memory; Sec. 7.2.3 reports 1/2/4-step autoregressive students; Sec. 7.2.4 reports decoder generation quality, reconstruction fidelity, and efficiency. TinyVAE changes the latent-to-pixel channel, not the generator, so it is not ranked with the three generator groups. Loss design stays in Sec. 6.1. 
+
+7.2.1 Convergence of bidirectional pretraining 
+
+Figure 17 traces the Stage 4 bidirectional teacher over cumulative training steps; Table 2 reports the selected Stage 4 checkpoint without memory ( w/o Memory) and the memory-conditioned model ( w/ Memory) under one evaluation protocol. The trajectory is for checkpoint selection on this run, not a universal map from training loss to downstream metrics. 100000 150000 200000           
+
+> Training Steps
+> 0.162 0.164 0.166 0.168 0.170 0.172
+> Low-Res Branch Loss
+> 100000 150000 200000
+> Training Steps
+> 120 140 160 180 200
+> FVMD
+> 100000 150000 200000
+> Training Steps
+> 65 70 75 80 85 90 95 100
+> FDD
+> 100000 150000 200000
+> Training Steps
+> 21.2 21.4 21.6 21.8 22.0 22.2
+> PSNR
+> 100000 150000 200000
+> Training Steps
+> 0.66 0.67 0.68 0.69 0.70 0.71 0.72 0.73
+> SSIM
+> 100000 150000 200000
+> Training Steps
+> 11.0 11.5 12.0 12.5 13.0 13.5
+> FID
+
+Figure 17 Pretraining Stage-4 trajectories of low-resolution loss, FVMD, FDD, PSNR, SSIM, and FID. 
+
+Table 2 Same-protocol evaluation of w/o Memory versus w/ Memory. 
+
+Model FID ↓ FVD ↓ FVMD ↓ FDD ↓ LPIPS ↓ PSNR ↑ SSIM ↑ Det-F1 ↑ Sampson ↓
+
+w/o Memory 11.64 116.58 116.49 68.79 0.241 22.30 0.725 0.712 2.991 
+
+w/ Memory 11.72 113.63 101.93 64.55 0.216 23.06 0.741 0.726 2.965 
+
+23 Table 3 Bidirectional teacher and separately trained few-step AR operating points. Boldface is the best AR student per column (teacher is a reference). Speedup is generator-side first-latent wall-clock versus the 40-step teacher on one latent timestep, excluding TinyVAE, W8A8, and our inference engine. 
+
+Generator Rel. speedup ↑ FID ↓ FVD ↓ FDD ↓ LPIPS ↓ PSNR ↑ SSIM ↑ Det-F1 ↑ Sampson ↓
+
+Bidirectional teacher 1.0 × (ref.) 11.64 116.58 68.79 0.2411 22.30 0.7254 0.712 2.991 4-step AR 15.8 × 10.52 118.22 76.36 0.2677 21.27 0.6954 0.567 3.480 2-step AR 26.4 × 9.97 102.50 77.43 0.2646 21.26 0.6911 0.574 3.556 1-step AR 39.6 × 11.83 123.28 81.79 0.2655 21.07 0.6951 0.581 3.413 
+
+7.2.2 Effect of the implicit memory condition 
+
+Table 2 uses the same 249 scenes, 1,743 view streams, and 72-frame prediction horizon. w/ Memory is a separately trained checkpoint and the table reports a single test split without confidence intervals, so the observed differences are descriptive rather than a statistically isolated memory ablation. Figure 18 plots the same comparison as outward-better capabil-ity envelopes, with w/o Memory fixed at 1.0: FID, FVD, FVMD, FDD, LPIPS and Sampson use ( w/o Memory)/( w/ Memory), while PSNR, SSIM and Det-F1 use the reciprocal. Both models use the same target videos, prediction horizon and evaluation implementa-tion. Aggregate quality remains comparable, indicating that adding the memory condition does not materially degrade the 40-step bidirec-tional generator; the memory path changes revisit behavior without trading away same-protocol generation quality. FID FVD FVMD FDD Det F1 Sampson PSNR SSIM LPIPS    
+
+> 0.25 0.5 0.75 10
+> w/ Memory w/o Memory Figure 18
+
+Capability envelopes of w/o 
+
+Memory versus w/ Memory. 
+
+7.2.3 Distillation to few-step autoregressive generation 
+
+Table 3 compares three separately trained autoregressive operating points on 249 scenes and 1,743 view streams; it is not a sampling-step ablation of one checkpoint. Boldface marks the best among the three AR students only, following the column arrows (FID, FVD, FDD, LPIPS, Sampson: lower; speedup, PSNR, SSIM, Det-F1: higher); the teacher is a reference and is not ranked. Among the students, 2-step AR has the best FID, FVD, and LPIPS; 4-step AR has the best FDD, PSNR, and SSIM; 1-step AR has the best Det-F1, Sampson, and first-latent speedup. The teacher remains better on FDD, LPIPS, PSNR, SSIM, Det-F1, and Sampson; 2-step AR improves FID and FVD over the teacher. Speedup is first-latent latency: both the 40-step teacher and the AR student are timed on one latent timestep ( 39.6 ×), not a full bidirectional clip against one AR unit. The separate timing setup in Figure 2 gives the 107.7 × generator-only speedup; the two numbers are not interchangeable, and neither is the 4 FPS seven-view inference-engine measurement in Figure 1. 
+
+7.2.4 TinyVAE: generation, reconstruction, and efficiency 
+
+The generator determines what information the latent carries; the decoder determines how faithfully it reaches pixel space. We therefore evaluate decoders in two settings that answer different questions. In Table 4, all three decoders receive identical latents produced by the bidirectional model, so differences reflect downstream generation quality. In Table 5, they decode latents obtained by encoding ground-truth clips with the frozen Wan encoder on the high-resolution reconstruction set (248 clips, 81 frames each), isolating decoder error from the generator. The compared decoders are Wan (555M parameters), the released Wan-compatible TAEHV weights (TAEHV super, 19M), and TinyVAE (19M, Sec. 6.1). In both tables, boldface marks the best of the three decoders per column, following the column arrows. 
+
+Generation. On latents from the bidirectional model (Table 4), TinyVAE is better than TAEHV super on six of the eight metrics: FID 12.8877 →11.6306, FVD 127.9301 →115.9042, FDD 86.8353 →72.0696, LPIPS 24 Table 4 Generation quality in the full generation chain. The same latents, produced by the bidirectional model, are decoded by each of the three decoders; only the decoder differs between rows. 
+
+Model FID ↓ FVD ↓ FDD ↓ LPIPS ↓ PSNR ↑ SSIM ↑ Det-F1 ↑ Sampson ↓
+
+Wan 11.6415 116.5837 68.7932 0.2411 22.3026 0.7254 0.7116 2.9908 
+
+TAEHV super 12.8877 127.9301 86.8353 0.2487 22.4476 0.7280 0.6867 3.0697 TinyVAE 11.6306 115.9042 72.0696 0.2356 22.3884 0.7249 0.7053 3.0601  
+
+> Table 5 Fixed-latent reconstruction on 248 clips of 81 frames: PSNR, SSIM, LPIPS, and char_sim/box are computed against the ground-truth clips. Decode speedup and model-memory savings are ratios relative to Wan.
+
+Model PSNR ↑ SSIM ↑ LPIPS ↓ char_sim/box ↑ Speedup ↑ Mem. savings ↑
+
+Wan 32.5432 0.9006 0.0556 0.4715 1.0 × (ref.) 1.0 × (ref.) TAEHV super 29.7920 0.8572 0.1011 0.2442 59.8 × 26.8 ×
+
+TinyVAE 31.8750 0.8865 0.0520 0.3334 59.8 × 26.8 ×
+
+0.2487 →0.2356, Det-F1 0.6867 →0.7053, and Sampson error 3.0697 →3.0601. It is worse on the two remaining metrics: PSNR is 0.06 dB lower (22.3884 vs. 22.4476) and SSIM 0.0031 lower (0.7249 vs. 0.7280). Relative to Wan, TinyVAE is better on FID (11.6306 vs. 11.6415), FVD (115.9042 vs. 116.5837), LPIPS (0.2356 vs. 0.2411), and PSNR (22.3884 vs. 22.3026, +0.09 dB), and worse on FDD (72.0696 vs. 68.7932), SSIM (0.7249 vs. 0.7254, −0.0005), Det-F1 (0.7053 vs. 0.7116), and Sampson error (3.0601 vs. 2.9908). The largest relative difference between the two decoders is in FDD ( +4 .8% for TinyVAE); on the other seven metrics the relative difference is at most 2.3% (Sampson error). Replacing the 555M decoder by the 19M decoder therefore changes every generation metric by less than 5% in the full chain.  
+
+> Reconstruction.
+
+On fixed-latent reconstruction (Table 5), TinyVAE is better than TAEHV super on all four metrics: PSNR 29.7920 →31.8750 dB ( +2.08 dB), SSIM 0.8572 →0.8865 ( +0.0293), LPIPS 0.1011 →0.0520 (−0.0491), and char_sim/box 0.2442 →0.3334 ( +0.0892). Measured against the TAEHV super–Wan differ-ence on each metric, TinyVAE recovers 76% of it in PSNR (2.08 of 2.75 dB), 68% in SSIM (0.0293 of 0.0434), and 39% in char_sim/box (0.0892 of 0.2273), and exceeds it in LPIPS (0.0491 against a difference of 0.0455). The objective (24) contains no text-specific term. Relative to Wan, TinyVAE is 0.67 dB lower in PSNR (31.8750 vs. 32.5432), 0.0141 lower in SSIM (0.8865 vs. 0.9006), and 0.0036 lower, hence better, in LPIPS (0.0520 vs. 0.0556). The largest remaining difference is in char_sim/box, 0.3334 for TinyVAE against 0.4715 for Wan ( −0.1381); on this metric the 19M decoder remains below the 555M decoder.  
+
+> Efficiency.
+
+Under the timing setup of Figure 2, TinyVAE decodes 59.8 × faster than Wan with 26.8 × lower model memory. 
+
+7.3 Qualitative results 
+
+Aggregate metrics do not reveal condition-specific failure modes or the mechanism of controllability. We therefore complement them with targeted qualitative examples: long-tail and multi-view generation, trajec-tory and layout interventions, cross-trajectory memory, one-step autoregression, 30 s (and longer) rollouts, and decoder comparisons. These figures are representative, not a statistical evaluation.  
+
+> 7.3.1 Bidirectional generation
+
+Figure 19 shows front-narrow generations under rain and fog, heavy rain, night, congested night traffic, snow, and clear daytime, sampled every 1.2 s from 0 to 6.0 s. Wet-road reflections, precipitation occlusion, and headlight glare evolve smoothly, while vehicles and lane structure remain visually stable. Figure 20 shows synchronized seven-view outputs at seven timestamps ( t = 0 –7.2 s, 1.2 s intervals); shared vehicles and road geometry stay consistent across fisheye and pinhole views. The examples sit beside the aggregate long-tail and geometry metrics; they do not replace them. 25 t=0.0s t=1.2s t=2.4s t=3.6s t=4.8s t=6.0s 
+
+> Fog / Rain Heavy Rain Nighttime Nighttime Congestion Snow Sunny Day
+
+Figure 19 Front-narrow bidirectional generations across weather and lighting ( t = 0 –6.0 s, 1.2 s intervals). t = 0.0 s t = 1.2 s t = 2.4 s t = 3.6 s t = 4.8 s t = 6.0 s t = 7.2 s    
+
+> Rear view Front fisheye Right fisheye Left fisheye Rear fisheye Front wide Front narrow
+
+Figure 20 Synchronized seven-view bidirectional generations at seven timestamps ( t = 0 –7.2 s, 1.2 s intervals). 
+
+7.3.2 Conditional controllability: trajectory and layout 
+
+Figure 21 fixes the history and scene conditions while changing only the ego-motion command among left turn, straight, and right turn. The resulting road geometry and viewpoint evolution follow the commanded branch, providing a qualitative intervention test of trajectory control. Figure 22 shows seven-view layout following over time: vehicles of different sizes and attributes and lane markings remain aligned with their wireframes. Figure 23 drives a single traffic light through green, yellow, and red within one rollout; the generated signal changes phase accordingly and the ego vehicle decelerates to a stop on red. These figures show controllability on selected examples, not exhaustive constraint satisfaction. 
+
+7.3.3 Cross-trajectory memory 
+
+Figure 24 evaluates implicit memory on a revisited road segment. Each group shows recorded-log memory, the target view from another trajectory, and generations without and with memory. Given conditioning frames and recorded-log memory from a different traversal, the model preserves place-specific details such as sign position and color and parked vehicles more faithfully than an unconstrained redraw. This is a qualitative revisit check; there is no standalone quantitative memory benchmark in this report. 26 Figure 21 Trajectory intervention from a shared intersection (left, straight, right). t=0.0s t=1.2s t=2.4s t=3.6s t=4.8s t=6.0s    
+
+> Rear view Front fisheye Right fisheye Left fisheye Rear fisheye Front wide Front narrow
+
+Figure 22 Seven-view layout following for vehicles and lane markings over time. t=0.0s t=1.2s t=2.4s t=3.6s t=4.8s t=6.0s    
+
+> Rear view Front fisheye Right fisheye Left fisheye Rear fisheye Front wide Front narrow
+
+Figure 23 Traffic-signal intervention: green, yellow, and red phases with the ego vehicle stopping on red. 
+
+27 Condition  
+
+> t = 0.0 s
+> Recorded
+> t = 7.5 s
+> w/o Memory
+> t = 7.5 s
+> w/ Memory
+> t = 7.5 s Figure 24
+
+Cross-trajectory revisit with and without memory.  
+
+> Figure 25
+
+One-step autoregressive generation before and after RigCritic. 
+
+7.3.4 One-step autoregressive inference 
+
+Figure 25 compares one-step autoregressive outputs before and after RigCritic refinement. The refined model shows less visible drift and preserves road structure and multi-view appearance more consistently in the displayed sequence. This is a model-ablation visualization, not a deployment benchmark; one-step latency is in Sec. 7.2.3 and Figure 2. 
+
+7.3.5 30 s long-horizon inference 
+
+Figure 26 shows two 30 s autoregressive rollouts (76 latent timesteps) under the bounded KV-cache. Scene layout, lane topology, and illumination remain visually stable in these examples. The same streaming loop continues at minute scale; the figure reports 30 s as a compact qualitative horizon, and a larger long-horizon stability study is left open. 
+
+7.3.6 Decode fidelity of TinyVAE 
+
+Figure 27 compares Wan, TAEHV super, and TinyVAE for fixed-latent reconstruction and same-latent bidi-rectional generation. TinyVAE approaches Wan more closely than TAEHV super, particularly for text and small structures, while using less than 4% of the parameters and delivering the 59.8 × decoding speedup measured under Figure 2’s timing protocol. The gaps in Sec. 7.2.4 still stand: visual similarity here is not numerical equivalence. 28 t=0.0s t=4.3s t=8.6s 
+
+t=17.1s t=25.7s t=30.0s 
+
+Nighttime 
+
+t=0.0s t=4.3s t=8.6s 
+
+t=17.1s t=25.7s t=30.0s 
+
+Daytime Figure 26 Two 30 s autoregressive rollouts, sampled non-uniformly at t = 0 .0, 4.3, 8.6, 17 .1, 25 .7, and 30 .0 s. (a) VAE reconstruction      
+
+> Wan TAEHV super TinyVAE
+> (b) Bidirectional generation
+> Wan TAEHV super TinyVAE
+> Figure 27
+
+Same-latent reconstruction (a) and bidirectional generation (b): Wan, TAEHV super, and TinyVAE. 
+
+## 8 Conclusion 
+
+A world model used as the policy’s sensor stream has to match the production interface, geometry, timing, and compute budget closely enough to stand in for part of on-road testing. ZYT-World is built for a mixed production rig and puts seven-view joint modeling, pixel-aligned control, per-latent causal generation, cross-trajectory memory, and real-time decoding on one chain. Four ultra-wide fisheye cameras and three pinhole cameras keep native projections; Plücker rays, ego-motion AdaLN, and layout inject camera, ego-vehicle, and scene conditions. Three-stage autoregressive distillation compresses a multi-step bidirectional teacher into a one-step streaming student; RigCritic refines the full rig, and a bounded KV-cache carries generation forward. Cross-trajectory paired captures and a zero-initialized residual path give plug-in memory; TinyVAE supplies both real-time decoding and differentiable perceptual supervision. Heterogeneous scheduling, multi-dimensional parallelism, W8A8, and our inference engine make seven-view high-resolution training and few-step deployment feasible. The experiments cover generation quality, reconstruction fidelity, and downstream usability. 
+
+## Contributors 
+
+Turning a world model into a production-grade closed-loop simulator required joint progress on data, algo-rithms, training, infrastructure, and evaluation. We thank every member of the team for the sustained effort that made ZYT-World possible. 29 Advisers: Kaixuan Wang, Zichao Guo, Xiaozhi Chen 
+
+Project Lead: Wei Bi 
+
+Contributors: Boni Hu *, Xiong Wei *, Haoming Huang *, Yong Huang *, Chenbo Wang *, Yi Yang, Jiancheng Wang ‡, Ruicheng Zhu, Zhimin Yang, Guanglai Liu, Qiaowan Jin ‡, Dongzhuo Wang ‡, Haiwei Kuang, Jiajun Fan, Yue Wu ‡, Jiaxin Wei ‡, Hao Sun, Feihong Yan ‡ 
+
+> *
+
+Core contribution.  
+
+> ‡
+
+Research Intern at ZYT. 
+
+## References 
+
+[1] Aarti Basant, Amlan Kar, Despoina Paschalidou, Fangyin Wei, Francesco Ferroni, Guillermo Garcia Cobo, Haithem Turki, Huan Ling, Jaewoo Seo, James Lucas, Jay Zhangjie Wu, Jialiang Wang, Jonathan Lorraine, Jun Gao, Kai He, Katarina Tothova, Kevin Xie, Michał Tyszkiewicz, Qi Wu, Riccardo de Lutio, Ruilong Li, Sanja Fidler, Seung Wook Kim, Tianchang Shen, Tianshi Cao, Tobias Pfaff, William Lew, Xindi Wu, Xu-anchi Ren, Yifan Lu, Yuxuan Zhang, Zan Gojcic, and Zian Wang. NVIDIA OmniDreams: Real-time genera-tive world model for closed-loop autonomous vehicle simulation. arXiv preprint arXiv:2606.03159 , 2026. doi: 10.48550/arXiv.2606.03159. [2] Ollin Boer Bohan. TAEHV: Tiny autoencoder for Hunyuan video. https://github.com/madebyollin/taehv , 2025. 
+
+https://github.com/madebyollin/taehv . GitHub repository, created 3 Mar. 2025. Accessed 15 Sep. 2026. [3] Boyuan Chen, Diego Martí Monsó, Yilun Du, Max Simchowitz, Russ Tedrake, and Vincent Sitzmann. Diffusion forcing: Next-token prediction meets full-sequence diffusion. In Advances in Neural Information Processing Systems , volume 37, pages 24081–24125, 2024. doi: 10.48550/arXiv.2407.01392. [4] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. FlashAttention: Fast and memory-efficient exact attention with IO-awareness. In Advances in Neural Information Processing Systems , volume 35, pages 16344–16359, 2022. doi: 10.52202/068431-1189. [5] Juechu Dong, Boyuan Feng, Driss Guessous, Yanbo Liang, and Horace He. Flex attention: a programming model for generating optimized attention kernels. In Proceedings of Machine Learning and Systems , volume 7, 2025. doi: 10.48550/arXiv.2412.05496. [6] Jiaqi Feng, Justin Cui, Yuanhao Ban, and Cho-Jui Hsieh. One-forcing: Towards stable one-step autoregressive video generation. arXiv preprint arXiv:2605.23458 , 2026. doi: 10.48550/arXiv.2605.23458. [7] Ruiyuan Gao, Kai Chen, Bo Xiao, Lanqing Hong, Zhenguo Li, and Qiang Xu. MagicDrive-V2: High-resolution long video generation for autonomous driving with adaptive control. In Proceedings of the IEEE/CVF Interna-tional Conference on Computer Vision (ICCV) , pages 28135–28144, 2025. doi: 10.1109/ICCV51701.2025.02612. [8] Shenyuan Gao, Jiazhi Yang, Li Chen, Kashyap Chitta, Yihang Qiu, Andreas Geiger, Jun Zhang, and Hongyang Li. Vista: A generalizable driving world model with high fidelity and versatile controllability. In Advances in Neural Information Processing Systems , 2024. doi: 10.52202/079017-2906. [9] Ian Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley, Sherjil Ozair, Aaron Courville, and Yoshua Bengio. Generative adversarial nets. In Advances in Neural Information Processing Systems , vol-ume 27, pages 2672–2680, 2014. doi: 10.48550/arXiv.1406.2661. [10] Xi Guo, Chenjing Ding, Haoxuan Dou, Xin Zhang, Weixuan Tang, and Wei Wu. InfinityDrive: Breaking time limits in driving world models. arXiv preprint arXiv:2412.01522 , 2024. doi: 10.48550/arXiv.2412.01522. [11] Richard Hartley and Andrew Zisserman. Multiple View Geometry in Computer Vision . Cambridge University Press, 2 edition, 2004. ISBN 978-0-521-54051-3. doi: 10.1017/CBO9780511811685. [12] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard Nessler, and Sepp Hochreiter. Gans trained by a two time-scale update rule converge to a local nash equilibrium. In Advances in Neural Information Processing Systems , volume 30, pages 6629–6640, 2017. doi: 10.5555/3295222.3295385. [13] Anthony Hu, Lloyd Russell, Hudson Yeo, Zak Murez, George Fedoseev, Alex Kendall, Jamie Shotton, and Gianluca Corrado. GAIA-1: A generative world model for autonomous driving. arXiv preprint arXiv:2309.17080 ,2023. doi: 10.48550/arXiv.2309.17080. 
+
+30 [14] Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, and Eli Shechtman. Self forcing: Bridging the train-test gap in autoregressive video diffusion. In Advances in Neural Information Processing Systems , 2025. doi: 10.48550/arXiv.2506.08009. [15] Quan Huynh-Thu and Mohammed Ghanbari. Scope of validity of PSNR in image/video quality assessment. 
+
+Electronics Letters , 44(13):800–801, 2008. ISSN 0013-5194. doi: 10.1049/el:20080522. [16] Sam Ade Jacobs, Masahiro Tanaka, Chengming Zhang, Minjia Zhang, Shuaiwen Leon Song, Samyam Rajbhan-dari, and Yuxiong He. DeepSpeed Ulysses: System optimizations for enabling training of extreme long sequence transformer models. arXiv preprint arXiv:2309.14509 , 2023. doi: 10.48550/arXiv.2309.14509. [17] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkühler, and George Drettakis. 3d Gaussian splatting for real-time radiance field rendering. ACM Transactions on Graphics , 42(4):139:1–139:14, 2023. doi: 10.1145/3592433. [18] Haobo Li, Yanhong Zeng, Yunhong Lu, Jiapeng Zhu, Hao Ouyang, Qiuyu Wang, Ka Leong Cheng, Yujun Shen, and Zhipeng Zhang. AAD-1: Asymmetric adversarial distillation for one-step autoregressive video generation. In Proceedings of the 43rd International Conference on Machine Learning , volume 306 of Proceedings of Machine Learning Research . PMLR, 2026. doi: 10.48550/arXiv.2606.03972. [19] Xiaofan Li, Yifu Zhang, and Xiaoqing Ye. DrivingDiffusion: Layout-guided multi-view driving scenarios video generation with latent diffusion model. In Computer Vision – ECCV 2024 , volume 15136 of Lecture Notes in Computer Science , pages 469–485. Springer, 2024. doi: 10.1007/978-3-031-73229-4_27. [20] Yaoru Li, Federico Landi, Marco Godi, Xin Jin, Ruiju Fu, Yufei Ma, Muyang Sun, Heyu Si, and Qi Guo. FAR-Drive: Frame-autoregressive video generation in closed-loop autonomous driving. arXiv preprint arXiv:2603.14938 , 2026. doi: 10.48550/arXiv.2603.14938. [21] Shanchuan Lin, Xin Xia, Yuxi Ren, Ceyuan Yang, Xuefeng Xiao, and Lu Jiang. Diffusion adversarial post-training for one-step video generation. In Proceedings of the 42nd International Conference on Machine Learning ,volume 267 of Proceedings of Machine Learning Research , pages 37959–37974. PMLR, 2025. doi: 10.48550/arXiv. 2501.08316. https://proceedings.mlr.press/v267/lin25m.html .[22] Shanchuan Lin, Ceyuan Yang, Hao He, Jianwen Jiang, Yuxi Ren, Xin Xia, Yang Zhao, Xuefeng Xiao, and Lu Jiang. Autoregressive adversarial post-training for real-time interactive video generation. In Advances in Neural Information Processing Systems , volume 38, pages 41061–41086, 2025. doi: 10.48550/arXiv.2506.09350. [23] Jiahe Liu, Youran Qu, Qi Yan, Xiaohui Zeng, Lele Wang, and Renjie Liao. Fréchet video motion distance: A metric for evaluating motion consistency in videos. In First Workshop on Controllable Video Generation (CVG) at ICML , 2024. doi: 10.48550/arXiv.2407.16124. [24] Jiachen Lu, Ze Huang, Zeyu Yang, Jiahui Zhang, and Li Zhang. WoVoGen: World volume-aware diffusion for controllable multi-camera driving scene generation. In Computer Vision – ECCV 2024 , volume 15138 of Lecture Notes in Computer Science , pages 329–345. Springer, 2024. doi: 10.1007/978-3-031-72989-8_19. [25] Maxime Oquab, Timothée Darcet, Théo Moutakanni, Huy V. Vo, Marc Szafraniec, Vasil Khalidov, Pierre Fernan-dez, Daniel Haziza, Francisco Massa, Alaaeldin El-Nouby, Mahmoud Assran, Nicolas Ballas, Wojciech Galuba, Russell Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rabbat, Vasu Sharma, Gabriel Synnaeve, Hu Xu, Hervé Jégou, Julien Mairal, Patrick Labatut, Armand Joulin, and Piotr Bojanowski. DINOv2: Learning robust visual features without supervision. Transactions on Machine Learning Research , 2024. [26] William Peebles and Saining Xie. Scalable diffusion models with transformers. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) , pages 4195–4205, 2023. doi: 10.1109/ICCV51070.2023. 00387. [27] Ethan Perez, Florian Strub, Harm de Vries, Vincent Dumoulin, and Aaron Courville. FiLM: Visual reasoning with a general conditioning layer. In Proceedings of the AAAI Conference on Artificial Intelligence , volume 32, pages 3942–3951, 2018. doi: 10.1609/aaai.v32i1.11671. [28] Lloyd Russell, Anthony Hu, Lorenzo Bertoni, George Fedoseev, Jamie Shotton, Elahe Arani, and Gianluca Corrado. Gaia-2: A controllable multi-view generative world model for autonomous driving. arXiv preprint arXiv:2503.20523 , 2025. doi: 10.48550/arXiv.2503.20523. [29] Mohammad Shoeybi, Mostofa Patwary, Raul Puri, Patrick LeGresley, Jared Casper, and Bryan Catanzaro. Megatron-LM: Training multi-billion parameter language models using model parallelism. arXiv preprint arXiv:1909.08053 , 2019. doi: 10.48550/arXiv.1909.08053. 
+
+31 [30] Vincent Sitzmann, Semon Rezchikov, William T. Freeman, Joshua B. Tenenbaum, and Frédo Durand. Light field networks: Neural scene representations with single-evaluation rendering. In Advances in Neural Information Processing Systems , volume 34, pages 19313–19325, 2021. doi: 10.48550/arXiv.2106.02634. [31] George Stein, Jesse C. Cresswell, Rasa Hosseinzadeh, Yi Sui, Brendan Leigh Ross, Valentin Villecroze, Zhaoyan Liu, Anthony L. Caterini, J. Eric T. Taylor, and Gabriel Loaiza-Ganem. Exposing flaws of generative model evaluation metrics and their unfair treatment of diffusion models. In Advances in Neural Information Processing Systems , volume 36, 2023. doi: 10.48550/arXiv.2306.04675. [32] Jianlin Su, Murtadha Ahmed, Yu Lu, Shengfeng Pan, Wen Bo, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding. Neurocomputing , 568:127063, 2024. ISSN 0925-2312. doi: 10.1016/j.neucom.2023.127063. [33] Thomas Unterthiner, Sjoerd van Steenkiste, Karol Kurach, Raphaël Marinier, Marcin Michalski, and Sylvain Gelly. Towards accurate generative models of video: A new metric & challenges. arXiv preprint arXiv:1812.01717 ,2018. doi: 10.48550/arXiv.1812.01717. Also presented at the ICLR 2019 Workshop on Deep Generative Models for Highly Structured Data (DeepGenStruct) as “FVD: A New Metric for Video Generation”. [34] Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianxiao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jingren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu, Kang Zhao, Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang, Pandeng Li, Pingyu Wu, Ruihang Chu, Ruili Feng, Shiwei Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui, Tingyu Weng, Tong Shen, Wei Lin, Wei Wang, Wei Wang, Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu, Xianzhong Shi, Xiaoming Huang, Xin Xu, Yan Kou, Yangyu Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yitong Huang, Yong Li, You Wu, Yu Liu, Yulin Pan, Yun Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi Jiang, Zhen Han, Zhi-Fan Wu, and Ziyu Liu. Wan: Open and advanced large-scale video generative models. arXiv preprint arXiv:2503.20314 ,2025. doi: 10.48550/arXiv.2503.20314. [35] Xiaofeng Wang, Zheng Zhu, Guan Huang, Xinze Chen, Jiagang Zhu, and Jiwen Lu. DriveDreamer: Towards real-world-driven world models for autonomous driving. In Computer Vision – ECCV 2024 , volume 15106 of 
+
+Lecture Notes in Computer Science , pages 55–72. Springer, 2024. doi: 10.1007/978-3-031-73195-2_4. [36] Yuqi Wang, Jiawei He, Lue Fan, Hongxin Li, Yuntao Chen, and Zhaoxiang Zhang. Driving into the future: Multiview visual forecasting and planning with world model for autonomous driving. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 14749–14759, 2024. doi: 10.1109/CVPR52733.2024.01397. [37] Zhou Wang, Alan C. Bovik, Hamid R. Sheikh, and Eero P. Simoncelli. Image quality assessment: From error visibility to structural similarity. IEEE Transactions on Image Processing , 13(4):600–612, 2004. ISSN 1057-7149. doi: 10.1109/TIP.2003.819861. [38] Yuqing Wen, Yucheng Zhao, Yingfei Liu, Fan Jia, Yanhui Wang, Chong Luo, Chi Zhang, Tiancai Wang, Xiaoyan Sun, and Xiangyu Zhang. Panacea: Panoramic and controllable video generation for autonomous driving. In 
+
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 6902– 6912, 2024. doi: 10.1109/CVPR52733.2024.00659. [39] Guanjun Wu, Taoran Yi, Jiemin Fang, Lingxi Xie, Xiaopeng Zhang, Wei Wei, Wenyu Liu, Qi Tian, and Xinggang Wang. 4D Gaussian splatting for real-time dynamic scene rendering. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 20310–20320, 2024. doi: 10.1109/CVPR52733.2024. 01920. [40] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song Han. SmoothQuant: Accurate and efficient post-training quantization for large language models. In Proceedings of the 40th International Conference on Machine Learning , volume 202 of Proceedings of Machine Learning Research , pages 38087–38099. PMLR, 2023. doi: 10.48550/arXiv.2211.10438. https://proceedings.mlr.press/v202/xiao23c.html .[41] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike Lewis. Efficient streaming language models with attention sinks. In The Twelfth International Conference on Learning Representations , 2024. doi: 10.48550/ arXiv.2309.17453. [42] Tianyi Yan, Huan Zheng, Dubing Chen, Meizhi Qu, Yingying Shen, Lijun Zhou, Mingfei Tu, Bing Wang, Guang Chen, Hangjun Ye, Haiyang Sun, Cheng-zhong Xu, and Jianbing Shen. CausalDrive: Real-time causal world models for autonomous driving. arXiv preprint arXiv:2606.15341 , 2026. doi: 10.48550/arXiv.2606.15341. 
+
+32 [43] Jiazhi Yang, Shenyuan Gao, Yihang Qiu, Li Chen, Tianyu Li, Bo Dai, Kashyap Chitta, Penghao Wu, Jia Zeng, Ping Luo, Jun Zhang, Andreas Geiger, Yu Qiao, and Hongyang Li. Generalized predictive model for autonomous driving. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) ,pages 14662–14672, 2024. doi: 10.1109/CVPR52733.2024.01389. [44] Pengxuan Yang, Yupeng Zheng, Deheng Qian, Zebin Xing, Qichao Zhang, Linbo Wang, Yichen Zhang, Shaoyu Guo, Zhongpu Xia, Qiang Chen, Junyu Han, Lingyun Xu, Yifeng Pan, and Dongbin Zhao. DreamerAD: Efficient reinforcement learning via latent world model for autonomous driving. In European Conference on Computer Vision (ECCV) , 2026. doi: 10.48550/arXiv.2603.24587. [45] Yongqi Yang, Huayang Huang, Xu Peng, Xiaobin Hu, Donghao Luo, Jiangning Zhang, Chengjie Wang, and Yu Wu. Towards one-step causal video generation via adversarial self-distillation. arXiv preprint arXiv:2511.01419 , 2025. doi: 10.48550/arXiv.2511.01419. [46] Zhewei Yao, Reza Yazdani Aminabadi, Minjia Zhang, Xiaoxia Wu, Conglong Li, and Yuxiong He. ZeroQuant: Efficient and affordable post-training quantization for large-scale transformers. In Advances in Neural Information Processing Systems , volume 35, pages 27168–27183, 2022. doi: 10.52202/068431-1970. [47] Tianwei Yin, Michaël Gharbi, Taesung Park, Richard Zhang, Eli Shechtman, Frédo Durand, and William T. Freeman. Improved distribution matching distillation for fast image synthesis. In Advances in Neural Information Processing Systems , 2024. doi: 10.48550/arXiv.2405.14867. [48] Tianwei Yin, Michaël Gharbi, Richard Zhang, Eli Shechtman, Frédo Durand, William T. Freeman, and Taesung Park. One-step diffusion with distribution matching distillation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 6613–6623, 2024. doi: 10.1109/CVPR52733.2024. 00632. [49] Tianwei Yin, Qiang Zhang, Richard Zhang, William T. Freeman, Frédo Durand, Eli Shechtman, and Xun Huang. From slow bidirectional to fast autoregressive video diffusion models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 22963–22974, 2025. doi: 10.1109/CVPR52734.2025. 02138. [50] Conglang Zhang, Yifan Zhan, Qingjie Wang, Zhanpeng Ouyang, Yu Li, Zihao Yang, Xiaoyang Guo, Weiqiang Ren, Qian Zhang, Zhen Dong, Yinqiang Zheng, Wei Yin, and Zhengqing Chen. Horizondrive: Self-corrective autoregressive world model for long-horizon driving simulation. arXiv preprint arXiv:2605.11596 , 2026. doi: 10.48550/arXiv.2605.11596. [51] Kaiwen Zhang, Zhenyu Tang, Xiaotao Hu, Xingang Pan, Xiaoyang Guo, Yuan Liu, Jingwei Huang, Li Yuan, Qian Zhang, Xiao-Xiao Long, Xun Cao, and Wei Yin. Epona: Autoregressive diffusion world model for autonomous driving. In Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV) , pages 27220– 27230, October 2025. doi: 10.48550/arXiv.2506.24113. [52] Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang. The unreasonable effectiveness of deep features as a perceptual metric. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) , pages 586–595, June 2018. doi: 10.1109/CVPR.2018.00068. [53] Guosheng Zhao, Xiaofeng Wang, Zheng Zhu, Xinze Chen, Guan Huang, Xiaoyi Bao, and Xingang Wang. DriveDreamer-2: LLM-enhanced world models for diverse driving video generation. Proceedings of the AAAI Conference on Artificial Intelligence , 39(10):10412–10420, 2025. doi: 10.1609/aaai.v39i10.33130. [54] Min Zhao, Hongzhou Zhu, Kaiwen Zheng, Zihan Zhou, Bokai Yan, Xinyuan Li, Xiao Yang, Chongxuan Li, and Jun Zhu. Causal forcing++: Scalable few-step autoregressive diffusion distillation for real-time interactive video generation. arXiv preprint arXiv:2605.15141 , 2026. doi: 10.48550/arXiv.2605.15141. [55] Yanli Zhao, Andrew Gu, Rohan Varma, Liang Luo, Chien-Chin Huang, Min Xu, Less Wright, Hamid Shojanazeri, Myle Ott, Sam Shleifer, Alban Desmaison, Can Balioglu, Pritam Damania, Bernard Nguyen, Geeta Chauhan, Yuchen Hao, Ajit Mathews, and Shen Li. PyTorch FSDP: Experiences on scaling fully sharded data parallel. 
+
+Proceedings of the VLDB Endowment , 16(12):3848–3860, 2023. doi: 10.14778/3611540.3611569. [56] Chaoda Zheng, Sean Li, Jinhao Deng, Zhennan Wang, Shijia Chen, Liqiang Xiao, Ziheng Chi, Hongbin Lin, Kangjie Chen, Boyang Wang, Yu Zhang, and Xianming Liu. X-world: Controllable ego-centric multi-camera world models for scalable end-to-end driving. arXiv preprint arXiv:2603.19979 , 2026. doi: 10.48550/arXiv.2603. 19979. 
+
+33
