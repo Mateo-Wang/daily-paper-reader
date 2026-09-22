@@ -19,17 +19,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-21</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-22</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 19 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-21 22:30:26 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-22 21:53:45 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -40,7 +40,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日筛读19篇自动驾驶与VLA论文，精读7篇，ZYT-World以满分10.0领跑闭环仿真世界模型方向。最值得关注的是实时可控世界模型用于闭环自动驾驶仿真，以及SC-IMM教师信号稳定端到端轨迹输出这两个方向。普通读者可优先看这两篇精读，速读里MoWAM的未来运动预测也值得顺带了解。</p>
+<p>2026-09-22日报：21篇中精读9篇、速读12篇，端到端自动驾驶两篇9分领跑。</p>
+<p>最值得看的是端到端自动驾驶方向：事件分解世界建模+增量校正，以及规划对齐的BEV稀疏动作条件预训练。</p>
+<p>普通读者可先读这两篇9分精读，再按兴趣扫速读中的机器人技能复用、安全策略转向与可供性世界-动作建模。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -49,12 +51,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">7 篇</strong>
+    <strong class="dpr-home-dashboard-count">9 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ZYT-World: A Real-Time Controllable World Model for Closed-Loop Autonomous-Driving Simulation">ZYT-World: A Real-Time Controllable World Model for Closed-Loop Autonomous-Driving Simulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Stabilizing Trajectory Outputs in End-to-End Autonomous Driving via SC-IMM Based Teacher Signals">Stabilizing Trajectory Outputs in End-to-End Autonomous Driving via SC-IMM Based Teacher Signals</span></li><li><span class="dpr-home-dashboard-paper-title" title="ME-Dex 1.0: Bringing Heterogeneous Tactile Sensing into World Action Modeling">ME-Dex 1.0: Bringing Heterogeneous Tactile Sensing into World Action Modeling</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EditWM: Event-Decomposed World Modeling with Incremental Correction for End-to-End Autonomous Driving">EditWM: Event-Decomposed World Modeling with Incremental Correction for End-to-End Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Planning-Aligned Pretraining of BEV Representations with Sparse Action-Conditioned Targets for End-to-End Autonomous Driving">Planning-Aligned Pretraining of BEV Representations with Sparse Action-Conditioned Targets for End-to-End Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Prioritized Rollouts for Efficient World Model-based Vision-Language-Action Policy Optimization">Prioritized Rollouts for Efficient World Model-based Vision-Language-Action Policy Optimization</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -65,9 +67,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="MoWAM: Explicit Future Motion Prediction for Efficient World Action Models">MoWAM: Explicit Future Motion Prediction for Efficient World Action Models</span></li><li><span class="dpr-home-dashboard-paper-title" title="Catch Me If You Can: Real-Time Feedback Denoising for Responsive VLAs">Catch Me If You Can: Real-Time Feedback Denoising for Responsive VLAs</span></li><li><span class="dpr-home-dashboard-paper-title" title="FOCAL-VLA: Subtask-Guided Geometry Distillation and Implicit World Modeling for Vision-Language-Action Models">FOCAL-VLA: Subtask-Guided Geometry Distillation and Implicit World Modeling for Vision-Language-Action Models</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="V2-STRep: VLM-Grounded Structured Task Representations for Reusable Robot Skills Acquired from Generated Videos">V2-STRep: VLM-Grounded Structured Task Representations for Reusable Robot Skills Acquired from Generated Videos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Safe Real-Time Policy Steering via Noise-Space Trajectory Optimization for One-Step Generative Policies">Safe Real-Time Policy Steering via Noise-Space Trajectory Optimization for One-Step Generative Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="AffordanceWAM: Affordance-Aware Joint World-Action Modeling for Robot Manipulation">AffordanceWAM: Affordance-Aware Joint World-Action Modeling for Robot Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>12</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 </div>
 

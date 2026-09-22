@@ -1,0 +1,546 @@
+Title: Accelerating Visual Policy Learning with Sampling-Based Model Predictive Control
+
+URL Source: https://arxiv.org/pdf/2609.20575v1
+
+Published Time: Fri, 18 Sep 2026 01:46:07 GMT
+
+Number of Pages: 8
+
+Markdown Content:
+# Accelerating Visual Policy Learning with Sampling-Based Model Predictive Control 
+
+Yilang Liu 1, Haoxiang You 1, Qian Wang 2, Daniel Rakita 2, and Ian Abraham 3
+
+Abstract —Learning visual policies for locomotion and ma-nipulation requires coordinating contact with the environment and can incur substantial computation and GPU memory costs. First-order policy gradients (FoPG) reduce training cost through differentiable simulation, but local optimization can converge to unintended contact patterns. To address this shortfall, we propose Sampling-Guided Policy Search (SGPS), which couples recurring action-target refinement by sampling-based model-predictive control with first-order policy optimization. Behavior cloning initializes the policy from sampled actions; training then alternates sampling-based refinement with short-horizon FoPG updates under perturbed initial states and randomized dynamics. For visual policy training, we use a decoupled FoPG formulation that excludes rendering from the computation graph, enabling direct learning from depth observations without a state-policy teacher. On a single GPU, SGPS learns policies for locomotion, obstacle traversal, crate pushing, and bimanual carrying on simu-lated Unitree Go2 and G1 robots. Our experiments further show that refinement improves policy learning beyond initialization and tracking alone. For hardware deployment, the distilled policy transfers zero-shot to a real Go2 and uses onboard depth to autonomously trot, crawl, clear hurdles, and switch between these behaviors. 
+
+I. I NTRODUCTION 
+
+Reinforcement learning has enabled legged locomotion over rough terrain [1], [2] and perception-based obstacle traver-sal [3]–[5], supporting deployment in field tasks such as autonomous exploration and coverage [6]. However, training these policies can still require large numbers of simulation steps collected in parallel environments [7]–[9], with addi-tional computation and GPU memory for visual observa-tions [10]. To simplify visual policy training, recent works first learn a teacher policy using privileged state information, then train a student visual policy using onboard observations under the supervision of the teacher policy [2], [11]–[13]. To reduce training cost, methods such as SHAC [14] com-pute first-order policy gradients (FoPG) through differentiable simulation [15], [16]. Building on this approach, D.Va [10] supports visual observations by decoupling rendering from the gradient computation. However, local updates can produce unintended contact patterns when rewards do not distinguish 
+
+> 1
+
+Yilang Liu and Haoxiang You are with the Department of Mechanical En-gineering, Yale University, New Haven, CT 06520, USA. {yilang.liu, haoxiang.you }@yale.edu 
+
+> 2
+
+Qian Wang and Daniel Rakita are with the Department of Computer Science, Yale University, New Haven, CT 06520, USA. 
+
+{peter.wang.qw262, daniel.rakita }@yale.edu 
+
+> 3
+
+Ian Abraham is with the School of Electrical and Computer Engineering, University of Sydney, Sydney, NSW 2006, Australia. 
+
+ian.abraham@sydney.edu.au 
+
+gaits. Reference behaviors can guide these updates toward the intended contacts. A promising source of these references is sampling-based model-predictive control (MPC), which uses derivative-free optimization [17]–[19]. For example, DIAL-MPC [20] gen-erates locomotion through annealed sampling without prior policy training. These rollouts are dynamically feasible un-der the planning model, but deploying MPC requires online optimization and state estimation. The remaining challenge is to translate these trajectories into visual policies that tolerate deviations and execute without online MPC. To address this challenge, we propose Sampling-Guided Policy Search (SGPS), centered on recurring sampling-based action-target refinement coupled with decoupled FoPG (Fig. 1). MPC supplies BC initialization and a fixed tracking reference; refinement then generates new action targets to supplement local FoPG updates under state perturbations and randomized dynamics. For visual learning, decoupled FoPG trains specialists from depth and tracking observations without a state-policy teacher. For deployment, we distill the specialists into a single visual policy that transfers zero-shot to hardware and autonomously switches between behaviors using onboard observations and a velocity command, without online MPC or reference inputs. Our contributions are:  
+
+> •
+
+SGPS, a policy-learning framework that combines re-curring sampling-based action refinement with decoupled FoPG, refreshing action targets while keeping the track-ing reference fixed.  
+
+> •
+
+Direct training of visual policies with sampling-based supervision, without a separate state-policy teacher.  
+
+> •
+
+Zero-shot deployment of a unified visual policy on Go2, with autonomous behavior transitions. II. R ELATED WORK 
+
+a) Learning legged locomotion: Model-free RL trains locomotion policies in simulation [9], [21], [22], with domain randomization supporting hardware transfer [23], [24]. To train policies that use onboard observations, privileged teachers can supervise students [2], [11]–[13], enabling perception-based locomotion and parkour [3]–[5], [25]. To shape the resulting behavior, training can use task-specific rewards [26] or motion imitation [27], [28]. Following the reference-guided approach, SGPS uses references generated by sampling MPC on the training model. arXiv:2609.20575v1 [cs.RO] 17 Sep 2026 Fig. 1. SGPS policies across embodiments. Overlaid poses from simulation rollouts. Top: a qualitative G1 demonstration composes a trot approach segment with six crate-push bouts to move an 18 kg crate 1.4 m. Middle:      
+
+> a Unitree G1 humanoid jogs while carrying a 4kg box with both hands.
+> Bottom left: a Unitree Go2 clears a hurdle. Bottom right: the Go2 lowers its body to crawl under a guard rail.
+
+b) Policy learning with differentiable simulation: Differ-entiable simulators support first-order policy gradients [29]– [31]. For example, SHAC [14] combines short-horizon return gradients with a terminal value estimate; subsequent work studies locomotion [15] and optimization stability [16]. Be-yond state-based control, differentiable simulation and render-ing also support visual policies [32]–[35]. To avoid differen-tiating rendering, D.Va [10] uses decoupled FoPG. Building on this formulation, SGPS adds sampling-based refinement to supply action targets during training. 
+
+c) Sampling-based MPC and distillation: Sampling-based MPC evaluates candidate rollouts without differentiating the dynamics or reward [17]–[19]. For locomotion, DIAL-MPC uses annealed sampling [20]; related work addresses hybrid modes and contact interactions [36], [37]. However, these methods require online optimization and state estimation: DIAL-MPC uses motion capture in hardware experiments, whereas sample-based hybrid mode control uses an onboard EKF. To transfer planned behaviors into policies, guided policy search connects trajectory optimization with policy learning [38], [39]. Similarly, MPC supervision and dataset aggregation provide action targets [40], [41], including for visual students [13], [42], [43]. SGPS builds on this connection by adding recurring sampling-based action-target refinement to differentiable reference tracking, then distills specialists for deployment without online MPC or reference inputs. III. B ACKGROUND 
+
+a) Problem formulation: We consider differentiable dy-namics st+1 = f (st, at) and observations ot = g(st), where g
+
+need not be differentiable. The policy uses a reparameterized tanh-squashed Gaussian: 
+
+zt = μθ (ot) + σθ (ot) ⊙ ϵt,
+
+at = tanh( zt) ∈ [−1, 1] da , ϵt ∼ N (0, I). (1) The objective is to maximize expected discounted return over initial states and policy noise: 
+
+max  
+
+> θ
+
+V(θ) = max  
+
+> θ
+
+E
+
+"T −1X
+
+> t=0
+
+γtR(st, at)
+
+#
+
+. (2) 
+
+b) Decoupled first-order policy gradients: FoPG differ-entiates returns through the simulator. To limit instability over long horizons [44], [45], SHAC [14] uses h-step windows and a terminal critic: 
+
+Lθ = − 1
+
+N h 
+
+> N
+
+X
+
+> i=1
+
+h h−1X
+
+> t=0
+
+γtR(s(i) 
+
+> t
+
+, a(i) 
+
+> t
+
+)+ γhVϕ(s(i) 
+
+> h
+
+)
+
+i
+
+.
+
+(3) Here N is the number of parallel rollouts, time is local to each window, and Vϕ is fit to TD-λ targets. The dynamics and reward must be differentiable along these windows. D.Va [10] instead evaluates the actor at sg[ ot], where sg denotes stop-gradient. This excludes observation construction, including rendering, from the computation graph while retaining gra-dients through actions and dynamics to the policy, including its visual encoder. The resulting update is a quasi-gradient that omits derivatives through g.
+
+c) Sampling-based MPC: MPPI-style control samples candidate action plans, weights them by exponentiated rollout returns, and executes the first action of the weighted plan before replanning [17]. DIAL-MPC [20] represents plans by spline nodes and anneals sampling noise across iterations and along the horizon. These searches require only forward simulation and allow nondifferentiable reference objectives. IV. S AMPLING -G UIDED POLICY SEARCH 
+
+A. Overview 
+
+The central component of SGPS is recurring sampling-based refinement: search supplies action targets that complement local FoPG tracking updates (Fig. 2, Algorithm 1). Sampling MPC first provides a reference and BC initialization; training then alternates refinement and policy updates under random-ized dynamics and perturbed resets. 
+
+B. Reference generation by annealed sampling 
+
+Following DIAL-MPC [20], we represent actions 0, . . . , H s
+
+by M + 1 nodes decoded through a quadratic spline. At iteration i, candidate n perturbs nominal node m as 
+
+y(n) 
+
+> m
+
+= clip(¯ ym + σi,m ξ(n) 
+
+> m
+
+, −1, 1) ,σi,m = β i
+
+> iter
+
+β M −m 
+
+> hor
+
+, ξ(n) 
+
+> m
+
+∼ N (0, I). (4) We fix ξ(n)0 = 0 for continuity with the preceding plan. The factors βiter , β hor ∈ (0 , 1] anneal exploration across iterations A. Reference generation  B. SGPS policy learning  C. Zero-shot Go2 deployment   
+
+> Task objective
+> Sampling MPC
+> Fixed reference
+> + sampled actions
+> Behavior cloning
+> Policy initialization
+> Reference feasible on training model
+> Sampling-based refinement
+> Training states Sampling MPC
+> Tracking reward
+> Accepted action
+> targets
+> Reference-tracking loss
+
++ λ × target-cloning loss 
+
+> Decoupled FoPG policy updates
+> Perturbed resets + randomized dynamics
+> Depth + tracking inputs · No renderer gradients
+> Fixed within block
+> Track
+> Initialize
+> Next block: states from policy rollouts
+> Repeat A–B for each skill
+> Skill composition after training
+> SGPS-trained specialists
+> Trot · Crawl · Hurdle · …
+> DAgger distillation
+> One visual policy
+> Depth
+
+Fig. 2. SGPS learning and deployment. (A) Sampling MPC supplies a fixed tracking reference and actions for behavior-cloning initialization. (B) Each block starts with sampling-based refinement, followed by decoupled FoPG updates combining tracking and cloning of accepted targets. (C) Distillation yields one Go2 policy with autonomous visual behavior transitions, onboard sensing, and velocity-only user input, without reference inputs or online MPC. 
+
+and toward the start of the horizon. Clipping bounds the nodes; each decoded candidate contains Hs + 1 transitions. We include the nominal plan as candidate n = 0 and evaluate each candidate’s mean task reward rn on the training model. With sR = max(Std ℓ=0: Ns [rℓ], ϵ R), the update is 
+
+wn = exp(( rn − r0)/(ηs R)) 
+
+PNs 
+
+> ℓ=0
+
+exp(( rℓ − r0)/(ηs R)) ,
+
+¯ym ←
+
+> Ns
+
+X
+
+> n=0
+
+wny(n) 
+
+> m
+
+.
+
+(5) Here η > 0 is the temperature and ϵR > 0 prevents division by zero. The controller executes the first action, shifts and refits the spline, and replans. The recorded trajectory ¯τ =
+
+{(¯ st, ¯at)}T −1 
+
+> t=0
+
+becomes a reference only after passing a task-level success test fixed before training. The sampling objective 
+
+Rtask need not be differentiable. 
+
+C. Behavior-cloning initialization 
+
+The initialization dataset Dinit contains each clean reference state and Kaug noisy copies, ˆst,k = ¯ st + ϵt,k , with ϵt, 0 = 0.Each observation g(ˆ st,k ) is paired with the same reference action ¯at. Cloning only clean reference observations can leave the policy vulnerable to compounding errors when its own actions move it away from the reference trajectory. These copies broaden the observation distribution but do not provide recovery-action labels [41]. We convert actions to finite pre-squash targets using 
+
+z∗ = atanh   clip( a∗, −1 + ϵa, 1 − ϵa), (6) with ϵa > 0. For observation–target pairs in D, define 
+
+LBC (θ; D) = 
+
+P 
+
+> (o,z∗)∈D
+
+∥μθ (sg[ o]) − z∗∥22
+
+da max( |D| , 1) . (7) This loss averages over pairs and action dimensions and is zero for an empty dataset. Minimizing it on Dinit initializes the policy. 
+
+D. Policy optimization with sampling-based refinement 
+
+After BC initialization, we alternate sampling-based action-target refinement with FoPG tracking updates. We organize training into J blocks, each comprising a refinement step followed by B actor–critic epochs using the accepted targets. 
+
+a) Reference tracking: Specialist observations combine proprioception, reference joint pose and velocities, body-frame base error, previous action, and a phase clock. The differentiable tracking reward is 
+
+Rtrack (st, φ (t)) = walive +X
+
+> k
+
+wk exp[ −ckdk(st, ¯sφ(t))] , (8) where φ(t) selects the reference frame, dk ≥ 0 measures a tracking error, ck > 0 sets its scale, and wk ≥ 0
+
+weights its contribution. Terms cover body and base pose, base twist and velocity, foot height, and joint angles. Both FoPG and refinement use this reward, whereas initial reference generation uses Rtask . Decoupled rollouts evaluate Eq. (1) at detached observations and use Eq. (3) with transition reward 
+
+R(st, at) = Rtrack (st+1 , φ (t + 1)) . An asymmetric critic may receive privileged training state. 
+
+b) Sampling-based refinement: At each block, we select 
+
+Ng current training states with their reference indices and previous actions. For a state-based policy, we roll out the current actor deterministically from each selected state: 
+
+aseed  
+
+> t
+
+= tanh 
+
+
+
+μθj (g(st)) 
+
+
+
+,
+
+st+1 = f (st, aseed  
+
+> t
+
+), t = 0 , . . . , H g .
+
+(9) We fit the resulting action sequence to spline nodes and decode it to form the nominal plan. Its score is measured by rolling out the decoded plan, accounting for the change introduced by spline fitting. For a visual policy, nominal plans contain zero actions; search evaluates simulator states, actions, and rewards without rendering or executing the visual actor. Each segment contains Hg + 1 transitions. Sampling MPC searches around each nominal plan using the annealed update above with a scaled noise level. On the nominal training model, the mean transition tracking score of a segment is 
+
+¯Rtrain (τ ) = 1
+
+Hg + 1 
+
+> Hg
+
+X
+
+> t=0
+
+Rtrack (st+1 , φ (t + 1)) . (10) Let τseed denote the decoded nominal-plan rollout. A returned segment ˜τ is accepted only if 
+
+¯Rtrain (˜ τ ) ≥ max  κ, ¯Rtrain (τseed ) + δ, (11) where the minimum score κ and margin δ ≥ 0 are fixed before training. This test concerns nominal-model segment scores and does not guarantee improved policy return. For each accepted segment, we pair the pre-action observa-tion g(˜ st) with the returned action ˜at. Equation (6) converts these actions to fixed pre-squash targets in the buffer ˜Dj . The targets supervise the policy at states visited by the refined plans, while FoPG updates optimize closed-loop tracking under perturbed initial states and randomized dynamics. The actor minimizes 
+
+L(j)SGPS = Ltrack  
+
+> θ
+
++ λj LBC (θ; ˜Dj ), (12) with λj = λ0(1 − j/J ) for j = 0 , . . . , J − 1. The cloning weight decreases from λ0 to λ0/J , reducing the contribution of fixed action targets as policy optimization proceeds. Targets remain fixed for all B epochs and are replaced at the next block. Refinement runs even when no segment is accepted; an empty buffer contributes zero cloning loss. The initial reference ¯τ remains fixed: refinement updates action targets, not the tracking trajectory. Recurring target supervision thus complements FoPG while preserving the behavior objective. 
+
+E. Visual policy learning 
+
+The same algorithm trains a visual specialist directly, with-out a privileged teacher policy. The specialist receives a stack of egocentric depth images encoded by a small convolutional network [46], together with proprioceptive and reference-conditioned tracking observations. The critic may retain privi-leged state during training but is discarded at deployment. The distilled Go2 generalist instead uses onboard observations and a velocity command, without reference inputs (Section V-F). Depth is rendered from detached simulator states while physics remains differentiable, training the visual encoder and actor without renderer derivatives. For behavior cloning, noise-augmented states can share the same clean depth stack. The actor could then use image identity instead of the perturbed proprioceptive state. We reduce this shortcut by randomly zeroing the depth stack for a fraction of the initialization batch. After sampling-based refinement, depth frames are rendered for the returned trajectories, and the acceptance mask selects the pairs that contribute to ˜Dj .
+
+F. Connection to decoupled FoPG 
+
+Decoupled FoPG admits an interpretation as fitting action targets obtained by a return-gradient step [10]. SGPS uses targets from sampling-based search. The following identity relates the target-fitting direction to the policy parameters. 
+
+Algorithm 1: Sampling-Guided Policy Search (SGPS) 
+
+Input: simulator f , observation model g, task reward 
+
+Rtask , tracking reward Rtrack , thresholds 
+
+(κ, δ ), initial weight λ0, J blocks of B epochs 
+
+Output: closed-loop policy πθ
+
+Generate and validate reference ¯τ with sampling MPC; Initialize actor by cloning Dinit (Eq. (7)); 
+
+for j = 0 , . . . , J − 1 do 
+
+Select training states; seed plans with state-policy rollouts or zero actions for visual policies; Refine plans with sampling MPC using Rtrack on the nominal model; Form fixed target buffer ˜Dj from segments passing Eq. (11); render accepted visual observations; Set λj = λ0(1 − j/J );
+
+for B actor–critic epochs do 
+
+Collect h-step decoupled rollouts with randomized dynamics and perturbed reference-state resets; Update actor with Eq. (12); fit critic; 
+
+end end Proposition 1 (Search-target distillation) . Fix observations O
+
+and let Zθ (O) collect deterministic pre-squash policy outputs. At parameters θ0, write Z0 = Zθ0 (O) and J0 = ∂Zθ /∂ θ|θ0 .For fixed targets ˜Z, define 
+
+LT (θ) = 12 Zθ (O) − sg[ ˜Z] 22
+
+. (13) 
+
+Its gradient-descent direction at θ0 is 
+
+−∇ θ LT (θ0) = J⊤ 
+
+> 0
+
+(˜Z − Z0). (14) 
+
+Let J (Z) be the return obtained by executing tanh( Z) from a fixed initial state. If ˜Z = Z0 + β∇ZJ (Z0), with β > 0, then 
+
+− 1
+
+β ∇θ LT (θ0) = J⊤ 
+
+> 0
+
+∇ZJ (Z0), (15) 
+
+which is the deterministic decoupled FoPG direction. Proof. Holding observations and targets fixed, the chain rule gives ∇θ LT (θ0) = J⊤ 
+
+> 0
+
+(Z0 − ˜Z). Negating yields Eq. (14); substituting the gradient-step target gives Eq. (15). The equivalence holds at the generating parameters; subse-quent finite steps toward fixed targets need not equal FoPG updates. Equation (7) scales the target-fitting direction by 
+
+2/(da|D| ) for a nonempty dataset. Sampling targets need not follow a return gradient, and their acceptance on the nominal model does not guarantee an increase in the policy’s expected return after fitting. V. E XPERIMENTS 
+
+We evaluate Go2 trot and visual obstacle traversal, and G1 pushing and carrying. We then distill Go2 specialists for autonomous visual obstacle traversal on hardware. A. Experimental Setup a) Tasks and policy interfaces: Go2 and G1 actors output 12 and 29 joint-position commands at 50 Hz, respectively, using qcmd = qanchor + d ⊙ a. Go2 uses its home pose as the anchor and repeats d = [0 .4, 0.8, 0.8] for each leg; G1 uses task-specific anchors and scales. The specialist tracking observation is 
+
+otrack  
+
+> t
+
+= [ gBt , qt, 7: − qhome , ut−1, ¯qt, 7: , eBp,t ,
+
+vBt , ¯vBt , ωBt , sin ϕt, cos ϕt ]. (16) Here B denotes the base or pelvis frame, bars denote the reference, ut−1 = qcmd  
+
+> t−1
+
+is the previous joint command, and 
+
+eBp,t is the reference base-position error. The vectors have 53 dimensions for Go2, 106 for G1 pushing, and 118 for G1 carrying. G1 inputs include current and reference object coordinates. Visual specialists fuse these vectors with three 
+
+64 × 64 egocentric depth frames; they therefore use depth together with tracking inputs. The G1 simulated state contains the floating base, 29 actuated joints, and the manipulated object. Pushing uses 
+
+(q, ˙q) ∈ R37 × R36 , with one crate slide coordinate; carrying uses R43 × R41 , with a free box joint. Reference generation uses Ns=2048 sampled action candi-dates in addition to the nominal plan, sampling temperature 
+
+η=0 .05 , and annealing factors (βhor , β iter ) = (0 .9, 0.5) .Sampling MPC runs two iterations per control step and ten for the initial zero plan. Go2 trot uses six spline nodes over a 20-step lookahead; the remaining Go2 skills use nine nodes over 16 steps. G1 object-task reference generation retains the same annealed-search procedure but uses task-specific action anchors, action scales, and reward specifications. The task reward specifies gait phase, duty ratio, cadence, swing amplitude, base velocity, height, and uprightness. Ob-stacle tasks additionally use position-indexed base-height way-points and world-frame velocity tracking. These terms specify the behavior sought by sampling MPC; policy optimization uses the common tracking reward in Eq. (8). The G1 push task adds explicit crate-progress tracking because base and joint terms alone do not distinguish pushing from standing; the carry reference includes the free-box pose so the common tracking objective covers the loaded system. 
+
+b) Training details: We use MuJoCo MJX for simulation and train policies on a single NVIDIA RTX 4080 GPU. Initialization uses eight noisy copies of every clean reference state. FoPG uses h=32 -step windows in 64 parallel envi-ronments, reference-state initialization, and per-environment dynamics randomization. Training uses J=25 blocks, each with refinement from Ng =16 current training states followed by B=80 actor–critic epochs. Refinement uses 26 -transition segments ( Hg =25 ), six spline nodes, two iterations, Ns=64 
+
+sampled candidates, and an initial noise scale of 0.1. We set 
+
+λ0=1 and use the linear schedule λj = λ0 max(0 , 1 − j/J ).The standard budget is 2000 epochs ( 4.096 M FoPG rollout interactions, plus search rollouts). Figure 5 also shows longer carrying runs for comparison with DAgger. We train three seeds per G1 task and actor modality. 1 2 5 10 25 60                 
+
+> wall-clock (min, log)
+> 05k 10k 15k
+> episode reward
+> (a) State, wall-clock
+> 025 50 75
+> wall-clock (min)
+> 05k 10k 15k
+> (b) Vision, wall-clock
+> 1M 10M 100M 1B
+> environment steps (log)
+> 05k 10k 15k
+> episode reward
+> 196× fewer steps
+> (c) State, env steps
+> 0123456
+> environment steps (M)
+> 05k 10k 15k
+> (d) Vision, env steps
+> SGPS, no re fi nement SGPS + re fi nement PPO FoPG scratch BC only DAgger expert DAgger student
+> Fig. 3. Trot learning efficiency and refinement ablation. Episode return versus training time (top) and environment interactions (bottom), for state (left) and visual (right) policies. Red includes recurring search and target cloning; blue retains BC initialization and FoPG tracking without refinement. SGPS shading shows ±1standard deviation across seeds.
+
+c) Baselines and plotted evaluation: We compare against BC only, FoPG from scratch, PPO, and state-to-vision DAgger. BC only stops after initialization, whereas FoPG from scratch starts from random parameters. DAgger first trains a state expert, then distills a visual student. All curves report deter-ministic evaluations on the nominal model. For computational comparisons, training times include warm starts, refinement search, and, for DAgger, expert training. Environment-step counts also include search rollouts, accounting for refinement’s cost in both comparisons. 
+
+B. Behavior Selection and Learning Efficiency a) Primary locomotion setting: The primary benchmark asks the Go2 to track a forward trot at 0.8 m/s on flat terrain. The reference specifies diagonal foot pairs in phase, a 0.45 
+
+duty ratio, a 2 Hz cadence, a 0.08 m swing height, and a 0.30 mbase height. Both SGPS variants, PPO, FoPG from scratch, and DAgger use three training seeds. Figure 3 shows that full SGPS achieves high returns with both state and visual observations. For state-based learning, SGPS reaches a higher return than FoPG from scratch over the reported budgets, while PPO uses 196 times as many environ-ment interactions as SGPS. For visual learning, SGPS trains directly after initialization, whereas DAgger first requires a separately trained state expert. 
+
+b) Behavior selection: To illustrate a failure under a gait-blind reward, we train a policy from scratch with the joint-angle tracking weight wjoint set to zero. This removes direct 0 1 2 3diag. corr +0.86 FL FR RL RR         
+
+> reference
+> 0123diag. corr +0.78
+> SGPS
+> 0123diag. corr +0.21
+> from scratch, gait-blind reward time (s) Fig. 4. Go2 foot-contact patterns. Left: sampling MPC reference. Center: SGPS. Right: FoPG trained from scratch without joint-angle tracking. Blue intervals indicate ground contact for the front-left (FL), front-right (FR), rear-left (RL), and rear-right (RR) feet. Values report mean diagonal-pair contact correlation (FL–RR and FR–RL).
+
+joint-pose supervision while keeping the other tracking terms unchanged. Figure 4 shows alternating diagonal foot contacts in both the sampled reference and SGPS, with mean diagonal-pair correlations of +0 .86 and +0 .78 , respectively. The gait-blind policy trained from scratch instead produces a weakly coordinated shuffle ( +0 .21 ). This illustrates a failure to recover the intended trot without BC initialization or joint-angle su-pervision. Figure 3 separately evaluates refinement with these settings held fixed. 
+
+C. Ablation of Sampling-Based Refinement 
+
+We test the contribution of recurring refinement beyond initialization and FoPG tracking. 
+
+a) Controlled comparison: “SGPS + refinement” denotes the full method. “SGPS, no refinement” retains BC initializa-tion and reference tracking, but omits recurring search and accepted-target cloning in Eq. (12). Both variants use three training seeds and share all other settings, including reference generation, BC initialization, architecture, tracking reward, dynamics randomization, and FoPG optimization. The ablation tests recurring search and target supervision jointly, without separating the gate, search initialization, or cloning schedule. 
+
+b) Go2 trot: For state-based trot, both SGPS variants reach high returns, with a modest gain from refinement (Fig. 3a,c). Thus, much of the efficiency relative to PPO remains with sampled-reference initialization and tracking alone. The visual comparison shows a larger gap: near 4.1Minteractions, full SGPS reaches approximately 16 ,000 , while the variant without refinement levels off near 11 ,000 (Fig. 3d). A comparable gap appears around 30 minutes of training time, including refinement search. 
+
+c) G1 visual carrying: Figure 5 extends the compar-ison to carrying. Refinement again improves visual-policy return: near 6M interactions, full SGPS reaches approximately 
+
+26 ,500 , compared with about 20 ,500 without refinement. The gap also persists at equal displayed training times: around 
+
+100 minutes, the two variants reach approximately 26 ,500 and 
+
+21 ,000 , respectively. 
+
+D. Perception-Aware Obstacle Tasks 
+
+To evaluate visual policy learning beyond flat-ground loco-motion, we consider crawling beneath an overhead beam and 0 50 100 150               
+
+> wall-clock (min)
+> 010k 20k 30k
+> episode reward
+> (a) Vision, wall-clock
+> 0123456
+> environment steps (M)
+> 010k 20k 30k
+> (b) Vision, env steps
+> SGPS, no re fi nement SGPS + re fi nement DAgger expert DAgger student BC only
+> Fig. 5. G1 visual carrying and refinement ablation. Episode return versus training time (a) and environment interactions (b). Red includes recurring refinement; blue retains initialization and FoPG tracking without it. SGPS shading shows ±1standard deviation across seeds.
+
+clearing a hurdle. These tasks require changes in body height and foot motion around obstacles. Both retain the Go2 action map and 53-dimensional tracking vector. Obstacle geometry is observed through the three-frame depth stack, while the sampled reference specifies the target motion. SGPS trains these visual policies directly, without a separate state-policy teacher. 
+
+a) Crawl: The robot approaches an overhead beam while tracking a 0.8 m/s trot. To pass beneath it, the robot must lower its body, continue forward, and then rise to resume trotting. The beam occupies x ∈ [1 .85 , 2.15] m and has an underside height of 0.30 m. Accordingly, the sampled refer-ence lowers the base-height target from 0.30 m to 0.20 m over 
+
+x ∈ [1 .55 , 2.45] m while keeping the feet ground-referenced. 
+
+b) Hurdle: The robot approaches a 0.10 m-high bar at 
+
+x = 2.0 m under a 1.2 m/s gallop specification. To clear the bar while maintaining forward motion, the reference raises the base-height target from 0.30 m to 0.38 m over 
+
+x ∈ [1 .75 , 2.25] m and increases the swing-foot targets. These adjustments position takeoff and landing around the hurdle, after which the robot should return to its locomotion gait. Figure 1 (bottom) illustrates both behaviors in the composed Go2 rollout: lowering the body beneath the beam and raising it to clear the hurdle. 
+
+E. Humanoid Pushing and Carrying 
+
+To evaluate SGPS on whole-body object interaction, we extend it to pushing and carrying with the 29-DoF Unitree G1. These tasks require coordinating locomotion with arm– object contact. We retain the same learning procedure with task-specific dynamics, action maps, and objectives, without transferring Go2 policy parameters. Both tasks include current and reference object coordinates in the tracking observations, and the object is visible in the depth images. 
+
+a) Crate pushing: The G1 must push an 18 kg crate forward at 0.08 m/s while maintaining an upright posture and contact with both hands. The crate is a 0.9 m cube constrained to move along the forward axis, and the robot starts with its hands 2 cm from the crate face. To encourage sustained pushing, the sampling objective rewards hand–crate contact and forward progress while penalizing torso or leg contact. Fig. 6. Autonomous visual Go2 deployment of crawl, trot, and hurdle. 
+
+> Simulation (top) and hardware (bottom) poses show crawling beneath a beam, trotting toward a box, then climbing, traversing, and landing, from right to left on analogous courses. Translucent poses show intermediate motion. The policy transfers zero-shot, with autonomous visual transitions and a velocity command as the only user input.
+
+Policy learning also tracks crate displacement, so remaining stationary fails the objective. 
+
+b) Box carrying: The G1 must follow a 0.5 m/s jogging reference while holding a 4 kg box at chest height with both hands. The box measures 0.28 × 0.22 × 0.22 m. Two soft wrist-to-box constraints transmit the load while simplifying grasp acquisition and slip. To maintain the carrying posture, the reference includes the box pose, and task-specific action scales limit unnecessary arm motion. Figure 5 shows the visual carrying results under deter-ministic nominal-model evaluation with fixed reference-state initializations. Within one hour, including refinement search, SGPS reaches approximately 25 ,000 return and successfully performs the task. It approaches the state expert’s final return within about 4.1M interactions and subsequently exceeds it. In comparison, the DAgger student improves later and remains below its teacher over the displayed training range. 
+
+F. Skill Composition and Hardware Evaluation 
+
+For deployment, we distill the Go2 trot, crawl, and hurdle specialists into one visual policy that transitions between behaviors using onboard observations, without reference inputs or online MPC. 
+
+a) Combining specialists: Using DAgger [41], we label states visited by the unified policy with actions from the corresponding specialist. Let K denote the specialist library, 
+
+¯ρki the collected state distribution for skill k through iteration 
+
+i, and pk its sampling weight, with P 
+
+> k
+
+pk = 1 . The unified policy minimizes the weighted behavior-cloning loss 
+
+θi+1 = arg min 
+
+> θ
+
+X
+
+> k∈K
+
+pkE(st,odep   
+
+> t)∼¯ρki
+
+h
+
+μθ (odep  
+
+> t
+
+)
+
+− sg 
+
+h
+
+μϕk (gk(st)) 
+
+i 22
+
+i
+
+.
+
+(17) Here μ denotes the policy output used for cloning and sg fixes the specialist target. Deployment observations odep  
+
+> t
+
+contain depth, proprioception, observation history, learned state esti-mates, and the velocity command. During training, specialists receive reference features through gk(st), while the unified policy receives no reference trajectory or phase. The skill index k selects the training supervisor; at deployment, depth conditions behavior transitions. To learn transitions, we collect obstacle-traversal and loco-motion data. Crawl covers the full reference window, while hurdle starts emphasize takeoff and include post-obstacle states. We retain specialist tracking-error termination rules to prevent stationary post-hurdle states from dominating training. 
+
+b) Zero-shot hardware deployment: We deploy the uni-fied policy on a Unitree Go2 EDU without hardware fine-tuning. Inference runs on its onboard NVIDIA Jetson Orin module with 8 GB shared memory. The robot uses an Intel Re-alSense D435i depth camera, the onboard IMU, joint encoders, and foot force sensors. No sampled reference, motion capture, external localization, or lidar odometry is used at deployment. 
+
+Observations and timing. The control loop runs at 50 Hz and the recurrent depth encoder at 10 Hz. Depth is acquired at 848 × 480 and 30 Hz, converted from camera-axis depth to range, cropped to the training camera’s angular window, clipped at 2 m, and resized to 58 × 87 . The encoder uses the previous depth frame to match the 100 ms training delay. These inputs differ from the 64 × 64 specialist frame stacks. Proprioceptive history spans ten previous frames ( 200 ms). 
+
+Policy execution. The deployed networks comprise a learned velocity estimator, a recurrent depth encoder, and an ac-tor with a proprioceptive-history encoder. Base linear ve-locity is predicted from proprioception; orientation comes from onboard IMU fusion. The actor outputs twelve joint-position offsets, converted to targets as qcmd = qdefault +0.25 clip( a, −4.8, 4.8) . Joint PD gains are kp = 40 N m/rad and kd = 1 N m s/rad. Onboard GPU TorchScript inference averages 2.7 ms ( 4.3 ms at the 99th percentile); the complete control step averages 11 ms. The training critic is discarded. 
+
+c) Autonomous behavior transitions: Figure 6 shows crawling beneath a beam, resuming trotting, then climbing onto and traversing a box before landing. Transitions are autonomous, with velocity-only user input. The simulation rollout shows the same sequence on an analogous course with a wider box. VI. C ONCLUSION AND LIMITATIONS 
+
+SGPS combines recurring sampling-based action-target re-finement with decoupled FoPG, providing search-based super-vision throughout training while keeping the tracking refer-ence fixed. Experiments show gains beyond initialization and tracking alone. Specialist distillation yields a unified visual policy that transfers zero-shot to a real Go2 and autonomously transitions between behaviors using onboard observations. However, SGPS relies on differentiable dynamics, success-ful sampled references, and task-specific objectives. Moreover, the humanoid tasks simplify object motion and hand–object interactions; complex manipulation remains unexplored. Fu-ture work includes realistic object interactions, long-horizon manipulation, and humanoid hardware deployment. ACKNOWLEDGEMENT 
+
+We acknowledge the use of ChatGPT and Claude to assist with editing, grammar, and code generation for plots. REFERENCES [1] H. You et al. , “Efficient on-policy visual-rl via stochastic decoupled policy gradient,” arXiv preprint arXiv:2605.26478, 2026. [2] J. Lee, J. Hwangbo, L. Wellhausen, V. Koltun, and M. Hutter, “Learning quadrupedal locomotion over challenging terrain,” Science Robotics ,vol. 5, no. 47, p. eabc5986, 2020. [3] Z. Zhuang et al. , “Robot parkour learning,” arXiv preprint arXiv:2309.05665, 2023. [4] X. Cheng, K. Shi, A. Agarwal, and D. Pathak, “Extreme parkour with legged robots,” arXiv preprint arXiv:2309.14341, 2023. [5] D. Hoeller, N. Rudin, D. Sako, and M. Hutter, “Anymal parkour: Learning agile navigation for quadrupedal robots,” arXiv preprint arXiv:2306.14874, 2023. [6] C. Hughes et al. , “Asymptotically optimal ergodic coverage on general-ized motion fields,” arXiv preprint arXiv:2605.13442, 2026. [7] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, “Prox-imal policy optimization algorithms,” arXiv preprint arXiv:1707.06347, 2017. [8] V. Makoviychuk et al. , “Isaac gym: High performance gpu-based physics simulation for robot learning,” arXiv preprint arXiv:2108.10470, 2021. [9] N. Rudin, D. Hoeller, P. Reist, and M. Hutter, “Learning to walk in minutes using massively parallel deep reinforcement learning,” arXiv preprint arXiv:2109.11978, 2022. [10] H. You, Y. Liu, and I. Abraham, “Accelerating visual-policy learning through parallel differentiable simulation,” arXiv preprint arXiv:2505.10646, 2025. [11] T. Miki, J. Lee, J. Hwangbo, L. Wellhausen, V. Koltun, and M. Hutter, “Learning robust perceptive locomotion for quadrupedal robots in the wild,” Science Robotics , vol. 7, no. 62, p. eabk2822, 2022. [12] A. Kumar, Z. Fu, D. Pathak, and J. Malik, “Rma: Rapid motor adaptation for legged robots,” arXiv preprint arXiv:2107.04034, 2021. [13] D. Chen, B. Zhou, V. Koltun, and P. Kr¨ ahenb¨ uhl, “Learning by cheating,” arXiv preprint arXiv:1912.12294, 2019. [14] J. Xu et al. , “Accelerated policy learning with parallel differentiable simulation,” arXiv preprint arXiv:2204.07137, 2022. [15] Y. Song, S. Kim, and D. Scaramuzza, “Learning quadruped locomotion using differentiable simulation,” arXiv preprint arXiv:2403.14864, 2024. [16] E. Xing, V. Luk, and J. Oh, “Stabilizing reinforcement learning in dif-ferentiable multiphysics simulation,” arXiv preprint arXiv:2412.12089, 2025. [17] G. Williams et al. , “Information theoretic mpc for model-based rein-forcement learning,” in 2017 IEEE International Conference on Robotics and Automation (ICRA) . IEEE Press, 2017, p. 1714–1721. [18] T. Howell, N. Gileadi, S. Tunyasuvunakool, K. Zakka, T. Erez, and Y. Tassa, “Predictive sampling: Real-time behaviour synthesis with mujoco,” arXiv preprint arXiv:2212.00541, 2022. [19] C. Pinneri et al. , “Sample-efficient cross-entropy method for real-time planning,” arXiv preprint arXiv:2008.06389, 2020. [20] H. Xue, C. Pan, Z. Yi, G. Qu, and G. Shi, “Full-order sampling-based mpc for torque-level locomotion control via diffusion-style annealing,” arXiv preprint arXiv:2409.15610, 2024. [21] J. Hwangbo et al. , “Learning agile and dynamic motor skills for legged robots,” Science Robotics , vol. 4, no. 26, p. eaau5872, 2019. [22] J. Tan et al. , “Sim-to-real: Learning agile locomotion for quadruped robots,” arXiv preprint arXiv:1804.10332, 2018. [23] J. Tobin, R. Fong, A. Ray, J. Schneider, W. Zaremba, and P. Abbeel, “Domain randomization for transferring deep neural networks from sim-ulation to the real world,” in 2017 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , 2017, pp. 23–30. [24] X. B. Peng, M. Andrychowicz, W. Zaremba, and P. Abbeel, “Sim-to-real transfer of robotic control with dynamics randomization,” in 2018 IEEE International Conference on Robotics and Automation (ICRA) , 2018, pp. 3803–3810. [25] A. Agarwal, A. Kumar, J. Malik, and D. Pathak, “Legged locomo-tion in challenging terrains using egocentric vision,” arXiv preprint arXiv:2211.07638, 2022. [26] G. B. Margolis and P. Agrawal, “Walk these ways: Tuning robot control for generalization with multiplicity of behavior,” arXiv preprint arXiv:2212.03238, 2022. [27] X. B. Peng, P. Abbeel, S. Levine, and M. van de Panne, “Deepmimic: example-guided deep reinforcement learning of physics-based character skills,” ACM Trans. Graph. , vol. 37, no. 4, Jul. 2018. [28] X. B. Peng, E. Coumans, T. Zhang, T.-W. Lee, J. Tan, and S. Levine, “Learning agile robotic locomotion skills by imitating animals,” arXiv preprint arXiv:2004.00784, 2020. [29] C. D. Freeman, E. Frey, A. Raichuk, S. Girgin, I. Mordatch, and O. Bachem, “Brax – a differentiable physics engine for large scale rigid body simulation,” arXiv preprint arXiv:2106.13281, 2021. [30] Y.-L. Qiao, J. Liang, V. Koltun, and M. C. Lin, “Efficient differentiable simulation of articulated bodies,” in Proceedings of the 38th Interna-tional Conference on Machine Learning , ser. Proceedings of Machine Learning Research, M. Meila and T. Zhang, Eds., vol. 139. PMLR, 18–24 Jul 2021, pp. 8661–8671. [31] M. A. Z. Mora, M. Peychev, S. Ha, M. Vechev, and S. Coros, “Pods: Policy optimization via differentiable simulation,” in Proceedings of the 38th International Conference on Machine Learning , ser. Proceedings of Machine Learning Research, M. Meila and T. Zhang, Eds., vol. 139. PMLR, 18–24 Jul 2021, pp. 7805–7817. [32] N. Wiedemann, V. W¨ uest, A. Loquercio, M. M¨ uller, D. Floreano, and D. Scaramuzza, “Training efficient controllers via analytic policy gradient,” arXiv preprint arXiv:2209.13052, 2023. [33] R. Liu, A. Canberk, S. Song, and C. Vondrick, “Differentiable robot rendering,” arXiv preprint arXiv:2410.13851, 2024. [34] J. Heeg, Y. Song, and D. Scaramuzza, “Learning quadrotor control from visual features using differentiable simulation,” in 2025 IEEE International Conference on Robotics and Automation (ICRA) , 2025, pp. 4033–4039. [35] J. Y. Luo, Y. Song, V. Klemm, F. Shi, D. Scaramuzza, and M. Hut-ter, “Residual policy learning for perceptive quadruped control using differentiable simulation,” in 2025 IEEE International Conference on Robotics and Automation (ICRA) , 2025, pp. 1–8. [36] Y. Liu, H. You, and I. Abraham, “Hybrid mode sample-based control,” in RSS 2025 Workshop on Whole-body Control and Bimanual Manipu-lation: Applications in Humanoids and Beyond . Robotics: Science and Systems (RSS), 2025, workshop paper. [37] Y. Liu, H. You, and I. Abraham, “Sample-based hybrid mode control: Asymptotically optimal switching of algorithmic and non-differentiable control modes,” arXiv preprint arXiv:2510.19074, 2026. [38] S. Levine and V. Koltun, “Guided policy search,” in Proceedings of the 30th International Conference on Machine Learning , ser. Proceedings of Machine Learning Research, S. Dasgupta and D. McAllester, Eds., vol. 28, no. 3. Atlanta, Georgia, USA: PMLR, 17–19 Jun 2013, pp. 1–9. [39] I. Mordatch and E. Todorov, “Combining the benefits of function approximation and trajectory optimization,” in Proceedings of Robotics: Science and Systems , Berkeley, USA, July 2014. [40] T. Zhang, G. Kahn, S. Levine, and P. Abbeel, “Learning deep control policies for autonomous aerial vehicles with mpc-guided policy search,” arXiv preprint arXiv:1509.06791, 2016. [41] S. Ross, G. Gordon, and D. Bagnell, “A reduction of imitation learning and structured prediction to no-regret online learning,” in Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics , ser. Proceedings of Machine Learning Research, G. Gordon, D. Dunson, and M. Dud´ ık, Eds., vol. 15. Fort Lauderdale, FL, USA: PMLR, 11–13 Apr 2011, pp. 627–635. [42] A. Loquercio, E. Kaufmann, R. Ranftl, M. M¨ uller, V. Koltun, and D. Scaramuzza, “Learning high-speed flight in the wild,” Science Robotics , vol. 6, no. 59, p. eabg5810, 2021. [43] T. Mu et al. , “When should we prefer state-to-visual dagger over visual reinforcement learning?” arXiv preprint arXiv:2412.13662, 2024. [44] L. Metz, C. D. Freeman, S. S. Schoenholz, and T. Kachman, “Gradients are not all you need,” arXiv preprint arXiv:2111.05803, 2022. [45] H. J. T. Suh, M. Simchowitz, K. Zhang, and R. Tedrake, “Do dif-ferentiable simulators give better policy gradients?” arXiv preprint arXiv:2202.00817, 2022. [46] D. Yarats, R. Fergus, A. Lazaric, and L. Pinto, “Mastering visual continuous control: Improved data-augmented reinforcement learning,” arXiv preprint arXiv:2107.09645, 2021.
