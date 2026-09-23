@@ -2,6 +2,10 @@
 
 每周最多两篇：只保留值得跨领域阅读的论文、技术报告、模型发布或开源项目。
 
+## 2026 第 39 周
+
+- [unsloth/Qwen3.8-Flash-Next-GGUF](#/frontier/2026-W39/unsloth-qwen3-8-flash-next-gguf)  
+
 ## 2026 第 38 周
 
 - [deepseek-ai/DeepSeek-V4.1-Flash](#/frontier/2026-W38/deepseek-ai-deepseek-v4-1-flash)  
