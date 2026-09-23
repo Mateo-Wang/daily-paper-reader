@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-09-22</span>
+      <span class="dpr-home-dashboard-kicker">2026-09-23</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 21 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 12 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>9</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>7</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>5</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-09-22 21:53:45 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-09-23 22:29:21 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,10 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-09-22日报：21篇中精读9篇、速读12篇，端到端自动驾驶两篇9分领跑。</p>
-<p>最值得看的是端到端自动驾驶方向：事件分解世界建模+增量校正，以及规划对齐的BEV稀疏动作条件预训练。</p>
-<p>普通读者可先读这两篇9分精读，再按兴趣扫速读中的机器人技能复用、安全策略转向与可供性世界-动作建模。</p>
+<p>今日共生成 12 篇推荐（精读 7 篇，速读 5 篇）</p>
+<p>精读：《&quot;Dear LLaVA, Please Drive&quot;: A Depth-Aware Vision-Language Agent for Closed-Loop Robotic Control》（8.0/10）, 《SCULPT-VLA: Learning Structured Control through Staged Action Grounding》（8.0/10）</p>
+<p>速读：《Imagine-RL: Residual-Confidence-Guided Cross-Attention for World-Model-Augmented VLA Reinforcement Learning》（8.0/10）, 《ActiveArena: Benchmarking and Understanding Active Perception in Robotic Manipulation》（8.0/10）, 《ME-Brain-1.0: Memory, Cognition and Action for Evolving Embodied Intelligence》（8.0/10）</p>
+<p>这些结果覆盖了当下较热的方向，建议先看精读区论文的关键问题与方法。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +51,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">9 篇</strong>
+    <strong class="dpr-home-dashboard-count">7 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="EditWM: Event-Decomposed World Modeling with Incremental Correction for End-to-End Autonomous Driving">EditWM: Event-Decomposed World Modeling with Incremental Correction for End-to-End Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Planning-Aligned Pretraining of BEV Representations with Sparse Action-Conditioned Targets for End-to-End Autonomous Driving">Planning-Aligned Pretraining of BEV Representations with Sparse Action-Conditioned Targets for End-to-End Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Prioritized Rollouts for Efficient World Model-based Vision-Language-Action Policy Optimization">Prioritized Rollouts for Efficient World Model-based Vision-Language-Action Policy Optimization</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="&quot;Dear LLaVA, Please Drive&quot;: A Depth-Aware Vision-Language Agent for Closed-Loop Robotic Control">&quot;Dear LLaVA, Please Drive&quot;: A Depth-Aware Vision-Language Agent for Closed-Loop Robotic Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="SCULPT-VLA: Learning Structured Control through Staged Action Grounding">SCULPT-VLA: Learning Structured Control through Staged Action Grounding</span></li><li><span class="dpr-home-dashboard-paper-title" title="MaskVLA: Visual Masking Against Trajectory Overfitting of Vision-Language-Action Model">MaskVLA: Visual Masking Against Trajectory Overfitting of Vision-Language-Action Model</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -63,12 +64,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">5 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="V2-STRep: VLM-Grounded Structured Task Representations for Reusable Robot Skills Acquired from Generated Videos">V2-STRep: VLM-Grounded Structured Task Representations for Reusable Robot Skills Acquired from Generated Videos</span></li><li><span class="dpr-home-dashboard-paper-title" title="Safe Real-Time Policy Steering via Noise-Space Trajectory Optimization for One-Step Generative Policies">Safe Real-Time Policy Steering via Noise-Space Trajectory Optimization for One-Step Generative Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="AffordanceWAM: Affordance-Aware Joint World-Action Modeling for Robot Manipulation">AffordanceWAM: Affordance-Aware Joint World-Action Modeling for Robot Manipulation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Imagine-RL: Residual-Confidence-Guided Cross-Attention for World-Model-Augmented VLA Reinforcement Learning">Imagine-RL: Residual-Confidence-Guided Cross-Attention for World-Model-Augmented VLA Reinforcement Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="ActiveArena: Benchmarking and Understanding Active Perception in Robotic Manipulation">ActiveArena: Benchmarking and Understanding Active Perception in Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="ME-Brain-1.0: Memory, Cognition and Action for Evolving Embodied Intelligence">ME-Brain-1.0: Memory, Cognition and Action for Evolving Embodied Intelligence</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span></div>
 </section>
 </div>
 
