@@ -21,14 +21,14 @@
       <span class="dpr-home-dashboard-kicker">2026-10-06</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 20 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 38 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>8</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>23</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-06 00:50:04 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-06 23:14:10 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-06 日报精选 20 篇自动驾驶与机器人研究，含 8 篇精读、12 篇速读。最值得看的是两篇 9.0 分精读：VehicleArena 提供多智能体驾驶的真实城市环境，ExceptionDrive 则给出面向规划的反事实极端场景基准。普通读者可先读这两篇精读，再按兴趣浏览机器人策略微调与 V2V 协同感知的速读文章。</p>
+<p>2026-10-06 日报筛选38篇、精读15篇，聚焦自动驾驶语言规划与生成场景评估两大高分方向。最值得看的是两篇9.0分工作：doPlan 提供多阶段语言条件规划数据集，另一篇则评估生成场景模型的物理一致性与合理性。普通读者可先读这两篇精读，再按兴趣速读机器人策略适配与空间时序表示等8分方向。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">8 篇</strong>
+    <strong class="dpr-home-dashboard-count">15 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="VehicleArena: A Realistic Urban Environment for Multi-Agent Driving">VehicleArena: A Realistic Urban Environment for Multi-Agent Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="ExceptionDrive: A Planning-Oriented Counterfactual Corner-Case Benchmark for Autonomous Driving">ExceptionDrive: A Planning-Oriented Counterfactual Corner-Case Benchmark for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Brain-SAD: A Brain-Inspired Safe Autonomous Driving Control Framework with Dynamic Fear-Oriented Constraint on Dual-Policy">Brain-SAD: A Brain-Inspired Safe Autonomous Driving Control Framework with Dynamic Fear-Oriented Constraint on Dual-Policy</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="doPlan: A Variable-Horizon Dataset for Multi-Stage Language-Conditioned Planning in Autonomous Driving">doPlan: A Variable-Horizon Dataset for Multi-Stage Language-Conditioned Planning in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Evaluating Physical Consistency and Plausibility in Generative Scenario Models for Autonomous Driving">Evaluating Physical Consistency and Plausibility in Generative Scenario Models for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive">GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>4</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>9</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">12 篇</strong>
+    <strong class="dpr-home-dashboard-count">23 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="RoboFFT: Finetuning generative robot policy via online reinforcement learning with forward process">RoboFFT: Finetuning generative robot policy via online reinforcement learning with forward process</span></li><li><span class="dpr-home-dashboard-paper-title" title="Copper-Policy: Focus on the Representation for Robust Robot Manipulation">Copper-Policy: Focus on the Representation for Robust Robot Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="SV2V-RSim: A Comprehensive Benchmark for Self-Selective V2V Cooperative Perception with Near-Realistic Data">SV2V-RSim: A Comprehensive Benchmark for Self-Selective V2V Cooperative Perception with Near-Realistic Data</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Principal Steering Subspaces for Online Adaptation of Frozen Generative Robot Policies">Principal Steering Subspaces for Online Adaptation of Frozen Generative Robot Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Achieve What You Imagined: Learning to Align Actions with Visual Plans">Achieve What You Imagined: Learning to Align Actions with Visual Plans</span></li><li><span class="dpr-home-dashboard-paper-title" title="Robot-GST: geometry-aware spatial-temporal robot policy representation and evaluation">Robot-GST: geometry-aware spatial-temporal robot policy representation and evaluation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>20</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
 </div>
 
