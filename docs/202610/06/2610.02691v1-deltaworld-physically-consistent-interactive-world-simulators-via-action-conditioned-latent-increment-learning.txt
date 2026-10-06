@@ -1,0 +1,1105 @@
+1
+DeltaWorld: Physically Consistent Interactive World Simulators via
+Action-Conditioned Latent Increment Learning
+Boyuan Hou1,†, Xiaoge Cao2,4,†, Chaofan Zhang3,∗, Shuo Wang3, and Shaowei Cui1,3,∗
+1Imprintx Robotics
+2Electric Power Research Institute of State Grid Jibei Electric Power Co., Ltd.
+3Institute of Automation, Chinese Academy of Sciences
+4North China Electric Power Research Institute Co., Ltd.
+Abstract—Interactive world simulators can provide scalable
+environments for robot planning, policy training, and evaluation
+by predicting action consequences while reducing reliance on
+repeated physical rollouts. To serve these applications, they
+must generate future image sequences that respond faithfully
+to robot actions and preserve the dynamics of robot-object
+interactions over long horizons. However, existing world models
+typically predict the entire next latent state and often fail to
+capture subtle changes induced by robot actions. Such omis-
+sions can produce physically implausible outcomes, including
+object interpenetration and excessive deformation. To address
+this limitation, we propose DeltaWorld, a physically consis-
+tent interactive world simulator for robotic manipulation. Our
+method introduces the Delta Latent Transition Model (Delta-
+LTM), which predicts action-induced latent feature changes and
+adds them to the current latent state to obtain the next state,
+rather than predicting the next latent state directly. To mitigate
+object interpenetration and excessive deformation in predicted
+future frames, Interaction-aware Latent Alignment is introduced
+to construct counterfactual interaction regions and supervise
+interaction-related latent changes. DeltaWorld is evaluated on
+the IWS manipulation benchmark and a self-collected cross-robot
+dataset covering multiple robot embodiments and manipulation
+tasks. On the cross-robot dataset, DeltaWorld reduces FVD by
+46.6% and LPIPS by 31.1% relative to the IWS baseline. These
+results highlight the potential of DeltaWorld for long-horizon
+action-conditioned video prediction in robotic manipulation.
+Index Terms—World models, robot manipulation, latent dy-
+namics, action-conditioned video prediction, physical consistency.
+I. INTRODUCTION
+W
+ITH the increasing adoption of data-driven approaches
+in robotic manipulation, real-world robot interaction
+data have become a fundamental resource for learning com-
+plex manipulation behaviors [1]–[5]. However, policy training,
+action exploration, and performance evaluation often require
+repeated physical robot rollouts. These rollouts consume time
+and hardware resources, limiting the scale and reproducibility
+of experiments [1], [6]. World models offer a promising way
+to reduce reliance on physical rollouts by learning action-
+conditioned environment dynamics from existing robot in-
+teraction data. Such models can simulate the outcomes of
+robot actions, thereby supporting planning [7], [8], policy
+learning, and evaluation [6], [9], [10]. Unlike conventional
+†The two authors contributed equally to this work.
+*Corresponding author: Chaofan Zhang and Shaowei Cui.
+image prediction models that primarily focus on visual appear-
+ance changes, world models for robotic manipulation place
+greater emphasis on action-conditioned environment evolution,
+including object motion, robot–object interactions, and long-
+horizon action consequences [11].
+To realize action-conditioned prediction, recent work has
+explored different representations of future robot observations.
+JEPA-style models forecast learned visual features without
+directly reconstructing pixels [12], [13]. The Interactive World
+Simulator (IWS) learns action-conditioned dynamics in a
+compact image latent space and decodes predicted states into
+video [6]. In parallel, video-generative world models support
+interactive evaluation by conditioning future frames on policy-
+derived latent actions [14] or on frame-level controls with
+pose-conditioned memory [10]. More recently, dWorldEval
+has modeled observations and actions jointly as discrete to-
+kens, with sparse keyframes to support long-horizon predic-
+tion [15].
+Despite these advances, predicting robot manipulation
+videos remains difficult when an action changes only a small
+part of the scene. Most of the image may stay the same
+between adjacent frames, while a robot action can move an
+object or alter its shape. Models that directly predict future
+frames or their latent representations may capture the largely
+unchanged scene while missing small changes to manipulated
+objects. The resulting errors can grow during autoregressive
+rollout and cause object drift or implausible deformation.
+Therefore, the key challenge is to predict the changes caused
+by robot actions, especially in regions where the robot interacts
+with objects.
+To address this challenge, we propose DeltaWorld, a phys-
+ically consistent interactive world simulator that predicts
+action-induced latent changes instead of the entire next latent
+state. Our method introduces the Delta Latent Transition
+Model (Delta-LTM), which estimates these changes and adds
+them to the current latent state to obtain the next state.
+Interaction-aware Latent Alignment uses counterfactual in-
+teraction regions to emphasize changes around robot–object
+interactions during training. Experiments on the IWS bench-
+mark and a self-collected cross-robot dataset show improved
+action-conditioned video prediction quality and long-horizon
+consistency across multiple manipulation tasks and robot em-
+bodiments. Our main contributions are summarized as follows:
+1) We propose DeltaWorld, an interactive world simulator
+arXiv:2610.02691v1  [cs.RO]  2 Oct 2026
+
+
+2
+built on the Delta Latent Transition Model (Delta-LTM),
+which predicts action-conditioned latent increments to
+update the current state, promoting stable long-horizon
+prediction and physically plausible interaction dynamics.
+2) We
+introduce
+Interaction-aware
+Latent
+Alignment,
+which provides structured supervision over task-relevant
+regions and encourages the simulator to capture the
+physical regularities underlying object changes rather
+than appearance-dominated latent transitions.
+3) We conduct systematic evaluations on the IWS manip-
+ulation benchmark and a self-collected dataset covering
+multiple robot embodiments. Experimental results show
+that DeltaWorld outperforms existing world model base-
+lines across image- and video-level metrics for action-
+conditioned video prediction, while ablation studies fur-
+ther verify the complementary roles of Delta-LTM and
+Interaction-aware Latent Alignment.
+II. RELATED WORKS
+A. World Models for Robotic Manipulation
+World models have recently emerged as an important re-
+search direction in robot learning. By learning predictive mod-
+els of how the environment evolves under robot actions, robots
+can internally simulate possible future outcomes, enabling
+applications such as planning, control, policy steering, and
+policy evaluation [6]–[10]. Early and classical world-modeling
+approaches typically learn environment dynamics in compact
+state spaces and use the learned models for model-based deci-
+sion making and control [16], [17]. More recently, advances in
+visual generative modeling have motivated world models that
+learn action-conditioned environment dynamics directly from
+high-dimensional visual observations, often through compact
+latent representations [6], [7], [18].
+Existing visual world models have mainly developed along
+two representative directions. One line of work leverages
+visual priors learned by large-scale video generation models
+to support robotic planning and interaction through future
+video or visual trajectory generation [8], [19]–[21]. Another
+line builds action-conditioned predictive models directly from
+robot interaction data, allowing generated observations to ex-
+plicitly respond to robot actions and further support interactive
+rollouts, policy steering, and policy evaluation [6], [10], [22].
+These studies indicate that robotic world models are gradually
+evolving from open-ended visual generation toward interactive
+environment models that can capture action consequences
+and interaction outcomes. Nevertheless, effectively modeling
+action-driven environment state changes in a compact repre-
+sentation space remains a key challenge for achieving stable
+long-horizon prediction and physically consistent interaction.
+B. Action-conditioned Latent Dynamics
+To
+avoid
+long-horizon
+prediction
+directly
+in
+high-
+dimensional pixel space, an increasing number of recent
+studies have explored action-conditioned dynamics in compact
+latent spaces. These methods typically map visual observations
+into latent states using pretrained visual encoders, autoen-
+coders, or joint-embedding models, and predict future states
+from historical latent representations and robot actions [6], [7],
+[23], [24]. For example, DINO-WM [7] directly predicts future
+patch-level representations based on pretrained visual features,
+thereby avoiding explicit pixel reconstruction. IWS [6] adopts
+a two-stage framework, where an action-conditioned latent dy-
+namics model is learned after freezing the visual autoencoder.
+Recent studies have further investigated whether latent
+dynamics representations truly preserve information relevant
+to control and interaction. One line of work employs joint-
+embedding prediction [25] or task-relevant representation
+learning [12] to encourage future latent representations to
+focus more on state information useful for planning [26].
+Another line of work further leverages predicted latent states,
+latent subgoals, or action-relevant representations for action
+generation and policy learning [27]–[31]. These studies sug-
+gest that, compared with directly generating future observa-
+tions at the pixel level, modeling action-conditioned environ-
+ment evolution in latent space [32] can provide more com-
+pact and decision-relevant dynamics representations. However,
+most existing methods still take future latent states or future
+visual representations as their primary prediction targets, while
+explicitly modeling latent state transitions induced by robot
+actions has received comparatively less attention. In contrast,
+we focus on the action-conditioned latent transition itself and
+explicitly model this transition in interaction-relevant regions.
+C. World Models for Policy Training and Evaluation
+Beyond predicting future environment evolution, world
+models can also serve as interactive surrogate environments
+that provide scalable data sources for robot policy training. Im-
+itation learning and vision-language-action policies typically
+rely on large amounts of high-quality real-robot demonstra-
+tions, while collecting such data is costly, hardware-dependent,
+and difficult to scale rapidly. To alleviate this bottleneck, recent
+studies have begun to use world models as interactive environ-
+ments for data generation and policy optimization, supporting
+synthetic interaction trajectory generation, data augmentation,
+and world-model-based policy training and post-training [33]–
+[39]. IWS further demonstrates that demonstrations can be
+collected directly within a learned interactive world model
+to support the training of multiple imitation learning policies
+without requiring additional real-robot interaction [6].
+Another important application of world models is robot
+policy evaluation. Real-world evaluation often requires re-
+peated environment resets, human supervision, and substantial
+hardware runtime, while strictly controlling initial conditions
+across experiments is difficult. These factors make large-
+scale checkpoint selection and policy comparison challenging.
+To address this issue, an increasing number of studies have
+explored action-conditioned video world models as surro-
+gates for the real environment, estimating policy performance
+through closed-loop interaction between the policy and the
+generated environment [14], [15], [40]–[42]. Works such as
+WorldEval [14], WorldGym [40], and dWorldEval [15] sug-
+gest that world-model-based evaluation can, to some extent,
+preserve the relative performance ordering among different
+policies or model checkpoints, while providing a scalable and
+
+
+3
+reproducible environment for screening policies before real-
+world deployment.
+III. METHOD
+A. Overview
+We propose a physically consistent interactive world sim-
+ulator that learns action-conditioned environment evolution
+through structured latent-state transition modeling. Given a
+robot interaction sequence
+E = {(ot, at)}T
+t=0,
+where ot ∈R3×H×W denotes the visual observation at time
+t, and at ∈Rda denotes the corresponding robot action. Our
+goal is to predict future visual observations conditioned on an
+initial visual context and a sequence of robot actions.
+As shown in Fig. 1, our framework follows a two-stage
+training paradigm. In the first stage, an encoder Eϕ maps each
+visual observation to a compact 2D latent representation:
+zt = Eϕ(ot),
+zt ∈RC×H′×W ′.
+We employ a consistency-based conditional decoder Dθ to
+reconstruct each visual observation. To improve its robustness
+to perturbations in the latent representation, we inject small
+Gaussian noise into the encoded latent state during training:
+˜zt = zt + ϵ,
+ϵ ∼N(0, σ2
+z).
+Conditioned on the perturbed latent, the decoder maps a noisy
+observation to one at a lower noise level:
+ˆoσ′
+t = Dθ(oσ
+t ; σ, σ′, ˜zt) ,
+σ > σ′ ≥0,
+where oσ
+t denotes the observation ot corrupted at noise level
+σ, and σ′ denotes the target noise level. The clean observation
+corresponds to σ′ = 0. This stage aims to learn compact latent
+representations that retain sufficient visual information while
+improving the decoder’s tolerance to small latent prediction er-
+rors from the dynamics model, thereby providing a stable state
+space for subsequent action-conditioned dynamics modeling.
+In Stage 2, the encoder and decoder are frozen while an
+action-conditioned dynamics model is trained to predict the
+latent feature increment induced by robot actions. Given the
+latest N latent states and the corresponding action sequence,
+the model estimates the change from the current to the next
+latent state rather than generating the entire next state. The
+predicted increment is added to the current state, and this
+update is repeated autoregressively to produce future latent
+states. By carrying largely unchanged scene features forward,
+the residual update focuses learning on action-driven object
+motion and robot-object interactions.
+Although Delta-LTM makes action-conditioned latent incre-
+ments the primary prediction target, not all latent changes are
+equally relevant to robot-object interaction. Changes related
+to robot interaction typically occupy only a small portion of
+the latent representation, while most latent locations mainly
+encode static objects or background appearance. Therefore,
+applying uniform supervision across all latent locations may
+weaken the learning signals associated with robot–object inter-
+actions. To address this issue, we further propose Interaction-
+aware Latent Alignment. Specifically, we construct a counter-
+factual interaction map by comparing the latent representations
+of the original observation and a corresponding counterfactual
+observation in which the manipulated object and the robot
+arm regions involved in the current interaction are removed.
+This interaction map identifies latent regions that are sensitive
+to robot–object interactions and assigns greater weight to the
+corresponding state transitions during dynamics learning.
+During inference, the simulator starts from observed la-
+tent states and autoregressively predicts future latent states
+conditioned on a sequence of robot actions. Each predicted
+latent state is decoded by the frozen decoder to generate the
+corresponding RGB observation, which is then used as context
+for subsequent predictions. In this way, DeltaWorld supports
+long-horizon interactive rollouts under robot action condition-
+ing and provides an interactive predictive environment for
+downstream robotic world-model applications.
+B. Delta Latent Transition Model
+Action-conditioned world models aim to capture how robot
+actions transform the current environment state into the next
+one. We therefore formulate the action-induced latent incre-
+ment as the explicit prediction target of the dynamics model,
+rather than treating it implicitly within complete future-state
+prediction. This formulation is particularly suitable for robotic
+manipulation: much of the visual scene changes little between
+adjacent frames and the action-induced dynamics are reflected
+in robot motion, object displacement, contact changes, and
+interaction responses. We introduce the Delta Latent Transition
+Model (Delta-LTM), which estimates the latent increment
+from the current state and robot actions and applies it to update
+the current state. In this way, the model learns how robot
+actions change the latent state rather than directly predicting
+the complete future state.
+Given two consecutive latent states zt and zt+1, we define
+their latent-space feature increment as
+∆zt = zt+1 −zt.
+(1)
+Rather than directly predicting the entire latent state at the next
+time step, Delta-LTM predicts the action-conditioned latent
+increment from the latest N latent states and the corresponding
+action sequence:
+c
+∆zt = Fψ (zt−N+1:t, at−N+1:t) ,
+(2)
+where Fψ denotes the action-conditioned latent dynamics
+model, and N is the history context length. The predicted
+latent state at the next time step is then obtained through a
+residual state update:
+ˆzt+1 = zt + c
+∆zt.
+(3)
+By defining ∆zt as the explicit prediction target, Delta-LTM
+directly associates action conditioning with the latent state
+change it produces. The residual update carries persistent
+information from zt into the next state, allowing the dynam-
+ics model to concentrate its capacity on predicting action-
+conditioned evolution.
+
+
+4
+Stage2: Autoregressive Latent Dynamics
+Stage1: Autoencoder
+Noisy Image
+2D Latent
+Reconstruction
+Input Image
+Time t
+…
+action-induced 
+changes
+𝒛𝒕
+ෞ
+𝒛𝒕+𝟏
+Noisy
+𝒛𝒕
+𝒛𝒕−1
+𝒛𝒕−n
+𝒛𝒕−2
+3
+𝑫𝜽
+…
+…
+N
+L
+S
+T
+Next Latent State Transition(NLST)
+N
+L
+S
+T
+Counterfactual Interaction Supervision
+𝑳𝒊𝒏𝒕𝒆𝒓𝒂𝒄𝒕𝒊𝒐𝒏
+𝑧𝑡
+𝑓𝑢𝑙𝑙
+𝑧𝑡
+𝑛𝑜−object
+𝑧𝑡
+𝑑𝑖𝑓𝑓
+…
+…
+…
+Δ𝑧𝑡
+𝑀𝐶𝑓
+Interaction Mask 
+𝑀𝑐𝑓⊙Δ𝑧𝑡
+A 
+C 
+L
+M
+FiLM
+Spatial Attention
+Temporal Atten
+Decoder 𝐷𝜃
+Encoder 𝐸𝜙
+𝒛𝒕−n+1
+𝒛𝒕+1
+𝒛𝒕
+𝒛𝒕−1
+𝒛𝒕−n+2
+𝒛𝒕+2
+𝒛𝒕
+𝒛𝒕+1
+A 
+C 
+L  
+M
+…
+Fig. 1. Overview of the proposed physically consistent interactive world simulator. Stage 1 learns a compact 2D latent representation with an autoencoder.
+Stage 2 predicts action-induced latent changes with an autoregressive dynamics model. Comparing latent features of the original scene with those of a version
+lacking the interacting robot arm and object produces a mask that increases training weight near robot-object interactions.
+To preserve the ability to model complex spatiotemporal dy-
+namics in robotic interaction, we adopt an action-conditioned
+consistency dynamics model as the underlying architecture of
+Fψ. The model represents the latent sequence as a spatiotem-
+poral tensor and uses 3D convolutions to extract local spa-
+tiotemporal features. Robot actions are injected through FiLM
+conditioning, while spatial attention and temporal attention
+are employed to model dependencies across spatial regions
+and temporal dimensions. Accordingly, Fψ predicts the action-
+conditioned latent transition as its output, while the next latent
+state is recovered through the residual update in Eq. (3).
+To supervise the predicted latent transition, we constrain
+the residual between c
+∆zt and the ground-truth transition ∆zt.
+This residual serves as the basis for both global dynamics
+supervision and the subsequent interaction-aware local super-
+vision. The specific training objectives are presented together
+in Sec. III-D.
+C. Interaction-aware Latent Alignment
+In robotic manipulation, critical state changes typically oc-
+cur around robot-object interactions, while the background re-
+mains relatively stable. When every latent location contributes
+equally to the training loss, the many background locations
+can overshadow the few locations where the robot interacts
+with objects. The model may then miss small changes in
+object position or contact. To address this issue, we introduce
+Interaction-aware Latent Alignment, which uses counterfactual
+interaction supervision to identify latent regions associated
+with robot-object interactions and assigns greater weight to
+prediction errors in these regions.
+Specifically, given the original observation ofull
+t
+at time t,
+we first obtain the latent state of the complete scene using the
+frozen encoder:
+zfull
+t
+= Eϕ
+ ofull
+t
+
+.
+(4)
+We then construct a corresponding counterfactual observation
+ocf
+t by jointly removing the manipulated object and the robot
+arm regions involved in the current interaction, while preserv-
+ing the remaining scene content. Using the same encoder, we
+obtain
+zcf
+t = Eϕ
+ ocf
+t
+
+.
+(5)
+The two observations differ mainly in the manipulated
+object and the robot arm involved in the interaction. A large
+difference between their encoded features at a latent location
+therefore suggests that this location is associated with the
+interaction. We define the counterfactual latent difference as
+zdiff
+t
+=
+zfull
+t
+−zcf
+t
+ .
+(6)
+We average the latent differences across channels, normalize
+the resulting map, and threshold it to obtain a binary interac-
+tion region mask:
+M int
+t
+= B
+ 
+N
+ 
+1
+C
+C
+X
+c=1
+zdiff
+t,c
+!!
+,
+(7)
+
+
+5
+Interaction-aware Latent Alignment
+𝑳𝒊𝒏𝒕𝒆𝒓𝒂𝒄𝒕𝒊𝒐𝒏
+𝑧𝑡
+𝑑𝑖𝑓𝑓
+Δ𝑧𝑡
+𝑀𝐶𝑓
+Region 
+Mask 
+𝑀𝑐𝑓⊙Δ𝑧𝑡
+𝐸𝜙
+Fig. 2.
+Illustration of Interaction-aware Latent Alignment. Comparing the
+latent representations of the original and interaction-removed observations
+yields a mask that emphasizes robot–object interaction regions during training.
+where N(·) denotes the normalization operation and B(·)
+denotes the thresholding operation used to obtain a binary
+interaction region mask. The resulting M int
+t
+is used to localize
+latent regions that are highly relevant to robot–object interac-
+tions. As shown in Fig. 2, Interaction-aware Latent Alignment
+first removes the robot–object interaction regions from the
+original observation and extracts latent representations from
+both the full and counterfactual observations using the same
+frozen encoder. The resulting latent difference is then used to
+construct the interaction region mask, which provides a spatial
+constraint for the subsequent localized supervision of latent
+state transitions.
+Based on the interaction region mask, we further apply
+localized supervision to the latent increments modeled by
+Delta-LTM. Given the ground-truth latent increment ∆zt and
+the predicted latent increment c
+∆zt, we first define the latent
+increment prediction residual as
+et = c
+∆zt −∆zt.
+(8)
+We then extract the interaction-region residual using the inter-
+action mask:
+eint
+t
+= M int
+t
+⊙et,
+(9)
+where ⊙denotes element-wise multiplication, with the spatial
+mask broadcast along the latent channel dimension.
+Interaction-aware Latent Alignment does not introduce an
+additional dynamics prediction target. Instead, it applies spa-
+tially selective supervision to the same latent increment pre-
+diction. The interaction region mask encourages the model to
+focus on latent changes associated with robot-object interac-
+tions.
+D. Training and Inference
+After Stage 1, the encoder Eϕ and decoder Dθ are frozen,
+and only the dynamics model Fψ is optimized. Ground-
+truth observations provide teacher-forced latent histories, while
+noise at level s improves robustness to imperfect rollout
+contexts. The target increment and its prediction residual are
+∆zs
+t = zs
+t+1 −zs
+t ,
+es
+t = c
+∆z
+s
+t −∆zs
+t .
+(10)
+The residual is penalized globally and within the interaction
+mask M int
+t
+:
+Lglobal,t = ∥es
+t∥2
+2 + λ∆∥es
+t∥1 .
+(11)
+Lint,t = λobj−z
+M int
+t
+⊙es
+t
+2
+2
++ λobj−∆
+M int
+t
+⊙es
+t
+
+1 .
+(12)
+The combined Stage 2 objective is
+Ldyn = Et [ωt (Lglobal,t + γ(k)Lint,t)] ,
+(13)
+Here, ωt emphasizes more distant prediction steps, and γ(k)
+gradually increases the contribution of the interaction loss dur-
+ing training. At inference, the initial observation is encoded,
+and Fψ predicts each latent increment from a fixed-length
+history of latent states and the corresponding action sequence.
+Each increment updates the current latent state; the updated
+state enters the sliding history and is decoded into an RGB
+frame by Dθ.
+IV. EXPERIMENTS
+In this section, we evaluate DeltaWorld from three per-
+spectives: 1) How does DeltaWorld compare with state-of-
+the-art world models in terms of action-conditioned video
+prediction quality and long-horizon interaction consistency?
+2) Can the proposed latent increment formulation remain
+effective across different robot embodiments and manipulation
+tasks? 3) How does each proposed component contribute to
+the overall performance? We first introduce the experimental
+setup in Section IV-A. Section IV-B presents quantitative and
+qualitative comparisons on both the IWS benchmark and our
+self-collected cross-robot dataset, while Section IV-C provides
+ablation studies of Delta-LTM and Interaction-aware Latent
+Alignment.
+A. World Model Instantiation
+We instantiate DeltaWorld on five robotic manipulation
+tasks from the Interactive World Simulator (IWS) benchmark,
+including T-pushing, bimanual box manipulation, bimanual
+sweeping, bimanual rope manipulation, and single-arm grasp-
+ing. These tasks cover rigid-object manipulation, deformable-
+object interaction, as well as both single-arm and bimanual
+manipulation settings. For each task, the training set contains
+approximately 500–600 interaction episodes. Each dataset pro-
+vides two camera views. Following the experimental protocol
+of IWS, we train and evaluate independent world models for
+different camera views.
+To further evaluate the applicability of DeltaWorld across
+different robot platforms, we additionally collect four manip-
+ulation tasks using three different robot platforms, including
+whiteboard wiping, chip grasping, cable arrangement, and Peg-
+in-Hole. The corresponding training sets contain 127, 329,
+886, and 893 episodes, respectively, covering different robot
+embodiments, action spaces, and forms of robot–object inter-
+action. Unlike the IWS datasets, the interaction trajectories
+in our self-collected datasets have task-dependent variable
+lengths, preserving the natural variation in trajectory duration
+
+
+6
+Step 0
+Step 10
+Step 65
+Step 75
+Step 139
+Step 149
+…
+…
+…
+…
+…
+…
+…
+…
+…
+…
+GT
+Ours
+IWS
+Cosmos 3
+LeWorld
+Peg 
+Insertion
+Chip 
+Grasping
+Cable 
+Routing
+Rope 
+Routing
+Mug 
+Grasping
+(a) Predictions at Early, Middle, and Late Stages of T Pushing
+(b) Terminal Predictions(Step 149) across Representative Tasks
+Position 
+Drift
+Robot 
+Collapse
+Detail 
+Loss
+Fig. 3. Qualitative comparison of long-horizon action-conditioned video prediction. (a) Predictions on the T Pushing task at the beginning, middle, and end
+of a 150-frame autoregressive rollout, with paired frames separated by 10 steps at each stage. Compared with the baselines, DeltaWorld better preserves
+object position, robot appearance, and fine-grained visual details over long-horizon prediction. (b) Terminal predictions at Step 149 across representative
+manipulation tasks, including Peg Insertion, Chip Grasping, and Cable Routing from our self-collected dataset, and Rope Routing and Mug Grasping from
+the IWS benchmark.
+that arises during real-world data collection across different
+manipulation tasks.
+All visual observations are represented as RGB images with
+a resolution of (128×128). Stage 1 autoencoder training uses
+individual image frames as training samples, while Stage 2
+latent dynamics training uses sequence windows of 10 frames.
+During evaluation, the model takes the first observed frame
+as the initial condition and autoregressively generates future
+prediction sequences of up to 150 frames.
+B. Video Baseline Comparisons
+To evaluate the performance of DeltaWorld on action-
+conditioned video prediction, we compare it with several
+representative world models, including LeWorld [23], Cos-
+mos3 [19], and IWS [6]. All methods use the same data splits
+and evaluation protocol. We report FID, FVD, LPIPS, PSNR,
+SSIM, and MSE to comprehensively evaluate visual quality,
+perceptual consistency, and temporal prediction performance.
+For the baseline models, LeWorld and IWS are trained
+from scratch following their publicly released implementations
+and default training configurations, with the corresponding
+method-specific hyperparameter settings. Cosmos 3 provides
+an official fine-tuning pipeline for robotic data. We therefore
+first convert the robot interaction data into the required format
+and then fine-tune the model using the default Cosmos 3 fine-
+tuning settings. All methods are trained using the same training
+data and validation splits and are evaluated under a consistent
+rollout setting.
+We first compare the methods on five robotic manipulation
+tasks from the IWS benchmark under two camera views.
+TABLE I
+ACTION-CONDITIONED VIDEO PREDICTION ON THE IWS MANIPULATION
+BENCHMARK, AVERAGED OVER FIVE TASKS AND TWO CAMERA VIEWS.
+Method
+FID ↓
+FVD ↓LPIPS ↓PSNR ↑SSIM ↑MSE ↓
+LeWorld [23] 149.89 1647.68
+0.1655
+24.89
+0.8551
+0.0048
+Cosmos3 [19]
+75.38
+612.39
+0.2948
+16.86
+0.4091
+0.0853
+IWS [6]
+44.16
+264.52
+0.0661
+28.80
+0.8537
+0.0054
+Ours
+36.04
+231.98
+0.0490
+31.22
+0.9011
+0.0039
+Table I summarizes the average results across all tasks and
+views. DeltaWorld achieves the best overall performance
+across all evaluation metrics. Compared with IWS, FID and
+FVD are reduced from 44.16 and 264.52 to 36.04 and 231.98,
+respectively, while LPIPS decreases from 0.0661 to 0.0490.
+PSNR, SSIM, and MSE also show consistent improvements.
+These results indicate that explicitly modeling action-driven
+latent state transitions improves perceptual and temporal con-
+sistency over long-horizon prediction while preserving visual
+reconstruction quality.
+To further examine the applicability of DeltaWorld across
+different robot embodiments, we conduct the same compari-
+son on our self-collected cross-robot dataset, which includes
+three robot platforms: Imeta, UR5, and Franka. As shown in
+Table II, DeltaWorld maintains consistent advantages across
+different robot structures, action spaces, and interaction pat-
+terns. Compared with IWS, FVD is substantially reduced from
+168.98 to 90.31, corresponding to a relative improvement of
+approximately 46.6%, while LPIPS, PSNR, SSIM, and MSE
+are also further improved. The improvement in FVD suggests
+that the main advantage of DeltaWorld lies in modeling action-
+
+
+7
+TABLE II
+ACTION-CONDITIONED VIDEO PREDICTION ON OUR CROSS-ROBOT
+MANIPULATION DATASET, AVERAGED OVER FOUR TASKS ACROSS THREE
+ROBOT PLATFORMS.
+Method
+FID ↓
+FVD ↓LPIPS ↓PSNR ↑SSIM ↑MSE ↓
+LeWorld [23] 150.30 1052.66
+0.1161
+21.24
+0.8598
+0.0091
+Cosmos3 [19] 105.95
+876.19
+0.2349
+14.79
+0.5376
+0.1495
+IWS [6]
+39.37
+168.98
+0.0440
+28.20
+0.8700
+0.0075
+Ours
+37.26
+90.31
+0.0303
+30.21
+0.9022
+0.0047
+TABLE III
+ABLATION RESULTS AVERAGED OVER THE IWS BENCHMARK AND THE
+SELF-COLLECTED CROSS-ROBOT DATASET.
+Method
+FID ↓FVD ↓LPIPS ↓PSNR ↑SSIM ↑MSE ↓
+w/o Int. Align.
+37.93 207.60
+0.0525
+29.73
+0.8822
+0.0052
+w/o Delta-LTM
+37.92 228.03
+0.0569
+29.17
+0.8628
+0.0063
+DeltaWorld
+36.39 191.50
+0.0437
+30.93
+0.9014
+0.0042
+conditioned dynamics and long-horizon temporal consistency,
+rather than merely improving single-frame appearance quality.
+These results further indicate that the proposed latent transition
+modeling approach can be applied consistently across different
+robot embodiments and manipulation tasks.
+Fig. 3 presents qualitative prediction results of different
+methods on representative tasks, including both the IWS
+benchmark and our self-collected cross-robot tasks. Com-
+pared with the baseline models, DeltaWorld more consistently
+preserves object structure, robot motion, and robot–object
+interaction relationships over longer prediction horizons, while
+reducing visual drift and dynamic inconsistencies accumulated
+during autoregressive rollout.
+C. Ablation Study
+To analyze the contributions of the Delta Latent Transition
+Model (Delta-LTM) and Interaction-aware Latent Alignment
+to the overall model performance, we conduct ablation studies
+by removing one component at a time while keeping all
+other training and evaluation settings unchanged. Table III
+summarizes the average results on the IWS benchmark and
+our self-collected cross-robot dataset.
+The complete DeltaWorld achieves the best overall perfor-
+mance across all evaluation metrics. Removing Delta-LTM
+leads to clear degradation in FVD, LPIPS, PSNR, SSIM, and
+MSE. In particular, FVD increases from 191.50 to 228.03,
+indicating that directly predicting future absolute latent states
+weakens the model’s ability to capture long-horizon dynamics.
+Removing Interaction-aware Latent Alignment also degrades
+performance across the evaluated metrics, with consistent
+drops in FVD, LPIPS, and reconstruction-quality measures.
+This suggests that strengthening supervision over latent re-
+gions associated with robot–object interactions further im-
+proves perceptual consistency and interaction stability.
+Delta-LTM
+reformulates
+the
+dynamics
+prediction
+tar-
+get along the temporal dimension by estimating action-
+conditioned latent increments and applying them to the current
+state, whereas Interaction-aware Latent Alignment strengthens
+robot–object interaction-related state changes along the spatial
+dimension. Their combination yields the best overall perfor-
+mance, supporting the importance of both modeling what
+changes and emphasizing which changes matter for learning
+stable and interaction-consistent latent dynamics.
+V. CONCLUSION
+In this work, we presented DeltaWorld, a physically consis-
+tent interactive world simulator for robotic world models. In-
+stead of treating the complete future latent state as the primary
+prediction target, the Delta Latent Transition Model (Delta-
+LTM) estimates action-conditioned latent increments and ap-
+plies them to update the current state. Interaction-aware Latent
+Alignment further emphasizes transition errors in robot–object
+interaction-sensitive regions through counterfactual supervi-
+sion. Together, these two components provide an increment-
+based and interaction-aware formulation for learning robotic
+world dynamics. Experiments on the IWS manipulation bench-
+mark and a self-collected multi-robot dataset demonstrate
+improved action-conditioned video prediction across image-
+and video-level metrics, while ablation studies confirm the
+complementary roles of the two components.
+REFERENCES
+[1] Open X-Embodiment Collaboration et al., “Open X-Embodiment:
+Robotic learning datasets and RT-X models,” 2025. [Online]. Available:
+https://arxiv.org/abs/2310.08864
+[2] F. Lin, Y. Hu, P. Sheng et al., “Data scaling laws in imitation
+learning for robotic manipulation,” 2026. [Online]. Available: https:
+//arxiv.org/abs/2410.18647
+[3] Zhaxizhuoma, K. Liu, C. Guan et al., “Fastumi: A scalable and
+hardware-independent universal manipulation interface with dataset,”
+2025. [Online]. Available: https://arxiv.org/abs/2409.19499
+[4] M. Zhao, D. Huang, Y. Tang et al., “Axis: A growable community-
+driven data engine for scalable robot manipulation,” 2026. [Online].
+Available: https://arxiv.org/abs/2607.21588
+[5] H. Luo, Y. Wang, W. Zhang et al., “Being-h0.5: Scaling human-centric
+robot learning for cross-embodiment generalization,” 2026. [Online].
+Available: https://arxiv.org/abs/2601.12993
+[6] Y. Wang, R. Syed, F. Wu et al., “Interactive world simulator for
+robot policy training and evaluation,” 2026. [Online]. Available:
+https://arxiv.org/abs/2603.08546
+[7] G. Zhou, H. Pan, Y. LeCun et al., “Dino-wm: World models on
+pre-trained visual features enable zero-shot planning,” 2025. [Online].
+Available: https://arxiv.org/abs/2411.04983
+[8] B.
+Chen,
+T.
+Zhang,
+H.
+Geng
+et
+al.,
+“Large
+video
+planner
+enables
+generalizable
+robot
+control,”
+2026.
+[Online].
+Available:
+https://arxiv.org/abs/2512.15840
+[9] D. Hafner, J. Pasukonis, J. Ba et al., “Mastering diverse domains
+through world models,” 2024. [Online]. Available: https://arxiv.org/abs/
+2301.04104
+[10] Y. Guo, L. X. Shi, J. Chen et al., “Ctrl-world: A controllable generative
+world model for robot manipulation,” 2026. [Online]. Available:
+https://arxiv.org/abs/2510.10125
+[11] S. Zhou, Y. Du, J. Chen et al., “Robodreamer: Learning compositional
+world models for robot imagination,” 2024. [Online]. Available:
+https://arxiv.org/abs/2404.12377
+[12] M. Assran, A. Bardes, D. Fan et al., “V-jepa 2: Self-supervised video
+models enable understanding, prediction and planning,” 2025. [Online].
+Available: https://arxiv.org/abs/2506.09985
+[13] W. Ma, C. Zhang, C. Xue et al., “Feelworld: Visuo-tactile world
+model for hierarchical contact prediction and planning,” 2026. [Online].
+Available: https://arxiv.org/abs/2607.24267
+[14] Y.
+Li,
+Y.
+Zhu,
+J.
+Wen
+et
+al.,
+“Worldeval:
+World
+model
+as
+real-world
+robot
+policies
+evaluator,”
+2025.
+[Online].
+Available:
+https://arxiv.org/abs/2505.19017
+[15] Y. Li, Z. Zhou, Y. Chen et al., “dworldeval: Scalable robotic
+policy evaluation via discrete diffusion world model,” 2026. [Online].
+Available: https://arxiv.org/abs/2604.22152
+
+
+8
+[16] D. Hafner, T. Lillicrap, I. Fischer et al., “Learning latent dynamics for
+planning from pixels,” 2019. [Online]. Available: https://arxiv.org/abs/
+1811.04551
+[17] D. Hafner, T. Lillicrap, J. Ba et al., “Dream to control: Learning
+behaviors by latent imagination,” 2020. [Online]. Available: https:
+//arxiv.org/abs/1912.01603
+[18] F. Baldassarre, M. Szafraniec, B. Terver et al., “Back to the features:
+Dino as a foundation for video world models,” 2025. [Online].
+Available: https://arxiv.org/abs/2507.19468
+[19] NVIDIA et al., “Cosmos 3: Omnimodal world models for physical
+AI,” 2026. [Online]. Available: https://arxiv.org/abs/2606.02800
+[20] J. Jang, S. Ye, Z. Lin et al., “Dreamgen: Unlocking generalization in
+robot learning through video world models,” 2025. [Online]. Available:
+https://arxiv.org/abs/2505.12705
+[21] T.
+Wan,
+A.
+Wang,
+B.
+Ai
+et
+al.,
+“Wan:
+Open
+and
+advanced
+large-scale
+video
+generative
+models,”
+2025.
+[Online].
+Available:
+https://arxiv.org/abs/2503.20314
+[22] Y. Shang, Z. Li, Y. Ma et al., “Worldarena: A unified benchmark
+for evaluating perception and functional utility of embodied world
+models,” 2026. [Online]. Available: https://arxiv.org/abs/2602.08971
+[23] L. Maes, Q. L. Lidec, D. Scieur et al., “Leworldmodel: Stable
+end-to-end joint-embedding predictive architecture from pixels,” 2026.
+[Online]. Available: https://arxiv.org/abs/2603.19312
+[24] Q.
+Garrido,
+T.
+Nagarajan,
+B.
+Terver
+et
+al.,
+“Learning
+latent
+action
+world
+models
+in
+the
+wild,”
+2026.
+[Online].
+Available:
+https://arxiv.org/abs/2601.05230
+[25] A. Lanji, D. Liu, J. Li et al., “Unijepa: A unified joint-embedding
+predictive architecture for task-agnostic visual world modeling,” 2026.
+[Online]. Available: https://arxiv.org/abs/2608.07409
+[26] L. F. Toso, D. Shadunts, Y. Lu et al., “Learning invariant visual
+representations for planning with joint-embedding predictive world
+models,” 2026. [Online]. Available: https://arxiv.org/abs/2602.18639
+[27] J. Chen, K. Wang, K. Chen et al., “Lawam: Latent world action models
+for efficient dynamics-aware robot policies,” 2026. [Online]. Available:
+https://arxiv.org/abs/2606.15768
+[28] F. Lei, Z. Huang, L. Yang et al., “Dele-w0.5: Inferring action from
+future latent state for robotic manipulation,” 2026. [Online]. Available:
+https://arxiv.org/abs/2608.22067
+[29] Y. Han and A. Yilmaz, “Enhancing policy learning with world-action
+model,” 2026. [Online]. Available: https://arxiv.org/abs/2603.28955
+[30] X. Liu, Y. Yang, X. Wang et al., “Stagewam: Joint-embedding stage
+prediction for world-action models in robot manipulation,” 2026.
+[Online]. Available: https://arxiv.org/abs/2608.10780
+[31] F. Yang, Y. Su, X. Wang et al., “Lila-wam: Lightweight latent reasoning
+world-action model for robotic manipulation,” 2026. [Online]. Available:
+https://arxiv.org/abs/2608.03701
+[32] Z. Huang, J. Zhang, H. Liu et al., “Learning transferable dynamics
+priors from action to world modeling,” 2026. [Online]. Available:
+https://arxiv.org/abs/2606.29501
+[33] J. Xiao, Y. Yang, X. Chang et al., “World-env: Leveraging world
+model as a virtual environment for vla post-training,” 2026. [Online].
+Available: https://arxiv.org/abs/2509.24948
+[34] F. Zhu, Z. Yan, Z. Hong et al., “Wmpo: World model-based
+policy optimization for vision-language-action models,” 2025. [Online].
+Available: https://arxiv.org/abs/2511.09515
+[35] X. Liu, Z. Bai, H. Ci et al., “World-vla-loop: Closed-loop learning
+of video world model and vla policy,” 2026. [Online]. Available:
+https://arxiv.org/abs/2602.06508
+[36] J.
+Yang,
+K.
+Lin,
+J.
+Li
+et
+al.,
+“Rise:
+Self-improving
+robot
+policy with compositional world model,” 2026. [Online]. Available:
+https://arxiv.org/abs/2602.11075
+[37] Z. Zhang, H. Ren, Y. Sun et al., “Towards practical world model-
+based reinforcement learning for vision-language-action models,” 2026.
+[Online]. Available: https://arxiv.org/abs/2603.20607
+[38] A. Yu, Z. Chen, P. Song et al., “Wm-dagger: Enabling efficient data
+aggregation for imitation learning with world models,” 2026. [Online].
+Available: https://arxiv.org/abs/2604.11351
+[39] A. K. Sharma, Y. Sun, N. Lu et al., “World-gymnast: Training
+robots with reinforcement learning in a world model,” 2026. [Online].
+Available: https://arxiv.org/abs/2602.02454
+[40] J. Quevedo, A. K. Sharma, Y. Sun et al., “Worldgym: World model
+as an environment for policy evaluation,” 2025. [Online]. Available:
+https://arxiv.org/abs/2506.00613
+[41] W.-C. Tseng, J. Gu, Q. Zhang et al., “Scalable policy evaluation with
+video world models,” 2025. [Online]. Available: https://arxiv.org/abs/
+2511.11520
+[42] G. R. Team, K. Choromanski, C. Devin et al., “Evaluating gemini
+robotics policies in a veo world simulator,” 2026. [Online]. Available:
+https://arxiv.org/abs/2512.10675

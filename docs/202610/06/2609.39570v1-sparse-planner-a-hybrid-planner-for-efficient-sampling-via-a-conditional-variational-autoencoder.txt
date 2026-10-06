@@ -1,0 +1,1000 @@
+Sparse Planner: A Hybrid Planner for Efficient
+Sampling via a Conditional Variational Autoencoder
+Wenguang Xu1, Giovanni Lucente2, Karem Mohamed1, Richard Membarth1,3
+wenguang.xu@thi.de, giovanni.lucente@dlr.de, karem.mohamed@thi.de, richard.membarth@thi.de
+0 
+10 
+20 
+30 
+40 
+50 
+60 
+70 
+80 
+90 
+Cost 
+trajectory
+generation
+d [m]
+−1.8
+−0.9
+0.0
+0.9
+1.8̇
+s [m/s]
+−1 3
+7
+11 15
+t [s]
+2
+3
+4
+5
+6
+d [m]
+−1.8
+−0.9
+0.0
+0.9
+1.8̇
+s [m/s]
+−1 3
+7
+11 15
+t [s]
+2
+3
+4
+5
+6
+3 BEV images
+perception
+module
+FOP uniform dense sampling
+CVAE model
+RESNET18
+TOKENIZER
+x
+LINEAR
+TOKENIZER
+MULTI-HEAD ATT
+ QUERY
+MULTI-HEAD ATT
+L
+Decoder
+L
+Prior
+L
+x'
+LINEAR
+PROJECTION
+L
+L
+Encoder
+L
+MULTI-HEAD ATT
+1000 samples
+64 samples
+579 [ms]
+46 [ms]
+Fig. 1: The scheme illustrates the idea of the proposed Sparse Planner. The uniform dense sampling in the Fren´et parameter
+space is replaced with a CVAE-based sampling model, which learns an efficient sampling distribution over (d, ˙s, t) conditioned
+on the Bird’s Eye View (BEV) representation, while leaving the downstream trajectory generation module unchanged.
+Abstract—Trajectory planning is a core component of au-
+tonomous driving systems, where real-time performance and
+solution quality directly affect safety and reliability. Sample-
+Based Motion Planning (SBMP) is widely adopted for its ability
+to approximate near-optimal solutions through parameter space
+sampling. However, achieving high-quality trajectories typically
+requires dense sampling, leading to substantial computational
+overhead and significant runtime variability in complex traffic
+scenarios.
+To address this limitation, we propose a Sparse Planner (SP)
+that improves sampling efficiency by learning the conditional
+relationship between scene context and effective trajectory pa-
+rameters using a Conditional Variational Autoencoder (CVAE).
+By modeling the structure of high-quality sampling distributions,
+SP directly generates cost-effective samples in the parameter
+space, significantly reducing the required sampling density while
+preserving solution quality.
+Experimental results show that SP achieves lower trajectory
+cost than the state-of-the-art FISS+ planner while using only
+one-eighth of the sampling density. In addition, SP demonstrates
+*This work is supported by the Federal Ministry of Education and Research
+(BMBF) as part of the MANNHEIM-AutoDevSafeOps project, by the Bavar-
+ian State Ministry of Science and the Arts (StMWK) as part of the FlexType
+project as well as by the Federal Ministry for Economic Affairs and Energy
+(BMWE) as part of the nxtAIM project.
+1Research Institute AImotion Bavaria, Technische Hochschule Ingolstadt
+(THI), Ingolstadt, Germany
+2Research Institute of Transportation Systems, German Aerospace Center
+(DLR), Braunschweig, Germany
+3German Research Center for Artificial Intelligence (DFKI), Saarbr¨ucken,
+Germany
+improved distance-keeping capability in obstacle-rich scenarios
+and maintains reduced and more stable runtime characteristics,
+indicating enhanced computational efficiency and predictable
+runtime behavior.
+Index Terms—trajectory planning, conditional variational au-
+toencoder, sampling method, Fren´et optimal planner, runtime
+I. INTRODUCTION
+Trajectory planning is a core module in autonomous driving
+systems, where real-time performance directly impacts driving
+safety. With the increasing complexity of autonomous driving
+functionalities, the computational consumption of planning
+modules continues to grow. Improving runtime efficiency
+while maintaining functional reliability and real-time perfor-
+mance has therefore become a critical challenge. This practical
+demand constitutes the primary motivation for this work.
+In recent years, the rapid development of deep learning
+has motivated extensive research into data-driven approaches
+that directly predict control commands or complete trajectories
+from perception or environmental representations, serving as
+alternatives to conventional physics-based planners. However,
+such end-to-end learning-based methods often suffer from
+limited generalization in long-tail scenarios, raising concerns
+regarding safety and robustness. Moreover, the lack of inter-
+pretability in their decision-making process remains a fun-
+damental obstacle to reliable deployment. More recently, the
+arXiv:2609.39570v1  [cs.RO]  30 Sep 2026
+
+
+emergence of large language models (LLMs) has stimulated
+renewed interest in hybrid autonomous driving architectures,
+in which learning-based models are employed for high-level
+semantic understanding and decision reasoning, while low-
+level trajectory generation is still handled by conventional
+rule–based planning algorithms [1–4]. In this context, SBMP
+methods regain prominence due to their explicit constraint
+handling, probabilistic completeness, and scalability.
+However, conventional SBMP relies on dense sampling
+over a parameter space to approximate an optimal solution
+within a discretized candidate set, which leads to a severe
+combinatorial explosion and limits real-time applicability. To
+address this issue, we propose a learning-assisted sampling-
+based planner, termed Sparse Planner (SP). By leveraging a
+conditional variational autoencoder (CVAE), SP transforms
+conventional dense uniform sampling into a sparse, cost-
+biased sampling process, significantly reducing the number
+of required samples while preserving trajectory quality. As
+a byproduct of the CVAE-based sampling, the learned dis-
+tribution implicitly concentrates the samples in collision-free
+regions of the trajectory space. The proposed SP runs at an
+average of 47 ms per planning step, of which 7 ms is spent on
+CVAE inference.
+This paper makes the following contributions:
+• proposes SP, a hybrid planner based on a CVAE that
+achieves lower trajectory cost while maintaining low,
+bounded, and predictable runtime behavior (Section IV);
+• introduces a CVAE architecture featuring new design
+elements and a tailored loss formulation to improve
+sampling effectiveness (Section IV-C).
+• reduces the required sampling number to one-eighth and
+achieves a 2.5× speedup over the state-of-the-art (FISS+)
+for comparable trajectory cost levels, while also decreas-
+ing collision-induced planning failures.(Section V).
+II. BACKGROUND
+Trajectory planning over the horizon [0, T] can be formu-
+lated as a constrained optimization problem:
+τ ∗= arg min
+τ∈T J(τ)
+s.t.
+τ(0) = xinit,
+τ(T) ∈Xgoal,
+τ(t) ∈Xfree(t),
+∀t ∈[0, T],
+g(τ(t)) ≤0,
+∀t ∈[0, T].
+(1)
+where T denotes the continuous trajectory space and J(τ)
+represents the trajectory cost. The trajectory starts from the
+initial vehicle state xinit, terminates within the goal region
+Xgoal, and remains inside the time-varying collision-free state
+space Xfree(t). The inequality constraint g(τ(t)) ≤0 captures
+vehicle dynamic limits, passenger comfort requirements, and
+traffic regulations. Trajectory planning algorithms can gener-
+ally be categorized into graph-, sampling-, optimization-, and
+learning–based methods.
+Graph-based planners such as Dijkstra [5] and A* [6]
+discretize the state space and search for feasible paths over the
+resulting graph. These methods typically provide completeness
+guarantees and are used for global path planning tasks. How-
+ever, due to the inherently discrete representation of paths,
+vehicle dynamics, and temporal continuity are often modeled
+in a simplified or indirect manner, which makes it difficult to
+generate continuous, dynamically feasible trajectories.
+Optimization-based trajectory planners, such as DeepGame-
+TP [7] and Bertha [8], formulate trajectory generation as an
+optimization problem, in which a cost function is minimized
+over a finite discretized time horizon with respect to the control
+variables, while explicitly enforcing kinematic feasibility and
+safety constraints. Although fine-grained parallelism [9] can
+be exploited for inner loop kernel using techniques such as
+single instruction multiple data (SIMD), the iterative nature
+of these methods introduces strong data dependencies, which
+fundamentally limit algorithm-level parallelization. Moreover,
+their runtime behavior is often difficult to predict, posing chal-
+lenges for achieving stable real-time performance in complex
+scenarios or on resource-constrained platforms.
+In recent years, learning-based trajectory planning methods,
+such as UniAD [10] and BridgeAD [11], have emerged as
+data-driven alternatives that map environmental states or per-
+ception features into a compact latent representation, enabling
+direct prediction of control commands or trajectories with
+low inference latency at runtime. However, these methods
+typically lack explicit modeling of vehicle dynamics and safety
+constraints, resulting in limited interpretability and safety
+guarantees in safety-critical applications [12].
+In contrast, sampling-based planners approximate the con-
+tinuous planning problem by enumerating a finite set of dy-
+namically feasible motion candidates. A representative method
+in this category is the Fren´et Optimal Planner (FOP) [13],
+which specializes sampling-based planning by using a low-
+dimensional Fren´et coordinate representation. The Fren´et
+frame is defined based on a reference path given from the
+global planner, so that lateral and longitudinal motions can
+be decoupled and parameterized independently. FOP generates
+candidate trajectories by sampling a small set of interpretable
+terminal parameters over a planning horizon T, where the
+lateral motion is specified by a terminal offset d and the
+longitudinal motion by a target velocity ˙s. Smooth trajec-
+tories are constructed in the Fren´et frame using polynomial
+functions and subsequently transformed into the global coor-
+dinate system. Feasibility checks are then performed to ensure
+compliance with vehicle dynamics and safety constraints, that
+is, g(τ(t)) ≤0 and τ(t) ∈Xfree(t). Finally, a cost function
+is evaluated for each feasible candidate, and the trajectory
+with minimum cost is selected. Since candidate trajectories are
+generated and evaluated independently, FOP exhibits no inter-
+trajectory data dependency, making it particularly suitable for
+parallel computation.
+III. RELATED WORK
+A. Heuristics-Driven Sampling
+To address the trade-offs between computational efficiency
+and trajectory optimality, recent research has introduced itera-
+tive search strategies that avoid exhaustive uniform sampling.
+
+
+The Fast Iterative Search and Sampling (FISS) planner [14]
+pre-ranks candidate samples using a priority queue based
+on estimated costs. These estimates rely on a history-based
+heuristic that biases the search toward the previous cycle’s
+optimal solution. Building upon this, FISS+ [15] utilizes a two-
+stage coarse-to-fine framework that combines a discretized
+global search with a refinement stage using gradient descent.
+The refinement stage improves the solution in the continuous
+space, reducing discretization-induced suboptimality and en-
+ables a more accurate approximation of the global optimum.
+Due to its strong performance, FISS+, together with FOP,
+is employed as a benchmark method for comparison in the
+following experiments.
+B. Deep-Learning for Learning Samples Distribution
+Learning-based methods augment SBMP by learning a
+context-conditioned distribution, thereby concentrating sam-
+ples in feasible and task-relevant regions of the state space.
+Early probabilistic learning approaches have been used to bias
+SBMP via Gaussian Mixture Models (GMMs) learned online
+from collision and collision-free exemplars, enabling sample
+biasing toward predicted free regions [16, 17]. However,
+the method depends on continual acquisition of informative
+exemplars and careful tuning of parameters. Ma et al. [18]
+employ a conditional Generative Adversarial Network (GAN)
+that operates on rasterized scene representations and predicts
+dense likelihood maps. These likelihood maps require addi-
+tional post-processing to extract planner states and remain
+tightly coupled with geometric planners, as temporal dynam-
+ics are not explicitly modeled. Transformer-based sampling
+methods [19–21] have also been integrated into SBMP by
+conditioning sampling proposals on the planning context, but
+they are typically invoked sequentially at inference time, which
+scales poorly when large batches of independent samples are
+required. Related ideas appear in FOP, where terminal states
+in the Fren´et frame are sampled, and then the trajectories are
+generated by polynomials. LF-Net [22] follows this structure
+by uniformly discretizing potential terminal states and scor-
+ing them with a cross-attention-based classifier. This enables
+selecting a small set of high-probability candidates before run-
+ning full trajectory optimization. Unlike per-sample trajectory
+evaluation, this reduces computation by shifting most of the
+candidate scoring process to a parallelizable scoring stage, but
+it remains tied to discretization since solution quality depends
+on the range and resolution of the terminal-state lattice.
+Ichter et al. [23] propose a non-uniform sampling strategy
+for SBMP that favors sampling in those regions where an
+optimal solution is more likely to lie. A CVAE is used to learn
+this sampling distribution, conditioned on information specific
+to each planning problem. The method demonstrates flexibility
+and effectiveness by learning optimal, conditioned sampling
+distributions from demonstrations for robotics tasks such as
+static obstacle avoidance, path planning, and overtaking ma-
+neuvers. The approach presented in this paper builds on this
+line of work but generalizes it to the domain of autonomous
+driving. In particular, the BEV-based conditioning allows to
+handle arbitrary traffic scenarios, rather than being limited to
+specific maneuvers or predefined subtasks.
+IV. METHODOLOGY
+The SP adopts a CVAE model as its core sampling module
+to learn an efficient trajectory parameters distribution from
+perception inputs and previous successful plans. To incorporate
+temporal dynamics into the CVAE input, three consecutive
+bird’s-eye-view (BEV) frames are stacked along the channel
+dimension, generating a conditional image tensor with dimen-
+sions 3×256×256. Road geometry, obstacle information, and
+the reference path provided by a global planner are extracted
+to reconstruct the BEV environment representation. The ego
+vehicle is always placed at the center of the image and
+aligned with a fixed orientation, such that the vehicle’s heading
+direction coincides with the image’s longitudinal axis, see the
+BEV image in Fig. 1. This ego-aligned representation removes
+appearance variations caused by changing vehicle orientations,
+thereby reducing input space complexity and improving learn-
+ing consistency and generalization. The BEV image is config-
+ured as a square region centered on the ego vehicle, covering
+50 m in both longitudinal and lateral directions (i.e., 100 m
+× 100 m in total). As the line 1 in Algorithm 1 shows, the
+CVAE takes a stack of these three images as conditional inputs
+in its generative configuration, denoted by y. The number of
+generated samples N is configurable, allowing a flexible trade-
+off between planning performance and computational cost.
+Each sampled trajectory parameter vector x is mapped to a
+candidate trajectory τ F
+i
+in the Fren´et coordination, which is
+subsequently transformed into the global coordinate system
+via the coordinate transformation ΦF→G
+ τ F
+i (t)
+
+. Subsequent
+operations such as feasibility checks, collision avoidance, and
+cost function evaluation remain identical across planners, en-
+suring a fair comparison between methods. The cost function
+J is adopted from Sun et al. [cf. 15, Equation (4)].
+Since the CVAE does not strictly guarantee that all gen-
+erated samples satisfy the feasibility constraints, a fallback
+mechanism is introduced to ensure planning reliability (see
+line 9). If Sparse Planner fails to produce a feasible trajectory,
+the classical FOP is invoked to compute a valid solution,
+which is then returned as the final trajectory. Table I reports
+the activation probability of the fallback mechanism in the
+experiments, which is negligible.
+A. Dataset Recording
+The experiments utilize traffic scenarios from the Common-
+Road1 framework. To generate supervision signals for training
+the CVAE, dense uniform sampling is first performed in the
+Fren´et parameter space (d, ˙s, T) using the FOP. The optimal
+trajectory selected by FOP is then used to extract the corre-
+sponding terminal sampling parameters, which serve as the
+learning targets for the CVAE model. In the experiments, the
+number of samples, sampling ranges and resolution are defined
+as d ∈[−1.7, 1.7] m (34 samples, 0.1 m resolution), ˙s ∈
+1https://commonroad.in.tum.de/scenarios
+
+
+Algorithm 1 Sparse Planner with Parallel Trajectory Genera-
+tion.
+Input: Vehicle-centric BEV conditioning y with lanes,
+obstacles, and reference path
+Output: Optimal trajectory τ ∗
+1: Sample latent variables from prior zi ∼pξ(z|y), sample
+parameters from decoder xi ∼pθ(x|zi, y)
+i = 1, . . . , N
+2: for i = 1 to N do
+3:
+τ F
+i (t) = Ψ(xi)
+4:
+τ G
+i (t) = ΦF→G
+ τ F
+i (t)
+
+5:
+τ G
+i (t) ∈Xfree(t), g(τ G
+i (t)) ≤0, ∀t ∈[0, T]
+6:
+Ji = J
+ τ G
+i
+
+7: end for
+8: if F = ∅then
+9:
+return FOP Algorithm()
+10: end if
+11: i∗= arg min(Ji), i = 1, . . . , N
+12: return τ ∗
+[0, 14] m/s (28 samples, 0.5 m/s resolution), and T ∈[3, 5] s
+(20 samples, 0.1 s resolution). The total number of samples per
+planning cycle is 19040. Experiments are conducted on 3500
+scenarios, each lasting 5–15 s, randomly divided into training,
+validation, and test sets with a 70%/20%/10% split. The 10%
+test split (350 scenarios) is used for planner-level evaluation.
+Since CommonRoad scenarios are provided at a temporal
+resolution of 0.1 s, BEV sequences are built at the same
+frequency to ensure temporal consistency. The first input
+contains three identical initial frames; the second contains two
+initial frames and one subsequent frame. From the third step
+onward, three consecutive frames are used, forming a sliding
+window. Each stacked BEV input is paired with its associated
+optimal sampling parameters, forming input–output training
+pairs for the CVAE model. The resulting dataset is used for
+model training and validation.
+B. CVAE Training
+The scope of the model is to learn distributions in the pa-
+rameter space containing optimal trajectories and conditioned
+on the context, in this case the BEV sequence of the traffic
+scenario. Let x denote a sample in the parameter space, y the
+encoding of the conditional context, and z a sample in the
+latent space. The structure of a CVAE consists in two neural
+networks, the probabilistic encoder qϕ(z|x, y), with weights
+of the network denoted by ϕ, and the probabilistic decoder
+pθ(x|z, y), with weights θ. The probabilistic encoder approx-
+imates the posterior latent distribution p(z|x, y), conditioned
+on the context y and on the original sample x, the probabilistic
+decoder models the likelihood of the sample x conditioned on
+the latent representation z and on the same context y.
+The encoder maps the sample x into a multivariate normal
+latent distribution through a neural network qϕ(z|x, y) =
+N(z|µϕ(x, y), σ2
+ϕ(x, y)I), where the mean µϕ(x, y) and the
+variance σ2
+ϕ(x, y) of the approximate posterior are the outputs
+of the encoding neural network. The reparameterization trick
+z = µϕ(x, y) + σϕ(x, y) ⊙ϵ,
+ϵ ∼N(0, I) allows sampling
+from the approximate posterior in a differentiable way, en-
+abling gradients to be computed with respect to the encoder
+parameters.
+The
+generative
+model
+defines
+the
+joint
+distribution
+p(x, z|y) = pθ(x|z, y)p(z|y), which factorizes into the product
+of the probabilistic decoder (the likelihood term) and the prior
+distribution over the latent variables p(z|y). The conditioned
+prior is defined as pξ(z|y) = N(z|µξ(y), σ2
+ξ(y)I), where
+the mean µξ(y) and variance σ2
+ξ(y) are the outputs of a
+linear projection with weights ξ. The probabilistic decoder is
+modeled as pθ(x|z, y) = N(x|fθ(z, y), σ2I), where σ2 is set
+to be a small value and f is a deterministic function encoded
+as a neural network with weights θ that models the mean of
+the distribution.
+During training, the parameters θ, ϕ, and ξ are jointly
+optimized to reduce the reconstruction error between the input
+x and the decoder output fθ(z, y), and to reduce the difference
+between the approximated posterior qϕ(z|x, y) and the true
+posterior p(z|x, y). To achieve this, the evidence lower bound
+(ELBO) is maximized [24]:
+Lθ,ϕ,ξ(x|y) = log pθ(x|y) −DKL(qϕ(z|x, y)||p(z|x, y)) (2)
+that corresponds to maximize the log-likelihood of the ob-
+served data (conditioned on the context y) and to minimize
+the Kullback–Leibler divergence of the approximate from the
+true posterior. Equation 2 must be reformulated accordingly
+because the terms pθ(x|y) and p(z|x, y) are intractable. Con-
+sidering that pθ(x|z, y) = N(x|fθ(z, y), σ2I), the ELBO is,
+up to an additive constant, proportional to:
+Lθ,ϕ,ξ(x|y) ∝−Ez∼qϕ(z|x,y)[||x −fθ(z, y)||2
+2] +
+−DKL(qϕ(z|x, y)||pξ(z|y))
+(3)
+Where the Kullback-Leibler divergence is reformulated using
+the prior pξ(z|y). The CVAE is then trained using the follow-
+ing loss:
+θ∗, ϕ∗, ξ∗= arg min
+θ,ϕ,ξ −Lθ,ϕ,ξ(x|y) +
++ Ez∼pξ(z|y)[||x −fθ(z, y)||2
+2]
+(4)
+Where the first term is the negative ELBO, while the second
+term is the mean squared error (MSE) loss between the
+generated sample and the ground-truth data.
+C. CVAE Architecture
+The architecture for training and generation is illustrated
+in Fig. 2. In the following, the main components of the
+architecture are analyzed.
+Tokenization: The three conditioning frames y are stack
+into a single tensor of shape (3, 256, 256). After normalization,
+this tensor is then processed through a pretrained ResNet18
+model to produce a sequence of tokens of shape (64, 32). The
+network input x = (d, ˙s, T) is also tokenized into a tensor of
+shape (16, 32). Learned positional encoding vectors are added
+to both token sequences.
+
+
+RESNET18
+TOKENIZER
+x
+LINEAR
+TOKENIZER
+MULTI-HEAD ATT
+ QUERY
+MULTI-HEAD ATT
+L
+Decoder
+L
+Prior
+L
+x'
+LINEAR
+PROJECTION
+L
+L
+Encoder
+L
+MULTI-HEAD ATT
+Fig. 2: Architecture of the CVAE. During training, the encoder–decoder modules map the distribution of the optimal parameters,
+conditioned on the BEV embeddings, into a latent space and back to the parameter space. During inference, the encoder is
+replaced by the prior, from which the latent representation is sampled, while the same decoder as used during training generates
+the output.
+Encoder: The tokenized input is fed as a query to a multi-
+head cross-attention layer, which forms the backbone of the
+encoder, with keys and values coming from the BEV context.
+The resulting output is pooled along the token sequence
+dimension and linearly projected to produce the parameters
+of the latent space distribution, µ and log σ2, but tensors of
+shape (64). The latent representation z is then sampled from
+this distribution through the reparameterization trick.
+Decoder: The sampled latent representation z is projected
+into the token space via a linear tokenizer. This (16, 32) query
+then attends to the conditioning representation y through cross-
+attention. Finally, a learned (1, 32) query vector attends over
+the token sequence via cross-attention, aggregating the infor-
+mation into a single representation. The output is projected
+back into the input space.
+Prior: During conditioned generation, the posterior distri-
+bution modeled by the encoder is replaced with the prior
+distribution, whose parameters µ and log σ2 are computed via
+two linear layers. In this work, the prior is conditioned on the
+BEV context, p(z|y).
+The CVAE proposed in this work features novel aspects in
+its architectural design and training strategy. Specifically:
+• In standard CVAEs, the loss function typically corre-
+sponds to the negative ELBO. In this work, the loss is
+augmented with an additional generative MSE term (see
+Equation 4).
+• The prior in the CVAE is not modeled as a standard
+normal distribution, as is common in the literature, but is
+instead conditioned on the context. In standard CVAEs,
+the conditioning is applied only in the decoder.
+Experiments show that incorporating the loss from Equa-
+tion 4 reduces MSE by about 14%, while using a context-
+conditioned prior yields an additional 10% reduction.
+V. EVALUATION
+As described in Section IV-A, 350 scenarios are used to
+evaluate the planners. For each scenario, the runtime per plan-
+ning cycle is recorded during simulation, and after completing
+the full trajectory, the total trajectory cost is computed. It
+is important to note that this experiment assumes the input
+images to the CVAE are provided by a preceding prediction
+module, and the runtime of this module is not included in
+the reported runtime of SP. After all scenarios are executed,
+the statistics are aggregated across the entire test set. The
+average trajectory cost ¯J and the average runtime per planning
+cycle ¯t are calculated over all scenarios. For SP, whenever no
+feasible trajectory is found in a planning cycle, the planner
+falls back to FOP. The number of such fallback events is
+accumulated across all scenarios and normalized by the total
+number of planning cycles to obtain the average fallback
+rate pB, which reflects the reliability of the CVAE-based
+sampling. The number of samples used by FOP in the fallback
+mechanism is set to 125, i.e., 5 samples for each variable d,
+˙s, and T.
+The trajectory cost is computed using the same cost function
+as FISS+, as defined in Sun et al. [cf. 15, Equation (7)]:
+Jtotal = wV
+Z tf
+t0
+(vtarget −v)2 dt + wA
+Z tf
+t0
+a2 dt
++ wJ
+Z tf
+t0
+˙a2 dt + wD
+Z tf
+t0
+max(ξ1, . . . , ξo) dt
++ wLC
+Z tf
+t0
+d2 dt + wT tf.
+(5)
+The parameter vtarget denotes the desired velocity, a and
+˙a represent the acceleration and jerk, and tf denotes the
+terminal time. The term ξi = e−wdistdi penalizes proximity
+to obstacles, where di is the distance between the ego vehicle
+and the i-th obstacle, and o denotes the total number of
+surrounding obstacles. The term d is the lateral deviation of
+the ego vehicle from the reference path (lane center) at time
+step t. The weights are set as follows: wV = 0.1, wA = 10,
+wJ = 10, wD = 100, wdist = 0.1, wT = 1, wLC = 10. This
+set of weights prioritizes ride comfort and trajectory safety,
+emphasizing acceleration, jerk, obstacle proximity, and lateral
+deviation from the lane center.
+
+
+TABLE I: Performance comparison under sample number N.
+N
+Metric
+Method
+1
+8
+16
+64
+125
+216
+512
+1000
+¯
+J
+FOP
+–
+–
+–
+–
+74.81
+72.94
+71.60
+71.13
+FISS+
+–
+–
+–
+–
+72.75
+71.90
+71.19
+71.01
+SP
+72.50
+71.66
+71.35
+71.16
+70.85
+70.67
+70.57
+70.48
+¯t [ms]
+FOP
+–
+–
+–
+–
+72
+124
+320
+596
+FISS+
+–
+–
+–
+–
+57
+70
+115
+240
+SP
+11
+15
+33
+47
+82
+163.4
+330
+669
+pB (%)
+SP
+18.9
+10.1
+5.3
+4.0
+4.3
+4.4
+4.4
+4.9
+Nfail (%)
+FISS+
+-
+-
+-
+-
+23.4
+20.5
+20.0
+20.0
+The experiments are conducted on a system equipped with
+an Intel Core i7-12700H CPU, and the CVAE inference is
+accelerated using a NVIDIA GeForce RTX 3050 GPU.
+A. Performance Analysis
+The experiments evaluate FOP, FISS+, and SP on 350
+scenarios. Since FISS+ fails to generate a feasible trajectory
+in 82 cases, the performance comparison is conducted on the
+remaining 268 scenarios where all planners successfully reach
+the goal. In contrast, FOP and SP—with FOP as a fallback—
+successfully complete all 350 scenarios. The percentage of
+scenarios in which FISS+ fails to reach the goal is denoted
+by Nfail and summarized in the performance comparison
+table (see Table I). When the sampling number increases from
+N = 125 to N = 216, the Nfail decreases from 23.4%
+to 20.5%, but remains around 20% thereafter. This suggests
+that the algorithm exhibits limitations in handling certain
+challenging scenarios. Representative examples are discussed
+in Section V-B. For FOP and FISS+, metrics are reported
+starting from N = 125, because a smaller sample number
+does not consistently produce feasible trajectories across all
+scenarios. Furthermore, N = 216, 512, and 1000 correspond
+to 6, 8, and 10 samples per variable, respectively.
+Across all planners, increasing the sampling number N
+generally improves reducing trajectory cost at the expense of
+higher runtime. For SP and FOP, runtime scales approximately
+linearly with N, reflecting the per-sample trajectory evaluation
+complexity. In contrast, FISS+ exhibits significantly slower
+runtime growth as N increases, as illustrated in Fig. 4. This
+behavior results from its heuristic prioritization strategy, which
+avoids evaluating all samples.
+SP consistently achieve a lower trajectory cost than FOP
+and FISS+ at comparable sampling sizes. Notably, SP with
+only N = 1 already outperforms both FOP and FISS+ at
+N = 125 in terms of trajectory cost. This result indicates that
+the CVAE model effectively captures the relationship between
+environmental context and low-cost trajectory parameters, and
+tends to generate samples that implicitly encode obstacle-
+avoidance behavior.
+However, SP shows a relatively high fallback rate at N = 1
+(18.9%). As N increases, the fallback rate decreases signif-
+icantly, converging to 4.0% at N = 64. Beyond N = 64,
+further increasing N does not reduce the fallback rate, sug-
+gesting that this remaining percentage corresponds to long-tail
+scenarios the model fails to map to a correct optimal-parameter
+distribution.
+The runtime of SP nearly doubles from N = 64 (47 ms)
+to N = 125 (82 ms), while the improvement in trajectory
+cost is marginal and the fallback rate has already stabilized.
+Therefore, N
+= 64 is selected as the optimal sampling
+number for SP, providing the best trade-off between solution
+quality, computational efficiency, and reliability. Moreover, the
+average inference time of the CVAE model for generating 64
+samples is 7 ms per planning cycle, which introduces only
+minor overhead.
+B. Qualitative Case Study
+To further examine the behavioral differences under chal-
+lenging traffic conditions, Fig. 3 presents two representative
+scenarios that illustrate the advantages of the proposed planner
+over the original FOP and FISS+.
+The scenario in Fig. 3a represents a lane following scenario
+with a dynamic obstacle in front of the ego vehicle. Remark-
+ably, SP plans the safest trajectories at time steps 50 and 80.
+SP exhibits increased longitudinal clearance from the obstacle
+in front, reducing the tailgating risk. This behavior stems from
+the ability of SP to leverage the CVAE model trained on 2450
+scenarios planned by FOP with a large number of samples,
+as explained in Section IV-A. As a result, SP can represent
+high-quality trajectories that would be infeasible to compute
+in real time with FOP using highly dense sampling.
+The scenario in Fig. 3b represents a drive-brake-drive ma-
+neuver which challenges the assumption of FISS+ heuristic
+that the next sample is similar to the last one. At time
+step 63, FISS+ fails to plan a feasible trajectory because it
+selects trajectories close to the previous solution with minimal
+cost, leading to insufficient deceleration. When the leading
+vehicle stops, the ego vehicle approaches too closely, leaving
+insufficient braking distance and causing planning failure. In
+contrast, FOP and SP successfully plan the full scenario, with
+SP achieving a lower trajectory cost and maintaining a greater
+distance from the front vehicle, particularly at time step 100.
+C. Deterministic Runtime Performance
+The runtime characteristics of FISS+ and SP, shown in
+Fig. 5, reveal a fundamental distinction in deterministic run-
+time performance between the two planning methods. FISS+
+exhibits a wide spread in both mean runtime and runtime
+standard deviation across scenarios, with points scattered
+broadly across the plot. This behavior arises from its reliance
+on heuristic search strategies, whose performance can degrade
+unpredictably depending on the scenario. In the worst-case
+scenarios, two FISS+ instances reach a mean runtime of over
+175 ms with a standard deviation exceeding over 300 ms. This
+variability makes FISS+ poorly suited for safety-critical appli-
+cations, where deterministic runtime guarantees are essential.
+In contrast, SP produces a compact, low-variance distribution
+clustered in the lower-left region of the plot, reflecting more
+
+
+FOP
+FISS+
+SP
+(a) Scenario: USA NewYork-54 1 T-1.
+0 
+25 
+50 
+75 
+100 
+125 
+150 
+175 
+200 
+(b) Scenario: CHN Qingdao-5 37 T-1.
+Fig. 3: Qualitative comparison of the planners in two representative scenarios.
+10 1
+10 2
+Runtime [ms]
+71
+72
+73
+74
+75
+Cost
+Sparse Planner
+FISS+
+FOP
+Better
+Fig. 4: Performance visualization based on Table I.
+25
+50
+75
+100
+125
+150
+175
+Average Runtime [ms]
+0
+100
+200
+300
+Runtime std dev [ms]
+FISS+ with N = 125
+Sparse Planner with N = 64
+Fig. 5: Runtime variability across 268 scenarios for FISS+ and
+SP. Each point represents a scenario, plotted by its average
+runtime and corresponding standard deviation across scenario
+planning cycles.
+deterministic runtime performance, making it more suitable
+for real-time system such as autonomous driving system.
+VI. CONCLUSION
+This work presents the Sparse Planner, a hybrid planning
+framework that leverages a CVAE-based sampling strategy to
+efficiently sample from the parameter space. By learning a
+context-conditioned sampling distribution, SP generates low-
+cost trajectory parameters with significantly fewer samples,
+thereby substantially reducing runtime.
+The learned sampling mechanism exhibits strong perfor-
+mance, particularly in scenarios with dynamic obstacles, where
+contextual understanding is crucial. Compared to the state
+of the art of sampling-based planners, SP achieves lower
+trajectory cost while maintaining low, bounded, and deter-
+ministic runtime behavior. SP also offers inherent potential
+for parallelization, providing further opportunities to enhance
+real-time performance.
+The BEV representation, used as a conditioning context, en-
+ables compatibility with real sensor setups, while the fallback
+mechanism ensures completeness in case of failure, making
+SP highly suitable for real-time autonomous driving systems.
+Future work could explore integrating SP with a real sensor
+stack, moving the approach closer to a sensor-driven pipeline.
+REFERENCES
+[1]
+W. Xu et al., “ChatMPC: A language-driven model pre-
+dictive control framework for adaptive and personalized
+autonomous driving,” Autonomous Intelligent Systems,
+vol. 5, no. 1, p. 27, 2025.
+[2]
+D. Wang et al., “Dualad: Dual-layer planning for rea-
+soning in autonomous driving,” in 2025 IEEE/RSJ Inter-
+national Conference on Intelligent Robots and Systems
+(IROS), 2025, pp. 12 057–12 063.
+[3]
+Y. Zheng et al., “PlanAgent: A multi-modal large lan-
+guage agent for closed-loop vehicle motion planning,”
+IEEE Transactions on Cognitive and Developmental
+Systems, 2026.
+[4]
+W. Wang et al., “Drivemlm: Aligning multi-modal large
+language models with behavioral planning states for
+autonomous driving,” Visual Intelligence, vol. 3, 2023.
+[5]
+E. W. Dijkstra, “A note on two problems in connexion
+with graphs,” Numer. Math., vol. 1, no. 1, pp. 269–271,
+Dec. 1959.
+[6]
+P. E. Hart et al., “A formal basis for the heuristic
+determination of minimum cost paths,” IEEE Transac-
+tions on Systems Science and Cybernetics, vol. 4, no. 2,
+pp. 100–107, 1968.
+[7]
+G. Lucente et al., “Deepgame-tp: Integrating dynamic
+game theory and deep learning for trajectory planning,”
+IEEE OJ-ITS, vol. 5, pp. 873–888, 2024.
+[8]
+J. Ziegler et al., “Trajectory planning for bertha — a
+local, continuous method,” in 2014 IEEE Intelligent
+Vehicles Symposium Proceedings, 2014, pp. 450–457.
+
+
+[9]
+W. Xu et al., “Energy- and runtime-efficient trajec-
+tory planning via SIMD vectorization with precision
+reduction,” in IEEE Intelligent Vehicles Symposium (IV),
+IEEE, Detroit, MI, USA, Jun. 22–25, 2026.
+[10]
+Y. Hu et al., “Planning-oriented autonomous driving,” in
+Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, 2023.
+[11]
+B. Zhang et al., “Bridging past and future: End-to-
+end autonomous driving with historical prediction and
+planning,” in 2025 IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition (CVPR), 2025,
+pp. 6854–6863.
+[12]
+L. Chen et al., “End-to-end autonomous driving: Chal-
+lenges and frontiers,” IEEE Transactions on Pattern
+Analysis and Machine Intelligence, vol. 46, no. 12,
+pp. 10 164–10 183, 2024.
+[13]
+M. Werling et al., “Optimal trajectory generation for dy-
+namic street scenarios in a fren´et frame,” in 2010 IEEE
+International Conference on Robotics and Automation,
+2010, pp. 987–993.
+[14]
+S. Sun et al., “Fiss: A trajectory planning framework
+using fast iterative search and sampling strategy for
+autonomous driving,” IEEE Robotics and Automation
+Letters, vol. 7, no. 4, pp. 9985–9992, 2022.
+[15]
+S. Sun et al., “Fiss+: Efficient and focused trajectory
+generation and refinement using fast iterative search
+and sampling strategy,” in 2023 IEEE/RSJ International
+Conference on Intelligent Robots and Systems (IROS),
+2023, pp. 10 527–10 534.
+[16]
+J. Huh et al., “Learning high-dimensional mixture
+models for fast collision detection in rapidly-exploring
+random trees,” in 2016 IEEE International Conference
+on Robotics and Automation (ICRA), 2016, pp. 63–69.
+[17]
+J. Huh et al., “Adaptive motion planning with high-
+dimensional mixture models,” in 2017 IEEE Interna-
+tional Conference on Robotics and Automation (ICRA),
+2017, pp. 3740–3747.
+[18]
+N. Ma et al., “Conditional generative adversarial net-
+works for optimal path planning,” IEEE Transactions on
+Cognitive and Developmental Systems, vol. 14, pp. 662–
+671, 2020.
+[19]
+J. J. Johnson et al., “Learning sampling dictionaries for
+efficient and generalizable robot motion planning with
+transformers,” IEEE Robotics and Automation Letters,
+vol. 8, no. 12, pp. 7946–7953, 2023.
+[20]
+Z. Lei et al., “Transformer-enhanced motion planner:
+Attention-guided sampling for state-specific decision
+making,” IEEE Robotics and Automation Letters, vol. 9,
+pp. 8794–8801, 2024.
+[21]
+M. Feng et al., “RRT*former: Environment-aware
+sampling-based motion planning using transformer,” in
+2025 IEEE/RSJ International Conference on Intelligent
+Robots and Systems (IROS), 2025, pp. 12 681–12 688.
+[22]
+Z. Yu et al., “Lf-net: A learning-based frenet planning
+approach for urban autonomous driving,” IEEE Trans-
+actions on Intelligent Vehicles, vol. 9, no. 1, pp. 1175–
+1188, 2024.
+[23]
+B. Ichter et al., “Learning sampling distributions for
+robot motion planning,” in 2018 IEEE International
+Conference on Robotics and Automation (ICRA), 2018,
+pp. 7087–7094.
+[24]
+D. P. Kingma et al., “Auto-encoding variational bayes,”
+in International Conference on Learning Representa-
+tions (ICLR), 2014.

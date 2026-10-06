@@ -1,0 +1,1463 @@
+Text-Vision Synergistic Token Caching: A Training-Free Framework for
+Efficient Vision-Language-Action Inference
+Qianer Li1, Chengjie Zhang1, Jingwen Chen1, Zanjia Tong1, Jiyuan Zhang2, and Hong Zhang1∗
+Abstract— Vision-Language-Action
+(VLA)
+models
+enable
+generalizable robotic control but remain computationally ex-
+pensive. Token caching provides a training-free, plug-and-play
+acceleration alternative. However, existing VLA caching does
+not fully exploit a key inductive bias of VLA models: text-
+vision synergy, wherein textual semantics guide the precise
+visual grounding of task-relevant regions. In particular, exist-
+ing designs insufficiently account for head-wise reliability in
+attention aggregation and layer-wise stability in cache reuse.
+To address this, we propose Text-Vision Synergistic Token
+Caching (TVCache), a training-free framework for efficient
+VLA inference. TVCache filters attention heads based on text-
+vision information focus to improve task-relevant and physically
+consistent visual grounding. Concurrently, we introduce a reuse-
+layer selection mechanism guided by text-vision entropy differ-
+ences to avoid caching unstable representations and improve
+cache resource allocation. Extensive experiments across four
+representative VLA models, two simulation benchmarks, and
+real-world robotic tasks demonstrate the effectiveness and
+generality of TVCache. At matched token-retention ratios,
+TVCache consistently improves task success over existing VLA
+caching with comparable computational cost. On OpenVLA-
+OFT, it improves average success by up to 14.5 percentage
+points over VLA-Cache at 12.5% retention while reducing
+FLOPs by 2.45× relative to full-token inference.
+I. INTRODUCTION
+Vision-Language-Action (VLA) models have demon-
+strated strong generalization across diverse robotic manip-
+ulation tasks by leveraging large-scale multimodal data and
+transformer architectures [1], [2], [3]. Recent advances, such
+as OpenVLA-OFT [4], BitVLA [5], VLA-Adapter [6], and
+π0.5 [7], further improve adaptation efficiency, computational
+efficiency, and long-horizon control.
+Despite this progress, real-time VLA inference remains
+costly due to repeated processing of dense visual tokens.
+Existing acceleration methods, including lightweighting [8],
+[9], [10], quantization [11], [12], and early exits [13], [14],
+[15], often require retraining or architectural changes. To-
+ken caching [16] provides a complementary, training-free
+alternative by exploiting temporal redundancy across con-
+secutive observations and reusing previously computed key-
+value (KV) representations. Importantly, caching is largely
+orthogonal to model-level acceleration and can therefore
+1Qianer Li, Chengjie Zhang, Jingwen Chen, Zanjia Tong, and Hong
+Zhang are with the College of Engineering, Southern University of Science
+and Technology (SUSTech), Shenzhen 518055, China.
+2Jiyuan Zhang is with the Master of Science in Data Science and Ma-
+chine Learning , Department of Mathematics, Faculty of Science, National
+University of Singapore, Singapore.
+Emails: Qianer Li (12532498@mail.sustech.edu.cn); Hong
+Zhang (hzhang@sustech.edu.cn). ∗Corresponding author.
+be combined with lightweighting, quantization, or early-exit
+techniques for further efficiency gains.
+However, existing VLA caching does not fully exploit
+a key inductive bias of VLA models: text-vision synergy,
+wherein textual semantics guide the precise visual grounding
+of task-relevant regions. In particular, existing designs insuf-
+ficiently account for head-wise reliability during attention
+aggregation and layer-wise stability during cache reuse [16].
+We argue that exploiting this synergy is critical not only for
+identifying which visual tokens should be recomputed, but
+also for determining where cached representations should be
+reused across network depth.
+As illustrated in Fig. 1, insufficient exploitation of text-
+vision synergy manifests as two bottlenecks. First, at the
+token level, indiscriminately aggregating all attention heads
+mixes informative task-conditioned responses with diffuse
+or task-irrelevant attention. The resulting relevance scores
+can therefore be biased toward background regions, causing
+token-level spatial misalignment and reducing the reliability
+of task-relevant token selection. Second, at the layer level,
+reuse policies without explicit stable-layer selection overlook
+the fact that cross-modal representations exhibit different
+degrees of stability across network depth. Reusing represen-
+tations at unstable, high-entropy layers can propagate unreli-
+able features, whereas postponing reuse after representations
+have already stabilized introduces unnecessary computation.
+We refer to this inefficiency as layer-level depth mismatch.
+To address these limitations, we propose Text-Vision Syn-
+ergistic Token Caching (TVCache), a training-free and plug-
+and-play framework for efficient VLA inference. TVCache
+exploits text-vision synergy along two complementary di-
+mensions. Token-Level, TVCache resolves spatial misalign-
+ment via an attention-head filtering mechanism driven by
+text-vision information focus, which we quantify by jointly
+evaluating semantic response intensity and attention entropy.
+By dynamically selecting high-quality attention heads based
+on this evaluation, the mechanism effectively suppresses
+interference from degraded heads. Consequently, it guides
+token selection toward task-relevant regions, achieving more
+precise and physically consistent visual grounding. Layer-
+Level, it mitigates depth mismatch using a reuse-layer
+selection mechanism guided by text-vision entropy differ-
+ences. By quantifying the stability of layer-wise cross-modal
+features, it selects low-entropy caching locations while avoid-
+ing unstable layers. This mechanism limits the propagation
+of unreliable features and reduces redundant computation,
+thereby enabling more efficient cache resource allocation.
+Extensive experiments across four representative VLA
+arXiv:2609.34319v1  [cs.CV]  28 Sep 2026
+
+
+Fig. 1: Two bottlenecks of existing VLA token caching. (Left) Token-level spatial misalignment: indiscriminate attention-head
+aggregation introduces task-irrelevant responses and degrades visual grounding. (Right) Layer-level depth mismatch: reusing
+representations at unstable layers can propagate noisy cross-modal features, whereas delaying reuse after representations
+stabilize incurs redundant computation.
+models [4], [5], [6], [7], two simulation benchmarks [17],
+[18], and real-world robotic tasks demonstrate the effec-
+tiveness and generality of TVCache. At matched token-
+retention ratios, TVCache consistently improves task success
+over existing VLA caching while maintaining comparable
+computational cost. On OpenVLA-OFT, TVCache improves
+average success by up to 14.5 percentage points over VLA-
+Cache, from 69.5% to 84.0% at 12.5% token retention, while
+reducing FLOPs by 2.45× relative to full-token inference.
+Our main contributions are: 1) We identify insufficient
+exploitation of text-vision synergy as a key limitation of
+existing VLA caching, and propose TVCache to address
+the resulting token-level and layer-level inefficiencies in
+a training-free manner. 2) We introduce an attention-head
+filtering mechanism driven by text-vision information focus
+that mitigates token-level spatial misalignment and improves
+task-relevant visual grounding. 3) We develop a text-vision
+entropy-guided reuse-layer selection mechanism that miti-
+gates layer-level depth mismatch by avoiding unstable reuse
+locations and reducing redundant computation.
+II. RELATED WORK
+Vision-Language-Action Models. Built upon powerful
+Large-scale Vision-Language Models (VLMs) [19], [20],
+Vision-Language-Action (VLA) models achieve remarkable
+control performance via discretized tokens [2] or policy
+heads [3]. However, processing dense, high-dimensional
+visual tokens incurs prohibitive computational overhead,
+severely bottlenecking their real-time deployment in dynamic
+physical environments [21].
+Visual Token Pruning for VLMs. Visual token pruning
+reduces inference cost by removing redundant visual tokens
+[22]. Representative methods, such as FastV [23], Sparse-
+VLM [24], and DivPrune [25], have demonstrated effective
+token reduction for general-purpose multimodal models.
+However, robotic manipulation places stronger demands on
+preserving fine-grained, task-conditioned visual information,
+since small interaction regions may directly affect down-
+stream actions. This motivates VLA-specific acceleration
+mechanisms that explicitly account for language-guided task
+relevance during token selection.
+Acceleration Techniques for VLA Models. Existing
+VLA acceleration methods include lightweighting [8], [10],
+quantization [11], [12], and early exits [13], [15]. While
+effective, these approaches typically require retraining, cal-
+ibration, or architectural modifications. Token caching pro-
+vides a complementary, training-free alternative by exploiting
+temporal redundancy and reusing previously computed KV
+representations [16]. VLA-Cache [16] further incorporates
+text-to-vision attention to protect task-relevant tokens and
+adapts token reuse across network depth. Nevertheless, its
+attention aggregation does not explicitly model head-wise
+reliability, and its reuse policy does not explicitly select
+caching locations according to layer-wise representation sta-
+bility. TVCache builds upon this caching paradigm by more
+fully exploiting text-vision synergy: it filters attention heads
+according to text-vision information focus for task-relevant
+token selection and selects reuse layers according to text-
+vision entropy differences. These two mechanisms respec-
+tively target token-level spatial misalignment and layer-level
+depth mismatch while preserving the training-free nature of
+token caching.
+III. METHODOLOGY
+A. Overview of the TVCache Framework
+KV Caching in VLA Inference. Continuous robotic
+manipulation exhibits strong temporal coherence across ob-
+servations. As shown in Fig. 2, token caching reuses his-
+torical KV representations for stable visual regions while
+recomputing dynamic ones, reducing redundant Transformer
+computation [16].
+The TVCache Framework. Existing VLA caching al-
+ready exploits temporal similarity and text-conditioned at-
+tention for token reuse [16], yet it does not fully account
+for two reliability factors identified in Sec. I: head-wise
+reliability during task-relevant token estimation and layer-
+wise stability during cache reuse. TVCache builds upon this
+
+
+Static Token
+Vision Encoder
+Language Instruction
+pick up the milk and place it in the basket
+Updating Observation & KV Cache  
+Reuse the KV 
+Cache (T)
+ 
+LLM
+Observation (T)
+T += 1
+Tokenizer
+Calculation
+Calculation
+ Dynamic Token
+ Action Decode
+Action (T)
+Fig. 2: Principle of KV cache reuse in VLA inference. At timestep T, visual inputs are decoupled into static (blue)
+and dynamic (yellow) tokens. By reusing historical caches for invariant instructions and static tokens, the LLM allocates
+computation exclusively to new dynamic tokens, significantly accelerating autoregressive decoding.
+caching paradigm and exploits text-vision synergy along two
+complementary dimensions: (1) Token-Level, an attention-
+head filtering mechanism driven by text-vision information
+focus evaluates individual attention heads before estimating
+token relevance, reducing interference from diffuse or task-
+irrelevant responses and mitigating token-level spatial mis-
+alignment. (2) Layer-Level, a reuse-layer selection mech-
+anism guided by text-vision entropy differences identifies
+stable reuse locations across network depth, mitigating layer-
+level depth mismatch while reducing redundant computation.
+The overall framework is illustrated in Fig. 3.
+B. Temporal Patch Similarity
+Let pt
+j denote the j-th visual patch at timestep t. We select
+the top-k patches with highest temporal similarity above
+threshold τ:
+Pstatic = Top-k
+ 
+pt
+j | Sim(pt
+j, pt−1
+j
+) ≥τ
+	
+,
+(1)
+where Sim denotes cosine similarity, and k is determined
+by the token-retention budget. The resulting Pstatic forms
+the initial cache-reuse candidates [26], [16]. TVCache then
+further filters them by task relevance.
+C. Task-Relevant Token Selection via Attention-Head Filter-
+ing
+We next determine which temporally stable tokens remain
+important to the current instruction. Text-to-vision attention
+provides a natural signal for this purpose because it reflects
+how textual semantics are grounded onto visual regions.
+However, different attention heads exhibit heterogeneous
+grounding behavior: some focus sharply on interaction-
+relevant regions, whereas others distribute attention broadly
+over background or task-irrelevant content. Directly averag-
+ing all heads can therefore dilute informative responses and
+distort token relevance estimation.
+To capture text-vision semantic dependencies, we extract
+the cross-modal attention sub-tensor Cl ∈RNH×Lt×Lv
+from the full attention matrix Al, where NH, Lt, and Lv
+denote the numbers of attention heads, text tokens, and visual
+tokens, respectively. Let c(n)
+i,j
+denote the attention weight
+from text token i to visual token j at head n.
+Rather than treating all heads equally, TVCache explicitly
+evaluates their text-vision information focus. We characterize
+this property from two complementary perspectives. First,
+semantic response intensity measures how strongly a head
+responds from textual tokens to visual tokens, reflecting its
+participation in cross-modal interaction. Second, attention
+entropy measures the spatial concentration of this response:
+lower entropy indicates that the head focuses its attention
+on a smaller set of visual regions rather than dispersing
+it broadly. These two quantities are respectively defined as
+semantic response intensity I(n)
+l
+and attention entropy H(n)
+l
+:
+I(n)
+l
+= 1
+Lt
+Lt
+X
+i=1
+Lv
+X
+j=1
+c(n)
+i,j ,
+H(n)
+l
+= −1
+Lt
+Lt
+X
+i=1
+Lv
+X
+j=1
+˜c(n)
+i,j log ˜c(n)
+i,j ,
+(2)
+where ˜c(n)
+i,j represents the attention weight normalized over
+the visual dimension to form a valid probability distribution.
+We combine the two signals through the scoring function
+Shead(n) = αI(n)
+l
+−βH(n)
+l
+. Heads with higher scores exhibit
+stronger text-conditioned responses together with more con-
+centrated spatial attention and are selected to form the head
+set Ml. We set α = β = 0.5 for all experiments without
+model- or benchmark-specific tuning.
+The
+selected
+heads
+then
+provide
+a
+more
+reliable
+source
+for
+estimating
+visual-token
+relevance.
+Specifi-
+cally, the task-relevant score Vj is computed as Vj
+=
+1
+|Ml|
+P
+m∈Ml
+PLt
+i=1 c(m)
+i,j . Tokens exceeding the threshold
+τtask form the interaction-critical set Ptask. These tokens are
+excluded from the temporally stable candidates, yielding the
+final reusable set Preuse = Pstatic \ Ptask.
+
+
+Fig. 3: Overview of the proposed framework.
+D. Cache Resource Allocation via Reuse-Layer Selection
+Identifying Preuse answers what visual information can be
+reused, but reliable caching also requires deciding where
+these representations should be reused across network depth.
+Cross-modal representations evolve progressively through
+the Transformer and exhibit different degrees of concen-
+tration across layers. Consequently, applying reuse without
+explicitly considering layer-wise stability may either reuse
+representations before they become sufficiently reliable or
+delay reuse after they have already stabilized, resulting in
+unnecessary computation.
+TVCache therefore uses text-vision entropy differences to
+characterize layer-wise cross-modal stability. Specifically, we
+compute the Shannon entropy of normalized text-to-vision
+attention at each layer:
+E(l) = H( ˜Cl),
+(3)
+where ˜Cl is the text-to-vision attention normalized spa-
+tially, and H(·) denotes Shannon entropy. A lower entropy
+corresponds to a more concentrated text-vision attention
+distribution and is therefore used as an indicator of a more
+suitable reuse location. We define the corresponding layer
+stability score as R(l) = 1 −¯E(l), where ¯E(l) is the min-max
+normalized entropy across all layers.
+Given a cache budget of K layers out of NL Transformer
+layers, TVCache selects reuse locations that jointly favor
+high layer stability while avoiding excessive concentration
+within a narrow depth range. We therefore formulate reuse-
+layer selection as the following constrained objective:
+Kreuse =
+arg max
+K⊂{1,...,NL}
+X
+l∈K
+R(l)
+s.t.
+|K| = K,
+|li −lj| ≥dmin,
+∀li̸ = lj ∈K.
+(4)
+For inference efficiency, we solve this via an interval-
+constrained greedy algorithm, sequentially appending layers
+with the highest R(l) to Kreuse while strictly satisfying dmin.
+Depth-Aware Caching Proportions. After determining
+the reuse locations, TVCache further assigns a depth-aware
+retention proportion γ(l) to each selected layer l ∈Kreuse.
+Recognizing that shallow layers process redundant local pat-
+terns while deeper layers encode dense semantics vulnerable
+to representation collapse [27], we enforce a monotonically
+increasing retention schedule. Shallow layers aggressively
+decimate tokens for efficiency, whereas deeper layers pro-
+gressively restore them, culminating in strict full retention
+(γ = 1.0) at the terminal reuse layer.
+Synergistic Inference Execution. During the forward
+pass, for each layer l ∈Kreuse, the model directly loads the
+KV states of the token subset Preuse scaled by γ(l), bypassing
+their self-attention computation. This mechanism optimizes
+cache resource allocation by eliminating redundant compu-
+tations in stable layers while preventing noise accumulation
+across unstable ones.
+IV. EXPERIMENT
+We evaluate TVCache across simulated and real-world
+environments using four VLA architectures: OpenVLA-OFT
+[4], BitVLA [5], π0.5 [7], and VLA-Adapter [6]. Real-world
+robustness is validated by deploying OpenVLA-OFT on a
+physical robotic platform. All experiments are executed on
+a workstation with four NVIDIA RTX 4090 GPUs.
+A. Experimental Setup
+Baselines. We compare TVCache with a comprehensive
+suite of training-free accelerators under given compute bud-
+gets, including FastV [23], SparseVLM [24], DivPrune [25],
+and the VLA-specific VLA-Cache [16]. For TVCache, we
+fix α = β = 0.5, K = 4, and dmin = 2 across all models
+and benchmarks, with γ(l) = [0.5, 0.65, 0.8, 1.0].
+Efficiency Profiling. All latency measurements are con-
+ducted on a single NVIDIA RTX 4090 with batch size 1
+using BF16 precision. We exclude the first 10 warm-up runs,
+
+
+TABLE I: Comparison of latency and performance between OpenVLA-OFT and BitVLA evaluated on the LIBERO
+Benchmark. The task success rate retention ratios (%) and speedup multipliers (×) are calculated relative to the Vanilla
+baseline of each respective model at 100% tokens.
+Method
+Spatial (%)
+Object (%)
+Goal (%)
+Long (%)
+Avg Success Rate (%) ↑
+FLOPs (T) ↓
+Control Freq. (Hz) ↑
+Latency (ms) ↓
+OpenVLA-OFT
+100% Tokens
+Vanilla
+99.00
+98.00
+97.20
+94.40
+97.15 (100.0%)
+4.0139 (1.00×)
+10.43 (1.00×)
+95.87 (1.00×)
+Retain 50% Tokens
+FastV
+95.40
+98.60
+96.80
+93.40
+96.05 (98.9%)
+2.4134 (1.66×)
+11.84 (1.13×)
+84.48 (1.13×)
+SparseVLM
+96.20
+88.40
+96.20
+75.80
+89.15 (91.8%)
+2.6809 (1.50×)
+11.71 (1.12×)
+85.41 (1.12×)
+DivPrune
+94.40
+97.00
+95.80
+92.40
+94.90 (97.7%)
+2.2921 (1.75×)
+11.86 (1.14×)
+84.32 (1.14×)
+VLA-Cache
+98.20
+98.20
+97.40
+93.40
+96.80 (99.6%)
+2.6927 (1.49×)
+11.72 (1.12×)
+85.29 (1.12×)
+TVCache (Ours)
+99.20
+98.80
+97.80
+94.40
+97.55 (100.4%)
+2.6913 (1.49×)
+11.76 (1.13×)
+85.06 (1.13×)
+Retain 25% Tokens
+FastV
+93.20
+88.40
+97.00
+90.60
+92.30 (95.0%)
+1.6453 (2.44×)
+14.74 (1.41×)
+67.83 (1.41×)
+SparseVLM
+97.40
+88.40
+92.20
+73.40
+87.85 (90.4%)
+1.9351 (2.07×)
+14.45 (1.39×)
+69.22 (1.39×)
+DivPrune
+92.20
+89.60
+94.20
+91.60
+91.90 (94.6%)
+1.4442 (2.78×)
+15.08 (1.45×)
+66.31 (1.45×)
+VLA-Cache
+96.40
+84.40
+94.00
+76.60
+87.85 (90.4%)
+2.0575 (1.95×)
+14.60 (1.40×)
+68.51 (1.40×)
+TVCache (Ours)
+98.20
+96.00
+97.80
+90.20
+95.55 (98.4%)
+2.0569 (1.95×)
+14.64 (1.40×)
+68.29 (1.40×)
+Retain 12.5% Tokens
+FastV
+91.40
+48.80
+94.80
+44.00
+69.75 (71.8%)
+1.2641 (3.18×)
+15.33 (1.47×)
+65.22 (1.47×)
+SparseVLM
+88.40
+56.80
+83.20
+44.60
+68.25 (70.3%)
+1.4024 (2.86×)
+14.85 (1.42×)
+67.34 (1.42×)
+DivPrune
+87.60
+49.20
+86.40
+57.00
+70.05 (72.1%)
+1.1232 (3.57×)
+15.46 (1.48×)
+64.67 (1.48×)
+VLA-Cache
+83.60
+62.00
+82.80
+49.60
+69.50 (71.5%)
+1.6463 (2.44×)
+15.03 (1.44×)
+66.54 (1.44×)
+TVCache (Ours)
+96.80
+84.80
+94.40
+60.00
+84.00 (86.5%)
+1.6414 (2.45×)
+15.04 (1.44×)
+66.51 (1.44×)
+BitVLA
+100% Tokens
+Vanilla
+97.60
+99.40
+91.40
+87.20
+93.90 (100.0%)
+1.5571 (1.00×)
+5.53 (1.00×)
+180.89 (1.00×)
+Retain 50% Tokens
+FastV
+98.20
+99.40
+93.40
+83.80
+93.70 (99.8%)
+0.9952 (1.56×)
+5.86 (1.06×)
+170.76 (1.06×)
+SparseVLM
+95.40
+97.40
+87.00
+83.60
+90.85 (96.8%)
+1.0807 (1.44×)
+5.76 (1.04×)
+173.65 (1.04×)
+DivPrune
+94.20
+97.00
+82.60
+74.20
+87.00 (92.7%)
+0.9087 (1.71×)
+5.87 (1.06×)
+170.22 (1.06×)
+VLA-Cache
+97.20
+98.80
+93.60
+86.00
+93.90 (100.0%)
+1.0941 (1.42×)
+5.76 (1.04×)
+173.58 (1.04×)
+TVCache (Ours)
+98.00
+99.40
+95.00
+87.20
+94.90 (101.1%)
+1.0886 (1.43×)
+5.80 (1.05×)
+172.34 (1.05×)
+Retain 25% Tokens
+FastV
+97.40
+99.20
+86.60
+78.40
+90.40 (96.3%)
+0.7207 (2.16×)
+6.21 (1.12×)
+161.01 (1.12×)
+SparseVLM
+92.40
+98.20
+87.40
+81.40
+89.85 (95.7%)
+0.8040 (1.94×)
+6.00 (1.08×)
+166.78 (1.08×)
+DivPrune
+82.40
+80.00
+61.20
+55.80
+69.85 (74.4%)
+0.6920 (2.25×)
+6.24 (1.13×)
+160.23 (1.13×)
+VLA-Cache
+97.00
+98.80
+92.40
+83.80
+93.00 (99.0%)
+0.8596 (1.81×)
+6.04 (1.09×)
+165.66 (1.09×)
+TVCache (Ours)
+97.80
+99.20
+95.00
+87.00
+94.75 (100.9%)
+0.8631 (1.80×)
+6.03 (1.09×)
+165.82 (1.09×)
+Retain 12.5% Tokens
+FastV
+95.20
+97.40
+80.80
+71.60
+86.25 (91.9%)
+0.5852 (2.66×)
+6.23 (1.13×)
+160.42 (1.13×)
+SparseVLM
+79.00
+92.60
+79.00
+71.60
+80.55 (85.8%)
+0.6028 (2.58×)
+6.09 (1.10×)
+164.21 (1.10×)
+DivPrune
+51.00
+26.80
+31.80
+10.20
+29.95 (31.9%)
+0.5721 (2.72×)
+6.28 (1.14×)
+159.12 (1.14×)
+VLA-Cache
+97.00
+98.40
+92.00
+82.60
+92.50 (98.5%)
+0.7565 (2.06×)
+6.10 (1.10×)
+163.85 (1.10×)
+TVCache (Ours)
+97.60
+99.20
+94.40
+84.40
+93.90 (100.0%)
+0.7474 (2.08×)
+6.11 (1.11×)
+163.68 (1.11×)
+synchronize CUDA before and after each timed query, and
+report the mean over 500 measured runs.
+Evaluation Metrics. To ensure a fair and rigorous bench-
+mark, all methods are evaluated under identical token reduc-
+tion constraints. We systematically investigate performance
+across varying retention ratios (50%, 25%, and 12.5%).
+Following established evaluation protocols in prior research
+on efficient multimodal architectures [23], [16], [28], efficacy
+is quantified using four metrics: (1) task success rate (%);
+(2) computational cost of action prediction (FLOPs, T); (3)
+control frequency (Hz); and (4) end-to-end inference latency
+(ms). Control frequency is computed as the inverse of end-to-
+end latency, reflecting how frequently the policy can update
+its action prediction during continuous robot control.
+Evaluation Benchmark. We evaluate TVCache across
+simulated and physical environments. LIBERO [17]: We
+test OpenVLA-OFT, BitVLA, π0.5, and VLA-Adapter across
+four task suites, totaling 500 evaluation episodes per suite
+under official protocols. CALVIN [18]: We assess the VLA-
+Adapter’s generalization in the challenging Split ABC →D
+setting, evaluating the model in a novel environment after
+training on prior domains. Real Robot Evaluation: We
+deploy a LoRA-finetuned OpenVLA-OFT [29] on a Franka
+Research 3 manipulator [30] equipped with dual cameras.
+Performance is benchmarked across four manipulation tasks
+summarized in Table IV, using 100 teleoperated demonstra-
+tions and 50 evaluation trials per task.
+B. Results and Analysis
+LIBERO Benchmark. As shown in Table I, TVCache
+consistently outperforms VLA-Cache on OpenVLA-OFT
+and BitVLA, with larger gains under aggressive token reuse.
+On OpenVLA-OFT, TVCache achieves 97.55% and 95.55%
+success at 50% and 25% retention, respectively. At 12.5%
+
+
+TABLE II: Comparison of latency and performance between π0.5 and VLA-Adapter evaluated on the LIBERO Benchmark.
+Method
+Spatial (%)
+Object (%)
+Goal (%)
+Long (%)
+Avg Success Rate (%) ↑
+FLOPs (T) ↓
+Control Freq. (Hz) ↑
+Latency (ms) ↓
+π0.5
+100% Tokens
+Vanilla
+98.00
+97.20
+97.00
+93.00
+96.30 (100.0%)
+2.1153 (1.00×)
+8.14 (1.00×)
+122.85 (1.00×)
+Retain 50% Tokens
+FastV
+57.00
+67.20
+60.80
+59.40
+61.10 (63.4%)
+1.6061 (1.32×)
+8.90 (1.09×)
+112.34 (1.09×)
+SparseVLM
+78.20
+73.00
+86.40
+43.60
+70.30 (73.0%)
+1.5429 (1.37×)
+8.82 (1.08×)
+113.38 (1.08×)
+DivPrune
+88.80
+83.80
+88.60
+68.20
+82.35 (85.5%)
+1.5425 (1.37×)
+8.94 (1.10×)
+111.83 (1.10×)
+VLA-Cache
+96.20
+97.60
+96.80
+86.20
+94.20 (97.8%)
+1.7206 (1.23×)
+8.85 (1.09×)
+113.04 (1.09×)
+TVCache (Ours)
+97.80
+98.00
+98.00
+89.60
+95.85 (99.5%)
+1.6374 (1.29×)
+8.93 (1.10×)
+112.02 (1.10×)
+Retain 25% Tokens
+FastV
+24.40
+18.60
+25.40
+7.20
+18.90 (19.6%)
+1.3548 (1.56×)
+9.47 (1.16×)
+105.63 (1.16×)
+SparseVLM
+35.60
+24.00
+50.00
+5.20
+28.70 (29.8%)
+1.2613 (1.68×)
+9.35 (1.15×)
+106.99 (1.15×)
+DivPrune
+46.40
+48.40
+69.40
+38.00
+50.55 (52.5%)
+1.2597 (1.68×)
+9.58 (1.18×)
+104.34 (1.18×)
+VLA-Cache
+86.00
+92.80
+91.40
+77.20
+86.85 (90.2%)
+1.6083 (1.32×)
+9.36 (1.15×)
+106.81 (1.15×)
+TVCache (Ours)
+93.80
+97.80
+96.60
+87.40
+93.90 (97.5%)
+1.5109 (1.40×)
+9.38 (1.15×)
+106.63 (1.15×)
+VLA-Adapter
+100% Tokens
+Vanilla
+98.40
+96.80
+96.80
+94.80
+96.70 (100.0%)
+3.9732 (1.00×)
+10.71 (1.00×)
+93.40 (1.00×)
+Retain 50% Tokens
+VLA-Cache
+88.60
+69.40
+77.80
+73.60
+77.35 (80.0%)
+2.6821 (1.48×)
+12.60 (1.18×)
+79.36 (1.18×)
+TVCache (Ours)
+91.60
+73.20
+78.80
+76.20
+79.95 (82.7%)
+2.6713 (1.49×)
+12.72 (1.19×)
+78.59 (1.19×)
+Retain 25% Tokens
+VLA-Cache
+55.60
+44.40
+43.40
+50.00
+48.35 (50.0%)
+2.2305 (1.78×)
+14.22 (1.33×)
+70.33 (1.33×)
+TVCache (Ours)
+67.20
+47.20
+47.60
+55.60
+54.40 (56.3%)
+2.2082 (1.80×)
+14.61 (1.36×)
+68.46 (1.36×)
+TABLE III: Comparison of performance for VLA-Adapter evaluated on the CALVIN Benchmark.
+Method
+Task 1 (%)
+Task 2 (%)
+Task 3 (%)
+Task 4 (%)
+Task 5 (%)
+Avg Success Rate (%) ↑
+FLOPs (T) ↓
+Control Freq. (Hz) ↑
+Latency (ms) ↓
+VLA-Adapter
+100% Tokens
+Vanilla
+98.50
+94.60
+89.20
+84.90
+78.90
+89.22 (100.0%)
+0.2597 (1.00×)
+21.45 (1.00×)
+46.62 (1.00×)
+Retain 50% Tokens
+VLA-Cache
+95.60
+91.00
+84.30
+76.80
+69.40
+83.42 (93.5%)
+0.1831 (1.42×)
+22.72 (1.06×)
+44.01 (1.06×)
+TVCache (Ours)
+97.10
+92.50
+87.90
+81.10
+73.10
+86.34 (96.8%)
+0.1751 (1.48×)
+22.73 (1.06×)
+43.99 (1.06×)
+Retain 25% Tokens
+VLA-Cache
+75.80
+61.00
+44.80
+34.00
+24.70
+48.06 (53.9%)
+0.1472 (1.76×)
+22.82 (1.06×)
+43.82 (1.06×)
+TVCache (Ours)
+82.70
+69.10
+56.70
+46.40
+36.30
+58.24 (65.3%)
+0.1351 (1.92×)
+22.87 (1.07×)
+43.72 (1.07×)
+TABLE IV: Descriptions of the evaluation tasks.
+Task Name
+Description
+SetKettle
+Pick up the kettle and place it on the plate.
+PackPear
+Pick up the pear and place it inside the basket.
+HangCup
+Hang the cup on the wooden mug tree.
+PotDuck
+Put the duck into the pot and cover it with the lid.
+retention, it improves success from 69.50% to 84.00% with
+2.45× lower FLOPs than full-token inference. Meanwhile,
+control frequency increases from 10.43 Hz to 15.04 Hz and
+latency decreases from 95.87 ms to 66.51 ms. On BitVLA,
+TVCache achieves 94.90%, 94.75%, and 93.90% success at
+50%, 25%, and 12.5% retention, respectively, matching or
+exceeding the 93.90% full-token baseline.
+Table II further demonstrates the generality of TVCache
+on π0.5 and VLA-Adapter. At 25% retention, TVCache
+improves over VLA-Cache from 86.85% to 93.90% on
+π0.5 and from 48.35% to 54.40% on VLA-Adapter. Similar
+gains are also observed at 50% retention, where TVCache
+improves the success rate from 94.20% to 95.85% on π0.5
+and from 77.35% to 79.95% on VLA-Adapter. These results
+demonstrate TVCache’s generality across different VLA ar-
+TABLE V: Runtime overhead breakdown of TVCache under
+different token retention ratios.
+TVCache Ret.
+Patch sim.
+Head filtering
+Token selection
+Reuse-layer selection
+Bookkeeping
+Total (ms)
+50%
+0.742
+0.746
+0.322
+1.012
+0.066
+2.888
+25%
+0.651
+0.747
+0.316
+1.052
+0.073
+2.839
+12.5%
+0.782
+0.708
+0.304
+0.968
+0.075
+2.837
+chitectures, with larger gains under tighter token budgets.
+CALVIN Benchmark. As shown in Table III, TVCache
+also generalizes to the challenging Split ABC →D setting.
+At 25% retention, it improves the success rate from 48.06%
+to 58.24% over VLA-Cache while achieving a 1.92× FLOPs
+reduction relative to full-token inference. The latency gain is
+more modest, reducing latency from 46.62 ms to 43.72 ms
+and increasing control frequency from 21.45 Hz to 22.87 Hz,
+as the lightweight VLA-Adapter makes routing overhead
+relatively more significant.
+As shown in Table V, TVCache introduces only 2.84–
+2.89 ms of nearly constant runtime overhead. Reuse-layer
+selection is the main contributor, while token selection and
+bookkeeping add less than 0.4 ms. This fixed cost is more
+noticeable on lightweight models and less significant on
+larger VLA backbones.
+
+
+SetKettle
+PackPear
+HangCup
+PotDuck
+GELLO
+Intel RealSense L515
+Intel RealSense D405
+Franka 
+Research 3
+Fig. 4: Real-world robot evaluation across four manipulation
+tasks. The figure shows the physical task scenarios and the
+corresponding success rates of TVCache and VLA-Cache
+under different token retention ratios.
+VLA-Cache
+Ours
+VLA-Cache
+Ours
+Fig. 5: Qualitative comparison of cross-modal attention. TV-
+Cache filters degraded heads, reducing background noise and
+spatial misalignment for more task-relevant visual grounding.
+Real Robot Deployment. As shown in Fig. 4, TVCache
+consistently surpasses VLA-Cache across all retention ratios
+in physical deployments. At 50% retention, it achieves near-
+lossless performance, matching the full-token baseline on
+tasks like SetKettle (94%) and HangCup (82%). Crucially,
+under extreme 12.5% retention, TVCache maintains a robust
+87% task success rate on SetKettle, demonstrating superior
+robustness and control precision for real-world manipulation.
+Ablation Study. Ablation results in Table VI validate
+the contributions of both attention-head filtering and reuse-
+layer selection. Attention-head filtering alleviates token-level
+spatial misalignment by emphasizing task-relevant visual
+information, while reuse-layer selection reduces the impact
+of unstable layer reuse. The benefits become particularly
+pronounced under aggressive token reuse. On OpenVLA-
+OFT at 12.5% retention, VLA-Cache achieves only 69.50%
+average success, while reuse-layer selection alone improves
+it to 82.20%. Combining both components further raises per-
+formance to 84.00% (↑14.50 pp). The largest improvement
+occurs on the Object suite, where TVCache increases success
+from 62.00% to 84.80% (↑22.80 pp). Consistent improve-
+ments on BitVLA further demonstrate that both components
+remain effective across different VLA architectures.
+Qualitative Analysis of Attention Distributions. Fig. 5
+compares cross-modal attention distributions. VLA-Cache
+shows diffuse background responses and spatial misalign-
+ment, while TVCache filters degraded heads to produce more
+concentrated attention on task-relevant regions, improving
+TABLE VI: Ablation study on OpenVLA-OFT and BitVLA.
+Method
+Spatial
+Object
+Goal
+Long
+Avg. ↑
+OpenVLA-OFT
+100% Tokens
+Vanilla
+99.00
+98.00
+97.20
+94.40
+97.15
+Retain 50% Tokens
+VLA-Cache
+98.20
+98.20
+97.40
+93.40
+96.80
++ Head
+98.60 (↑0.40)
+98.40 (↑0.20)
+97.80 (↑0.40)
+93.80 (↑0.40)
+97.15 (↑0.35)
++ Layer
+99.00 (↑0.80)
+98.20 (−)
+97.20 (↓0.20)
+93.40 (−)
+96.95 (↑0.15)
+Ours
+99.20 (↑1.00)
+98.80 (↑0.60)
+97.80 (↑0.40)
+94.40 (↑1.00)
+97.55 (↑0.75)
+Retain 25% Tokens
+VLA-Cache
+96.40
+84.40
+94.00
+76.60
+87.85
++ Head
+96.20 (↓0.20)
+94.00 (↑9.60)
+96.80 (↑2.80)
+81.20 (↑4.60)
+92.05 (↑4.20)
++ Layer
+97.40 (↑1.00)
+92.40 (↑8.00)
+96.20 (↑2.20)
+83.40 (↑6.80)
+92.35 (↑4.50)
+Ours
+98.20 (↑1.80)
+96.00 (↑11.60)
+97.80 (↑3.80)
+90.20 (↑13.60)
+95.55 (↑7.70)
+Retain 12.5% Tokens
+VLA-Cache
+83.60
+62.00
+82.80
+49.60
+69.50
++ Head
+85.80 (↑2.20)
+65.40 (↑3.40)
+82.60 (↓0.20)
+49.80 (↑0.20)
+70.90 (↑1.40)
++ Layer
+94.60 (↑11.00) 83.60 (↑21.60) 93.00 (↑10.20)
+57.60 (↑8.00)
+82.20 (↑12.70)
+Ours
+96.80 (↑13.20) 84.80 (↑22.80) 94.40 (↑11.60) 60.00 (↑10.40) 84.00 (↑14.50)
+BitVLA
+100% Tokens
+Vanilla
+97.60
+99.40
+91.40
+87.20
+93.90
+Retain 50% Tokens
+VLA-Cache
+97.20
+98.80
+93.60
+86.00
+93.90
++ Head
+97.40 (↑0.20)
+99.00 (↑0.20)
+92.80 (↓0.80)
+87.20 (↑1.20)
+94.10 (↑0.20)
++ Layer
+97.80 (↑0.60)
+99.20 (↑0.40)
+93.00 (↓0.60)
+86.60 (↑0.60)
+94.15 (↑0.25)
+Ours
+98.00 (↑0.80)
+99.40 (↑0.60)
+95.00 (↑1.40)
+87.20 (↑1.20)
+94.90 (↑1.00)
+Retain 25% Tokens
+VLA-Cache
+97.00
+98.80
+92.40
+83.80
+93.00
++ Head
+97.00 (−)
+99.20 (↑0.40)
+93.40 (↑1.00)
+84.40 (↑0.60)
+93.50 (↑0.50)
++ Layer
+97.60 (↑0.60)
+99.20 (↑0.40)
+93.20 (↑0.80)
+85.40 (↑1.60)
+93.85 (↑0.85)
+Ours
+97.80 (↑0.80)
+99.20 (↑0.40)
+95.00 (↑2.60)
+87.00 (↑3.20)
+94.75 (↑1.75)
+Retain 12.5% Tokens
+VLA-Cache
+97.00
+98.40
+92.00
+82.60
+92.50
++ Head
+97.40 (↑0.40)
+99.20 (↑0.80)
+94.60 (↑2.60)
+81.40 (↓1.20)
+93.15 (↑0.65)
++ Layer
+97.20 (↑0.20)
+99.00 (↑0.60)
+93.60 (↑1.60)
+83.60 (↑1.00)
+93.35 (↑0.85)
+Ours
+97.60 (↑0.60)
+99.20 (↑0.80)
+94.40 (↑2.40)
+84.40 (↑1.80)
+93.90 (↑1.40)
+visual grounding for action generation.
+V. COMPLEXITY ANALYSIS
+A. Definitions and Baseline Complexity
+Let D denote the hidden dimension, L = Lt + Lv + La
+the total sequence length, and Lr = |Preuse| the number
+of reused visual tokens. We analyze only the attention-
+related computation affected by token reuse, excluding FFN,
+vision encoding, action decoding, and routing overhead. For
+a standard Transformer layer, the cost is approximated as:
+Cbase ≈4LD2 + 2L2D,
+(5)
+where 4LD2 accounts for the Q, K, V, and output projec-
+tions, while 2L2D corresponds to attention computation.
+B. TVCache Computational Savings
+At selected reuse layers, the Lr reused tokens reuse cached
+K/V states, avoiding redundant projections and query-side
+attention computation. The per-layer FLOPs reduction is
+approximated as:
+Scache ≈4LrD2 + 2LLrD.
+(6)
+The first term captures projection savings, while the second
+accounts for reduced attention computation.
+C. Total Computational Complexity
+The per-layer complexity of TVCache is obtained by
+subtracting the caching savings from the baseline cost:
+CTVCache ≈Cbase −Scache.
+(7)
+
+
+Substituting the above terms gives:
+CTVCache ≈
+ 4LD2 + 2L2D
+
+−
+ 4LrD2 + 2LLrD
+
+.
+(8)
+This analysis shows that TVCache reduces projection and
+attention costs through token reuse, while unchanged model
+components and routing overhead limit the corresponding
+end-to-end speedup. At 12.5% retention on OpenVLA-OFT,
+it achieves a 2.45× FLOPs reduction and a 1.44× latency
+speedup, while the routing overhead remains nearly constant
+at only 2.84–2.89 ms across different retention ratios.
+VI. CONCLUSION
+We present TVCache, a training-free and plug-and-play
+token-caching framework that exploits text-vision synergy
+for efficient VLA inference. TVCache addresses two lim-
+itations of existing caching methods: token-level spatial
+misalignment and layer-level depth mismatch. Specifically,
+attention-head filtering improves task-relevant visual ground-
+ing by suppressing unreliable cross-modal responses, while
+entropy-guided reuse-layer selection avoids unstable caching
+locations and enables more effective cache allocation. Ex-
+periments across four VLA architectures, two simulation
+benchmarks, and real-world robotic tasks consistently show
+improved task success under matched token-retention ratios.
+These results demonstrate the effectiveness of text-vision-
+aware cache allocation for training-free VLA acceleration.
+REFERENCES
+[1] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart,
+S. Welker, A. Wahid et al., “Rt-2: Vision-language-action models
+transfer web knowledge to robotic control,” in Conference on Robot
+Learning.
+PMLR, 2023, pp. 2165–2183.
+[2] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna,
+S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi et al., “Open-
+vla: An open-source vision-language-action model,” arXiv preprint
+arXiv:2406.09246, 2024.
+[3] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn,
+N. Fusai, L. Groom, K. Hausman, B. Ichter et al., “π0: A vision-
+language-action flow model for general robot control,” arXiv preprint
+arXiv:2410.24164, 2024.
+[4] M. J. Kim, C. Finn, and P. Liang, “Fine-tuning vision-language-
+action models: Optimizing speed and success,” arXiv preprint
+arXiv:2502.19645, 2025.
+[5] H. Wang, C. Xiong, R. Wang, and X. Chen, “Bitvla: 1-bit vision-
+language-action models for robotics manipulation,” arXiv preprint
+arXiv:2506.07530, 2025.
+[6] Y. Wang, P. Ding, L. Li, C. Cui, Z. Ge, X. Tong, W. Song,
+H. Zhao, W. Zhao, P. Hou et al., “Vla-adapter: An effective
+paradigm for tiny-scale vision-language-action model,” arXiv preprint
+arXiv:2509.09372, 2025.
+[7] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia,
+D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai et al., “π0.5: A
+vision-language-action model with open-world generalization,” arXiv
+preprint arXiv:2504.16054, 2025.
+[8] Y. Yang, Y. Wang, Z. Wen, L. Zhongwei, C. Zou, Z. Zhang,
+C. Wen, and L. Zhang, “Efficientvla: Training-free acceleration
+and compression for vision-language-action models,” arXiv preprint
+arXiv:2506.10100, 2025.
+[9] C. Ni, C. Chen, X. Wang, Z. Zhu, W. Zheng, B. Wang, T. Chen,
+G. Zhao, H. Li, Z. Dong et al., “Swiftvla: Unlocking spatiotemporal
+dynamics for lightweight vla models at minimal overhead,” arXiv
+preprint arXiv:2512.00903, 2025.
+[10] W. Jiang, J. Clemons, K. Sankaralingam, and C. Kozyrakis, “How
+fast can i run my vla? demystifying vla inference performance with
+vla-perf,” arXiv preprint arXiv:2602.18397, 2026.
+[11] Z. Zheng, H. Cao, S. Tian, J. Chen, M. Li, X. Sun, H. Zou, Z. Zhang,
+X. Liu, D. Cao et al., “Dyq-vla: Temporal-dynamic-aware quanti-
+zation for embodied vision-language-action models,” arXiv preprint
+arXiv:2603.07904, 2026.
+[12] Y. Xu, Y. Yang, Z. Fan, Y. Liu, Y. Li, B. Li, and Z. Zhang, “Qvla: Not
+all channels are equal in vision-language-action model’s quantization,”
+arXiv preprint arXiv:2602.03782, 2026.
+[13] Y. Yue, Y. Wang, B. Kang, Y. Han, S. Wang, S. Song, J. Feng, and
+G. Huang, “Deer-vla: Dynamic inference of multimodal large language
+models for efficient robot execution,” Advances in Neural Information
+Processing Systems, vol. 37, pp. 56 619–56 643, 2024.
+[14] W. Song, J. Chen, P. Ding, Y. Huang, H. Zhao, D. Wang, and H. Li,
+“Ceed-vla: Consistency vision-language-action model with early-exit
+decoding,” arXiv preprint arXiv:2506.13725, 2025.
+[15] H. Hu, L. Huang, N. Guan, and C. J. Xue, “Deead: Dynamic early
+exit of vision-language action for efficient autonomous driving,” arXiv
+preprint arXiv:2511.20720, 2025.
+[16] S. Xu, Y. Wang, C. Xia, D. Zhu, T. Huang, and C. Xu, “Vla-
+cache: Efficient vision-language-action manipulation via adaptive to-
+ken caching,” arXiv preprint arXiv:2502.02175, 2025.
+[17] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone,
+“Libero: Benchmarking knowledge transfer for lifelong robot learn-
+ing,” Advances in Neural Information Processing Systems, vol. 36,
+pp. 44 776–44 791, 2023.
+[18] O. Mees, L. Hermann, E. Rosete-Beas, and W. Burgard, “Calvin: A
+benchmark for language-conditioned policy learning for long-horizon
+robot manipulation tasks,” IEEE Robotics and Automation Letters,
+vol. 7, no. 3, pp. 7327–7334, 2022.
+[19] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi, Y. Babaei,
+N. Bashlykov, S. Batra, P. Bhargava, S. Bhosale et al., “Llama
+2: Open foundation and fine-tuned chat models,” arXiv preprint
+arXiv:2307.09288, 2023.
+[20] I. Ahmed, S. Islam, P. P. Datta, I. Kabir, M. N. U. R. Chowdhury,
+and A. Haque, “Qwen 2.5: A comprehensive review of the leading
+resource-efficient llm with potentioal to surpass all competitors,” 2025.
+[21] X. Li, K. Hsu, J. Gu, K. Pertsch, O. Mees, H. R. Walke, C. Fu,
+I. Lunawat, I. Sieh, S. Kirmani et al., “Evaluating real-world robot
+manipulation policies in simulation,” arXiv preprint arXiv:2405.05941,
+2024.
+[22] L. Yao, L. Xing, Y. Shi, S. Li, Y. Liu, Y. Dong, Y.-F. Zhang, L. Li,
+Q. Dong, X. Dong et al., “Towards efficient multimodal large language
+models: A survey on token compression,” 2026.
+[23] L. Chen, H. Zhao, T. Liu, S. Bai, J. Lin, C. Zhou, and B. Chang, “An
+image is worth 1/2 tokens after layer 2: Plug-and-play inference ac-
+celeration for large vision-language models,” in European Conference
+on Computer Vision.
+Springer, 2024, pp. 19–35.
+[24] Y. Zhang, C.-K. Fan, J. Ma, W. Zheng, T. Huang, K. Cheng, D. Gu-
+dovskiy, T. Okuno, Y. Nakata, K. Keutzer et al., “Sparsevlm: Visual
+token sparsification for efficient vision-language model inference,”
+arXiv preprint arXiv:2410.04417, 2024.
+[25] S. R. Alvar, G. Singh, M. Akbari, and Y. Zhang, “Divprune: Diversity-
+based visual token pruning for large multimodal models,” in Pro-
+ceedings of the Computer Vision and Pattern Recognition Conference,
+2025, pp. 9392–9401.
+[26] J. Choi, S. Lee, J. Chu, M. Choi, and H. J. Kim, “vid-tldr: Training
+free token merging for light-weight video transformer,” in Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 2024, pp. 18 771–18 781.
+[27] A. Jeddi, N. Baghbanzadeh, E. Dolatabadi, and B. Taati, “Similarity-
+aware
+token
+pruning:
+Your
+vlm
+but
+faster,”
+arXiv
+preprint
+arXiv:2503.11549, 2025.
+[28] Z. Liu, Y. Chen, H. Cai, T. Lin, S. Yang, Z. Liu, and B. Zhao, “Vla-
+pruner: Temporal-aware dual-level visual token pruning for efficient
+vision-language-action inference,” arXiv preprint arXiv:2511.16449,
+2025.
+[29] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang,
+W. Chen et al., “Lora: Low-rank adaptation of large language models.”
+Iclr, vol. 1, no. 2, p. 3, 2022.
+[30] S. Haddadin, S. Parusel, L. Johannsmeier, S. Golz, S. Gabl, F. Walch,
+M. Sabaghian, C. J¨ahne, L. Hausperger, and S. Haddadin, “The
+franka emika robot: A reference platform for robotics research and
+education,” IEEE robotics & automation magazine, vol. 29, no. 2, pp.
+46–64, 2022.

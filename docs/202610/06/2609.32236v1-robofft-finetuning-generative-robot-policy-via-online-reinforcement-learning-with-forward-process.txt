@@ -1,0 +1,2903 @@
+RoboFFT: Finetuning generative robot policy via
+online reinforcement learning with forward process
+Yu Li∗123, Shenghe Hu∗34, Yuhan Wang3,
+Yaoxiang Pu3, Haotong Zhang3, Yuanpei Chen†3, Yaodong Yang†13
+Forward vs Reverse Finetuning
+reverse finetuning
+reverse sampling (denoising)
+Environment MDP
+noise
+unstable long chain optimization
+at
+K
+Ǽ
+Ȗ
+0
+at
+0
+at
+1
+at
+k
+action
+Diffusion MDP
+forward finetuning
+forward noising
+noise
+at
+K
+at
+0
+at
+1
+at
+k
+action
+CFM Loss as surrogate likelihood
+PPO-style policy gradient update
+aligned with pretraining
+no need for internal chain 
+higher training efficiency
+Simulation: Flow & Diffusion & VLA
+ Pretrained Policy 
+ Flow & Diffusion Policy 
+ Observation 
+ State Observation 
+ Pixel Observation 
+[0.3, −1.2, 0.7, . . . ]
+Ǖ ∈Ƽ֑
+ VLA 
+Real World Deployment
+Performance & Efficiency
+       higher success rate, improved stability and efficiency  
+ 
+VLM
+Robomimic & Libero
+peg insertion
+pick eggplant
+One Framework across flow & diffusion & VLA 
+with long horizon and sparse reward tasks
+      real world RL integration & improved performance
+Figure 1: We present RoboFFT, an online reinforcement learning framework for finetuning generative
+robot policy with forward process. (a) Reverse finetuning formulates the reverse denoising process as
+a multi-step MDP, while forward finetuning aligns with the same objective as training by following
+the forward noising process. (b) One framework across popular generative robot policy on simulation
+benchmarks. (c) Real-world deployment with integration of real world RL. (d) Improved performance
+in success rate, training stability and efficiency.
+Abstract: Generative models, such as diffusion and flow-based models, have shown
+strong promise for robot policy learning by capturing complex and multimodal
+action distributions from demonstrations. However, policies trained solely with im-
+itation learning often suffer from imperfect demonstrations and distributional shifts,
+while further improvement typically requires additional expert data. Reinforcement
+learning offers a natural solution through environment interaction, but effectively
+finetuning generative robot policies remains challenging due to the intractability
+of likelihood estimation. In this work, we propose RoboFFT, a forward-process
+reinforcement learning framework for finetuning generative robot policies, which
+applies forward noising to sampled actions and uses the weighted score / flow
+matching loss to construct a surrogate policy ratio for PPO-style updates. We eval-
+uate RoboFFT with popular generative robot policies on representative simulation
+benchmarks, including long-horizon planning and sparse reward settings. Extensive
+experiments and analysis demonstrate that RoboFFT consistently improves perfor-
+mance while achieving better stability and training efficiency. We further integrate
+1Institute for Artificial Intelligence, Peking University.
+2Zhongguancun Academy.
+3PKU-PsiBot Joint Lab.
+4Nanjing University.
+*Equal contribution. Author Email: <yuanpei.chen312@gmail.com,
+yaodong.yang@pku.edu.cn>. †Corresponding author.
+arXiv:2609.32236v1  [cs.RO]  26 Sep 2026
+
+
+RoboFFT into a real world RL framework and demonstrate its effectiveness in real
+world tasks. Project website: https://student-of-holmes.github.io/RoboFFT/.
+Keywords: Diffusion RL, Generative Robot Policy, Robot Manipulation
+1
+Introduction
+Generative robot policies, typically based on diffusion and flow-based models [1, 2, 3, 4], have become
+a powerful paradigm for learning visuomotor skills from demonstrations by modeling complex and
+multi-modal action distributions [5, 6, 7], which significantly improves robot action accuracy and
+robustness and yields substantial performance gains in complex manipulation tasks [5, 7]. However,
+policies trained purely by imitation learning remain constrained by the quality and coverage of
+the demonstration data. Imperfect demonstrations, covariate shift, and insufficient exposure to
+deployment-time states can all limit the final task performance of behavior-cloned policies [8, 9].
+Online reinforcement learning (RL) naturally presents itself as a promising paradigm to further
+improve generative robot policies, as it empowers the policy to directly maximize task rewards by
+continuously interacting with and learning from the environment.
+Applying policy gradient RL methods to generative robot policies is nevertheless nontrivial. Unlike
+autoregressive policies, whose token likelihoods are tractable, diffusion and flow-based models
+typically lack a tractable exact likelihood formulation. This makes popular policy gradient objectives,
+such as PPO, difficult to be applied directly. Existing approaches address this issue by formulating
+the reverse denoising process as a multi-step MDP embedded in the high-level environment MDP,
+and optimizing through this two-level decision making trajectory [10, 11, 12] (Fig. 1(a), left). Despite
+its promising results, reverse-process finetuning introduces substantial computation and memory
+overhead, and may suffer from gradient instability due to long denoising chains, especially in
+high-dimensional and long-horizon manipulation tasks.
+To address these issues, we propose RoboFFT, a simpler yet more effective framework for online RL
+finetuning of generative robot manipulation policies through the forward noising process, inspired
+by recent studies from other application domains such as image generation and simple locomotion
+[13, 14, 15]. Instead of assigning credit through the reverse denoising chain, RoboFFT approximates
+the exact log-likelihood with a more computationally stable and efficient form akin to the score /
+flow matching loss for pretraining, yielding a principled PPO-style objective that is aligned with the
+imitation-learning objective while avoiding complicated likelihood computation or backpropagation
+through the full reverse trajectory. For flow-based policies, we further adopt SDE sampling by
+injecting noise into the sampling process, enabling controllable exploration during online data
+collection. In practice, Monte Carlo estimation, ratio-temperature calibration and further adaptations
+make likelihood estimation and updates robust across different policy architectures and tasks.
+We evaluate RoboFFT on challenging robot manipulation benchmarks such as Robomimic [16]
+and LIBERO [17], which pose difficulties like high-dimensional visual observation, long horizon
+planning and sparse reward for finetuning. Experimental results across different tasks demonstrate
+substantial and consistent performance improvements over pretrained diffusion and flow policies and
+achieve competitive or better performance compared with representative reverse and forward process
+finetuning baselines, while reducing optimization overhead. We further verify the applicability of our
+method on more complicated VLA and real world deployment settings, and study the key designs
+through ablations and visualizations. Our contributions are summarized as follows:
+(1) We introduce RoboFFT, an online reinforcement learning framework that performs policy
+gradient finetuning in the forward noising process for generative robot policies.
+(2) We carry out practical implementation of RoboFFT for representative generative robot policies
+(flow, diffusion and VLA) on challenging long-horizon, sparse-reward manipulation tasks, showing
+that RoboFFT achieves superior performance and improved training stability and efficiency.
+2
+
+
+(3) We integrate RoboFFT into the real world reinforcement learning framework for practical
+deployment and demonstrate its effectiveness over real world tasks.
+(4) We carry out a systematic ablation analysis of key design choices and conduct investigative
+experiments to provide empirical insights for the mechanism of RoboFFT.
+2
+Related Work
+2.1
+Policy Gradient for Robot Manipulation
+Policy gradient and actor critic methods provide a standard framework for learning continuous-control
+policies from interaction data [18, 19, 20, 21]. Due to the training stability with high-dimensional
+action spaces, they have been widely applied to a range of robotic control problems, including
+dexterous manipulation, legged locomotion, and agile navigation [22, 23, 24, 25, 26, 27]. For long-
+horizon manipulation, however, training from scratch remains highly exploration-intensive and is often
+impractical. A more practical paradigm is therefore to finetune policies initialized from demonstration
+data. Prior studies have shown that reinforcement learning can further improve such demonstration-
+initialized policies beyond behavior cloning while substantially reducing the exploration burden [28,
+29, 30]. RoboFFT follows this finetuning paradigm, while focusing on diffusion- and flow-based
+robot policies whose action distributions are implicitly induced by generative sampling processes,
+making the likelihood ratio computation required by policy gradient methods nontrivial.
+2.2
+RL for Generative Models
+Reinforcement learning has recently been widely applied to generative model finetuning in offline [31,
+32, 33, 34, 35, 36, 37], offline-to-online [38, 39], and online settings [11, 12, 40, 15, 13, 14]. Online
+finetuning for diffusion and flow models can be broadly categorized into reverse-process and forward-
+process approaches. Reverse-process methods formulate the denoising or sampling trajectory as a
+multi-step decision process, enabling tractable per-step likelihood for policy optimization [10, 11, 12].
+While effective, optimizing through long internal sampling chains can increase computation and
+memory costs and may introduce training instability. Forward-process methods instead optimize
+policy via constructing surrogate likelihood objectives or contrastive learning, better aligning RL
+finetuning with generative pretraining [13, 15, 40, 14]. DiffusionNFT and AWM [14, 13] study this
+idea for text-to-image generation. FPO and FPO++ [15, 40] extend it to robotic control, but mainly
+focus on locomotion tasks. In comparison, RoboFFT studies forward-process finetuning in more
+challenging robotic manipulation, and covers more extensive settings including both diffusion and
+flow policies, VLA finetuning, and real world deployment with practical stabilization designs.
+3
+Preliminaries
+3.1
+Policy Gradient and PPO
+We consider an observation conditioned robot policy πθ(at|ot), where at can denote either a single
+action or an action chunk. Given buffer B of rollout data collected by the previous policy πθold, PPO
+optimizes the clipped likelihood-ratio objective which takes expectation over (ot, at) ∼B:
+JPPO(θ) = E
+h
+min
+
+ρt(θ) ˆAt, clip (ρt(θ), 1 −ϵclip, 1 + ϵclip) ˆAt
+i
+, ρt(θ) =
+πθ(at|ot)
+πθold(at|ot)
+(1)
+where ρt(θ) is the likelihood ratio and ˆAt denotes the estimated advantage. This update requires
+evaluating the policy ratio on rollout actions, which is straightforward for explicit policies such
+as Gaussians, but generally nontrivial for diffusion- and flow-based robot policies whose action
+distributions are implicitly induced by iterative ODE / SDE samplers.
+3
+
+
+3.2
+Diffusion- and Flow-Based Robot Policies
+A diffusion- or flow-based robot policy generates a clean action or action chunk a0
+t conditioned on
+the observation ot. During imitation pretraining, the demonstration action is perturbed through a
+forward noising path
+ak
+t = αka0
+t + σkϵ,
+ϵ ∼N(0, I),
+k ∈[0, 1],
+(2)
+where αk and σk define the noise schedule. The policy models the action distribution by learning
+a score function or velocity field uθ(ak
+t , k, ot) with the score / flow matching loss, which can be
+generally written as
+Lw
+θ (a0
+t, ot) = Ek∼U(0,1),ϵ∼N(0,I)
+
+w(λk) ·
+
+−dλk
+dk
+ uθ(ak
+t , k, ot) −yk(a0
+t, ϵ)
+2
+2
+
+.
+(3)
+where λk = log(α2
+k/σ2
+k) denotes the log-SNR schedule, and w(λk) is a SNR-dependent weight [41].
+The target yk specifies different policy parameterizations: for noise-predicting diffusion policies, the
+noise network uθ = ϵθ is regressed towards the target noise yk(a0
+t, ϵ) = ϵ. For flow-based policies,
+uθ = vθ and the target is the path velocity yk(a0
+t, ϵ) = vk(a0
+t, ϵ) = ˙αka0
+t + ˙σkϵ, which reduces to
+vk(a0
+t, ϵ) = ϵ −a0
+t under the special case of rectified flow where αk = 1 −k, σk = k. Pretraining
+usually adopts w s.t. w(λk) · (−dλk/dk) ≡1. At inference time, the learned uθ induces the policy
+πθ(a0
+t|ot), a.k.a. marginal distribution of the clean action sample through reverse denoising or flow
+sampling, and thus the exact likelihood is not directly computable. RoboFFT therefore constructs a
+surrogate policy ratio akin to the matching loss used for pretraining.
+Sample
+Reverse Denoising Process via SDE Sampling
+Teleop
+Forward Noising
+Env
+ Binary Reward 
+Classifier 0/1
+finetune policy
+PPO Update  
+Action
+Noise
+F
+F
+Pretrain
+dataset 
+Surrogate
+Likelihood
+Matching Loss
+observation
+proprioception
+action
+reward
+pretrain base policy ظ޿
+μθ
+ǅ֩0
+ǅ֩օ
+ǅ֩փ
+ي~Ƹ(0, Ƴ)
+Figure 2: Overview of RoboFFT. We first collect the offline data leveraging teleoperation and
+pretrain the base policy with the score / flow matching loss. The pretrained policy then generates
+actions using an SDE sampler and receives reward feedback from the environment. Finally, we apply
+forward noising and reuse the matching loss as a surrogate likelihood for PPO-style policy update.
+4
+Method
+In this section, we present RoboFFT, our online RL framework for fine-tuning pretrained generative
+robot policies, as shown in Fig. 2. Following Sec. 3, the policy is represented by an observation condi-
+tioned prediction network uθ(ak
+t , k, ot) and pretrained with the score / flow matching loss Lw
+θ (a0
+t, ot).
+The main designs of our method are to introduce a stochastic sampling strategy that enhances data
+diversity and policy exploration (Sec. 4.1), and to formulate forward-process optimization, where the
+score / flow matching loss is employed as surrogate likelihood to enable principled policy gradient
+update (Sec. 4.2). We additionally discuss some of the practical implementation details that help
+improving the training performance and stability (Sec. 4.3). The complete algorithmic description for
+RoboFFT is deferred to the appendix (Alg. 1).
+4
+
+
+4.1
+SDE Sampling
+We start from a policy pretrained on teleoperation data with the matching loss defined in Sec. 3.
+During online rollouts, diffusion policies naturally use their SDE reverse sampler. Flow-based
+policies, however, are typically sampled by a deterministic ODE sampler solving dak
+t = vθ(ak
+t , k) dk,
+which lacks inherent stochasticity, thus not meeting the controlled stochastic exploration demand
+that PPO-style optimization typically benefits from. We therefore inject noise into the flow sampling
+process, turning it into an Euler-Maruyama SDE sampler with the following discretized form [42]:
+ak+∆k
+t
+= ak
+t + uθ(ak
+t , k, ot)∆k + σsam(k)
+√
+∆kϵ,
+ϵ ∼N(0, I).
+(4)
+Though σsam(k) can depend on denoising timestep k, we simply set σsam(k) = η in practice, where
+η > 0 is a fixed exploration strength. This sampler is used only for collecting rollout actions, unlike
+reverse-process methods where it also participates in the likelihood computation [12].
+4.2
+Surrogate Likelihood for Policy Gradient
+For a rollout action a0
+t, the exact likelihood ratio ρt(θ) is generally intractable as discussed in
+Sec. 3.2. RoboFFT therefore uses the matching loss Lw
+θ (a0
+t, ot) as a surrogate negative log-likelihood.
+This is motivated by the connection between weighted denoising objectives and ELBOs [41], and
+follows recent forward process policy gradient formulations [15, 40]. We defer the detailed ELBO
+interpretation to Appendix A.
+Given the per action matching loss Lw
+θ (a0
+t, ot), we define the surrogate policy ratio as
+bρt(θ) = exp
+ Lw
+θold(a0
+t, ot) −Lw
+θ (a0
+t, ot)
+
+.
+(5)
+Replacing the exact PPO ratio in Eq. (1) with bρt(θ) yields the RoboFFT policy objective:
+JRoboFFT(θ) = E(ot,a0
+t )∼B
+h
+min
+
+bρt(θ) ˆAt, clip (bρt(θ), 1 −ϵclip, 1 + ϵclip) ˆAt
+i
+,
+(6)
+where B is the rollout buffer and ˆAt is estimated with GAE.
+4.3
+Practical Implementation
+The following two main techniques are adopted to make the implementation of RoboFFT more stable.
+Monte Carlo sampling. The matching loss is an expectation over the forward noise level and
+Gaussian perturbation. For each a0
+t, we estimate it with Nmc i.i.d. samples to reduce the variance:
+bLw
+θ (a0
+t, ot) =
+1
+Nmc
+Nmc
+X
+i=1
+w(ki)
+uθ(aki
+t , ki, ot) −yki(a0
+t, ϵi)
+
+2
+2 ,
+aki
+t = αkia0
+t + σkiϵi.
+(7)
+Here ki ∼U(0, 1) and ϵi ∼N(0, I). We reuse the same {(ki, ϵi)} for θ and θold when computing
+the loss difference. This helps stabilize policy gradient updates.
+Temperature scaling. Since the matching loss scale may deviate from the true log-likelihood scale
+due to surrogation, we introduce a ratio temperature αratio to recalibrate it:
+bρ s
+t (θ) = exp
+
+αratio
+h
+bLw
+θold(a0
+t, ot) −bLw
+θ (a0
+t, ot)
+i
+.
+(8)
+Experimental results justify the necessity of all the designs above (Sec. 5.3). More experiment details
+and other techniques tailored for diffusion and VLA are deferred to Appendix B and F.
+5
+Experiments
+In this section, we evaluate RoboFFT on simulated and real-world robot manipulation tasks. We
+first compare it with representative diffusion- and flow-policy RL baselines on Robomimic (Sec. 5.1),
+then test its applicability to a generalist VLA policy (Sec. 5.2). We further analyze key design choices
+and policy behavior through ablation and visualization experiments (Sec. 5.3), and finally validate
+RoboFFT in real world manipulation tasks (Sec. 5.4).
+5
+
+
+0
+1
+2
+3
+4
+5
+Samples
+0.92
+0.94
+0.96
+0.98
+1.00
+Success Rate
+1e6
+(a) Lift-state
+0
+2
+4
+6
+8
+Samples
+0.75
+0.80
+0.85
+0.90
+0.95
+1.00
+Success Rate
+1e6
+(b) Can-state
+0
+0.5
+1
+1.5
+Samples
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+(c) Square-state
+0
+1
+2
+3
+Samples
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+(d) Transport-state
+0
+1
+2
+3
+4
+5
+Samples
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e6
+(e) Lift-pixel
+0
+2
+4
+6
+8
+Samples
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e6
+(f) Can-pixel
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Success Rate
+1e7
+(g) Square-pixel
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+(h) Transport-pixel
+RoboFFT-F (ours)
+RoboFFT-D (ours)
+FPO
+ReinFlow
+DPPO
+DRWR
+Figure 3: Success rates on Robomimic state- and pixel-input manipulation tasks. Curves show means
+over three random seeds, with shaded regions indicating one standard deviation across seeds.
+lift
+can
+square
+transport
+0
+1
+2
+3
+4
+5
+6
+7
+8
+Time (s)
+1.37x
+1.35x
+1.59x
+1.60x
+(a) State inputs
+RoboFFT-F vs ReinFlow
+lift
+can
+square
+transport
+0
+50
+100
+150
+200
+250
+300
+Time (s)
+1.59x
+1.60x
+1.62x
+1.48x
+(b) Image inputs
+RoboFFT-F vs ReinFlow
+lift
+can
+square
+transport
+0
+25
+50
+75
+100
+125
+150
+175
+200
+Time (s)
+96.39x
+29.06x
+19.21x
+7.28x
+(c) State inputs
+RoboFFT-D vs DPPO
+Training time
+ReinFlow
+RoboFFT-F (ours)
+DPPO
+RoboFFT-D (ours)
+0
+1
+2
+3
+4
+Samples
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e6
+LIBERO-Object
+0
+1
+2
+3
+4
+Samples
+1e6
+LIBERO-Spatial
+πRL
+RoboFFT
+Pretrained
+Figure 4: Wall-clock training time for RoboFFT-F
+versus ReinFlow and RoboFFT-D versus DPPO. Bars
+show means and error bars show standard deviations
+over the first 10 training iterations of each configura-
+tion. Training time includes policy and value-network
+updates and excludes rollout collection.
+Figure 5: VLA finetuning performance on LIBERO-
+Object and LIBERO-Spatial. RoboFFT consistently
+improves the pretrained policy across both task suites
+and achieves competitive performance compared with
+πRL, demonstrating its effectiveness for finetuning gen-
+eralist robot policy like VLA.
+5.1
+Comparison to flow and diffusion-based RL algorithms
+We instantiate RoboFFT with generative robot policies including diffusion (RoboFFT-D) and rectified
+flow (RoboFFT-F), and compare them against representative online finetuning baselines. DPPO [11]
+and ReinFlow [12] optimize through the reverse sampling process, while DRWR and FPO [15, 40]
+follow forward-process finetuning. DRWR uses reward-weighted regression, and FPO applies a
+forward-process PPO-style ratio but is not specifically adapted to the high-dimensional, long-horizon
+robot manipulation setting. We evaluate all methods on four sparse-reward Robomimic tasks, Lift,
+Can, Square, and Transport, under both state and pixel observations. As shown in Fig. 3, RoboFFT
+achieves finetuning performance competitive with or better than reverse-process baselines. On easier
+tasks such as Lift and Can, RoboFFT reaches comparable final success rates. On the more challenging
+Square and Transport tasks, especially under pixel observations, RoboFFT, particularly RoboFFT-F
+which features rectified sampling, shows more stable improvement and stronger performance. In
+contrast, DRWR and FPO are often less competitive, likely due to the lack of manipulation-oriented
+enhancements. These suggest that RoboFFT retains the simplicity of forward-process optimization
+while scaling better to visual, long-horizon, and dexterous manipulation tasks. To better reveal the
+stability of our method, additional evaluations with more random seeds are provided in Appendix C.2.
+To examine the efficiency of our method, we further compare per-iteration wall-clock training times
+within each policy family: RoboFFT-F against ReinFlow, and RoboFFT-D against DPPO (Fig. 4).
+6
+
+
+RoboFFT-F achieves an average training-time speedup of 1.53× over ReinFlow, while on the four
+Robomimic state-input tasks RoboFFT-D achieves an average training-time speedup of 38.0× against
+DPPO, despite using Nmc = 16. Thus, the computational advantage of the forward-process update
+over the reverse-process likelihood chains persists for both flow and diffusion policies, even with
+multiple Monte Carlo evaluations. The measurement protocol and aggregation of task-wise speedups
+are detailed in Appendix C.3.
+5.2
+Evaluation on generalist robot policy
+To further investigate the scalability of RoboFFT to more sophisticated policy parameterizations,
+we conduct experiments on the generalist robot policy π0, a state-of-the-art vision-language-action
+(VLA) model [43, 44]. π0 contains 3.3B parameters and adopts a VLM-based backbone together with
+a flow-based action head for continuous action generation. This architecture makes it compatible with
+RoboFFT, as the proposed forward process policy optimization can be directly applied to the flow
+matching objective of the action head. Nevertheless, finetuning π0 is substantially more challenging
+than finetuning task-specific generative policies. In particular, π0 predicts long horizon action chunks
+with high-dimensional action representations. Directly summing the flow matching loss over such a
+large action space can lead to large loss magnitudes and unstable policy updates, which poses a great
+challenge for scaling RoboFFT to VLA. We evaluate RoboFFT on the Spatial and Object tasks of
+the LIBERO benchmark. As shown in Fig. 5, RoboFFT consistently improves the performance of the
+pretrained π0 policy and achieves competitive results compared with the πRL baseline [45]. These
+results demonstrate that the proposed forward-process finetuning framework can scale to large VLA
+policies while maintaining effective and stable policy improvement.
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+Std=0
+Std=0.05
+Std=0.1
+Std=0.25
+Std=0.5
+Std=1.0
+(a) Noise level
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+N-MC=1
+N-MC=2
+N-MC=4
+N-MC=8
+N-MC=16
+(b) MC repetition
+(a) Start
+t = 0
+(b) Midway
+t = 22
+(c) Reward onset
+t = 43
+(d) Task success
+t = 48
+(e) End
+t = 99
+0
+20
+40
+60
+80
+Decision step
+0.0
+0.1
+0.2
+Diversity
+Pretrained
+Finetuned
+0.00
+0.25
+ΔQviz
+0.0
+2.5
+Reward
+(a)
+(b)
+(c)
+(d)
+(e)
+Rollout-local quality and diversity
+Figure 6: Key ablations on Robomimic Square-state.
+Moderate SDE sampling noise improves exploration,
+while a small number of Monte Carlo samples is suffi-
+cient for stable surrogate-ratio estimation.
+Figure 7: Rollout-level visualization on Robomimic
+Square. The finetuned policy increases diagnostic ac-
+tion quality while reducing action diversity around key
+decision stages.
+5.3
+Ablation and visualization experiments
+Ablation studies. We perform ablation analysis on two main design choices with RoboFFT-F on
+Robomimic Square-state, a sparse-reward task with representative manipulation difficulty. Fig. 6(a)
+varies the SDE sampling noise level η in Eq. (4), which shows that moderate SDE sampling noise
+provides the best balance between exploration and stable policy improvement, while insufficient
+exploration leads to policy collapse and overly large noise also degrades performance. Fig. 6(b)
+studies the MC sampling repetition Nmc used to estimate the surrogate matching loss in Eq. (7).
+Increasing Nmc from 1 to 2 accelerates convergence, while further increases yield limited gains
+within the online interaction budget. This supports using a small MC budget in this flow-policy
+setting, rather than implying uniformly low estimation variance across generative policies. Broader
+analyses in Appendix D examine secondary factors for RoboFFT-F, perform additional ablations
+for RoboFFT-F on Transport-state, and ablate unique factors for RoboFFT-D, examining their roles
+across tasks and policy parameterizations.
+Surrogate-ratio discrepancy. To understand how the matching loss serves as an effective surrogate
+of the log likelihood, we quantify its discrepancy from a ReinFlow-style closed-form reference during
+RoboFFT-F finetuning on Square-state. Using 2,048 action chunks per iteration, we measure the
+Spearman rank correlation and quantiles of relative error between the two types of ratio estimations
+7
+
+
+(Fig. 8). The rank correlation remains around 0.2, whereas relative errors decrease during training,
+falling below 5% for at least 90% of the sampled chunks near the end. These results show improving
+numerical agreement with the reference despite modest agreement in ranking. Definitions and
+evaluation details are provided in Appendix C.4.
+Action value and diversity. To intuitively understand how RoboFFT changes the action distribution,
+we visualize a representative successful rollout in Fig. 7. We train an auxiliary critic Qviz(s, a) to
+assess action quality and compare action chunks sampled from the pretrained and finetuned policies
+under the same trajectory states. Around key phases such as grasping, transport, and alignment, the
+finetuned policy shows a clear increase in ∆Qviz while reducing sample-based action diversity. This
+suggests that RoboFFT does not merely inject random exploration; it progressively concentrates the
+action distribution around higher-quality actions at decision-critical states. Detailed visualization
+protocols and a complementary t-SNE action-embedding analysis are provided in Appendix E.
+40
+80
+120
+160
+Fine-tuning Iteration
+0.00
+0.08
+0.16
+0.24
+Spearman 
+P50
+P90
+P95
+0
+5
+10
+15
+20
+25
+Rel. Error (%)
+Figure 8: Surrogate-ratio discrepancy during
+RoboFFT-F finetuning on Robomimic Square-
+state, represented by Spearman rank correla-
+tion and relative error quantiles.
+Task
+Pretrain Offline Online
+pick eggplant
+12 / 20
+18 / 20 20 / 20
+peg insertion
+10 / 20
+19 / 20 20 / 20
+Pour
+9 / 20
+15 / 20 18 / 20
+cabinet retrieval
+5 / 20
+14 / 20 17 / 20
+Task
+BC Agg. DRWR RL100
+pick eggplant
+14 / 20
+12 / 20 20 / 20
+Figure 9: Real-world success rates. Top: our
+method exhibits consistent improvement of four
+tasks from Pretrain to Offline to Online. Bottom:
+our method outperforms baselines.
+5.4
+Evaluation on Real World
+To evaluate the effectiveness of RoboFFT on real world robotic manipulation tasks, we integrate
+our method into a practical real-world RL framework [46, 47, 38, 39]. However, directly applying
+PPO-style online optimization to real robots is challenging due to limited interaction budgets, slow
+data collection, and the absence of parallel environments. Inspired by RL100 [39], we therefore
+adapt RoboFFT to an offline-to-online formulation while retaining its core components including
+forward noising, the matching loss surrogate ratio, and PPO-style clipping. Specifically, we first
+pretrain a flow-based policy using human demonstrations collected via SpaceMouse teleoperation.
+We then perform multiple offline RL iterations. In each offline iteration, we perform offline PPO-style
+optimization on the collected rollout data, where IQL [48] is used to estimate advantages from offline
+trajectories. After each offline RL update, we deploy the updated policy on the real robot to collect
+additional trajectories, which are added to the offline dataset for the next offline RL iteration. To
+stabilize policy improvement and avoid drifting away from reliable human behaviors, we combine
+the newly collected rollout data with the original teleoperation demonstrations and conduct imitation
+learning to update the base policy for the next iteration. During the online RL phase, we continue
+PPO-style updates initialized from the offline actor and IQL critic. We use a sparse binary 0/1 reward
+judged by a human evaluator without training reward function.
+We evaluate RoboFFT on four real-world tasks including Peg Insertion, Pick Eggplant, Pour and
+Cabinet Retrieval, covering both precision and long-horizon manipulation, as shown in Fig. 10. For
+each task, we conduct 20 real world trials. As reported in Fig. 9, RoboFFT consistently improves
+performance from the pretrained policy to offline and further to online finetuning, even on Cabinet
+Retrieval, where the pretrained policy has a relatively low success rate. These consistent gains
+demonstrate that RL post-training can effectively improve pretrained generative policies through task-
+level interaction feedback. To separate the effect of RL optimization from simple data aggregation, we
+further compare different post-training strategies on Pick Eggplant under the same data budget. BC
+8
+
+
+Aggregation improves the pretrained policy from 12/20 to only 14/20, while DRWR achieves 12/20,
+compared with 18/20 for offline RoboFFT. Online RoboFFT further reaches 20/20, matching
+RL100. These results show that the gains arise from effective RL post-training rather than merely
+adding rollout data, while online interaction provides further improvement beyond offline optimization.
+More implementation details are provided in Appendix G.
+Cabinet Retrieval 
+Pour 
+Pick Eggplant 
+Peg Insertion 
+Figure 10: Successful real world rollouts on the four selected tasks..
+6
+Limitations
+Although RoboFFT enables stable online finetuning of generative robot policies through the forward
+noising process, it still has several limitations. First, the weighted score/flow matching loss is only
+a surrogate for the true action log-likelihood, and its scale may vary across noise schedules, action
+dimensions, and policy architectures. Therefore, additional calibration such as temperature scaling is
+still needed to ensure stable PPO-style updates. Second, our current framework relies on on-policy
+PPO, which has limited data efficiency and cannot fully reuse historical trajectories. This makes
+real-world deployment challenging, especially when data collection is restricted to a single robot.
+Although offline-to-online paradigms such as RL100 [39] can partially alleviate this issue, they
+usually require iterative data collection and offline retraining, which remains time-consuming in
+practice. Future work may explore more sample-efficient variants that better leverage historical
+trajectories and human intervention data for safer and faster real world robot learning.
+7
+Conclusion
+We present RoboFFT, a forward-process reinforcement learning framework for finetuning generative
+robot policies. By applying forward noising to sampled actions and using the weighted score/flow
+matching loss to construct a surrogate policy ratio, RoboFFT enables PPO-style policy optimization
+without requiring explicit likelihood estimation. Experiments on representative simulation bench-
+marks show that RoboFFT consistently improves popular generative robot policies on long-horizon
+and sparse-reward manipulation tasks, while achieving better training stability and efficiency. Further
+integration into a real world RL framework also demonstrates its effectiveness on real robot tasks.
+9
+
+
+Acknowledgments
+We would like to sincerely thank Qiuxuan Chen, Yuhang Wu, and Xinyu Liu for their generous help
+and valuable contributions to the real world implementation and experiments. We are especially
+grateful to Huayu Chen (Tsinghua University) for the many insightful discussions and thoughtful
+suggestions at the early stage of this project. This work was supported by the National Natural
+Science Foundation of China (Grant No. 62561160152) and the Zhongguancun Academy (Grant No.
+C20250604).
+References
+[1] Y. Song, J. Sohl-Dickstein, D. P. Kingma, A. Kumar, S. Ermon, and B. Poole. Score-based
+generative modeling through stochastic differential equations. arXiv preprint arXiv:2011.13456,
+2020.
+[2] J. Song, C. Meng, and S. Ermon.
+Denoising diffusion implicit models.
+arXiv preprint
+arXiv:2010.02502, 2020.
+[3] J. Ho, A. Jain, and P. Abbeel. Denoising diffusion probabilistic models. Advances in neural
+information processing systems, 33:6840–6851, 2020.
+[4] Y. Lipman, R. T. Chen, H. Ben-Hamu, M. Nickel, and M. Le. Flow matching for generative
+modeling. arXiv preprint arXiv:2210.02747, 2022.
+[5] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake, and S. Song. Diffusion
+policy: Visuomotor policy learning via action diffusion. The International Journal of Robotics
+Research, 44(10-11):1684–1704, 2025.
+[6] Y. Ze, G. Zhang, K. Zhang, C. Hu, M. Wang, and H. Xu. 3d diffusion policy: Generalizable
+visuomotor policy learning via simple 3d representations. In ICRA 2024 Workshop on 3D Visual
+Representations for Robot Manipulation.
+[7] G. Yan, J. Zhu, Y. Deng, S. Yang, R.-Z. Qiu, X. Cheng, M. Memmel, R. Krishna, A. Goyal,
+X. Wang, et al. Maniflow: A general robot manipulation policy via consistency flow training.
+arXiv preprint arXiv:2509.01819, 2025.
+[8] F. Codevilla, E. Santana, A. M. López, and A. Gaidon. Exploring the limitations of behavior
+cloning for autonomous driving. In Proceedings of the IEEE/CVF international conference on
+computer vision, pages 9329–9338, 2019.
+[9] S. Sagheb and D. P. Losey. Counterfactual behavior cloning: Offline imitation learning from
+imperfect human demonstrations. arXiv preprint arXiv:2505.10760, 2025.
+[10] K. Black, M. Janner, Y. Du, I. Kostrikov, and S. Levine. Training diffusion models with
+reinforcement learning. arXiv preprint arXiv:2305.13301, 2023.
+[11] A. Z. Ren, J. Lidard, L. L. Ankile, A. Simeonov, P. Agrawal, A. Majumdar, B. Burchfiel, H. Dai,
+and M. Simchowitz. Diffusion policy policy optimization. arXiv preprint arXiv:2409.00588,
+2024.
+[12] T. Zhang, C. Yu, S. Su, and Y. Wang. Reinflow: Fine-tuning flow matching policy with online
+reinforcement learning. arXiv preprint arXiv:2505.22094, 2025.
+[13] S. Xue, C. Ge, S. Zhang, Y. Li, and Z.-M. Ma. Advantage weighted matching: Aligning rl with
+pretraining in diffusion models. arXiv preprint arXiv:2509.25050, 2025.
+[14] K. Zheng, H. Chen, H. Ye, H. Wang, Q. Zhang, K. Jiang, H. Su, S. Ermon, J. Zhu, and M.-
+Y. Liu. Diffusionnft: Online diffusion reinforcement with forward process. arXiv preprint
+arXiv:2509.16117, 2025.
+10
+
+
+[15] D. McAllister, S. Ge, B. Yi, C. M. Kim, E. Weber, H. Choi, H. Feng, and A. Kanazawa. Flow
+matching policy gradients. arXiv preprint arXiv:2507.21053, 2025.
+[16] A. Mandlekar, D. Xu, J. Wong, S. Nasiriany, C. Wang, R. Kulkarni, L. Fei-Fei, S. Savarese,
+Y. Zhu, and R. Martín-Martín. What matters in learning from offline human demonstrations for
+robot manipulation. arXiv preprint arXiv:2108.03298, 2021.
+[17] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone. Libero: Benchmarking knowledge
+transfer for lifelong robot learning. Advances in Neural Information Processing Systems, 36:
+44776–44791, 2023.
+[18] R. J. Williams. Simple statistical gradient-following algorithms for connectionist reinforcement
+learning. Machine learning, 1992.
+[19] R. S. Sutton, D. McAllester, S. Singh, and Y. Mansour. Policy gradient methods for reinforce-
+ment learning with function approximation. Advances in neural information processing systems,
+1999.
+[20] T. P. Lillicrap, J. J. Hunt, A. Pritzel, N. Heess, T. Erez, Y. Tassa, D. Silver, and D. Wierstra.
+Continuous control with deep reinforcement learning. arXiv preprint arXiv:1509.02971, 2015.
+[21] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization
+algorithms. arXiv preprint arXiv:1707.06347, 2017.
+[22] Y. Wang, Y. Li, Y. Yang, and Y. Chen. Dexterous non-prehensile manipulation for ungraspable
+object via extrinsic dexterity. arXiv preprint arXiv:2503.23120, 2025.
+[23] T. Chen, J. Xu, and P. Agrawal. A system for general in-hand object re-orientation. In
+Conference on Robot Learning, 2022.
+[24] Y. Chen, T. Wu, S. Wang, X. Feng, J. Jiang, Z. Lu, S. McAleer, H. Dong, S.-C. Zhu, and Y. Yang.
+Towards human-level bimanual dexterous manipulation with reinforcement learning. Advances
+in Neural Information Processing Systems, 35:5150–5163, 2022.
+[25] O. M. Andrychowicz, B. Baker, M. Chociej, R. Jozefowicz, B. McGrew, J. Pachocki, A. Petron,
+M. Plappert, G. Powell, A. Ray, et al. Learning dexterous in-hand manipulation. The Interna-
+tional Journal of Robotics Research, 2020.
+[26] J. Hwangbo, J. Lee, A. Dosovitskiy, D. Bellicoso, V. Tsounis, V. Koltun, and M. Hutter. Learning
+agile and dynamic motor skills for legged robots. Science Robotics, 2019.
+[27] E. Kaufmann, L. Bauersfeld, A. Loquercio, M. Müller, V. Koltun, and D. Scaramuzza.
+Champion-level drone racing using deep reinforcement learning. Nature, 2023.
+[28] A. Rajeswaran, V. Kumar, A. Gupta, G. Vezzani, J. Schulman, E. Todorov, and S. Levine.
+Learning complex dexterous manipulation with deep reinforcement learning and demonstrations.
+arXiv preprint arXiv:1709.10087, 2017.
+[29] M. Torne, A. Simeonov, Z. Li, A. Chan, T. Chen, A. Gupta, and P. Agrawal. Reconciling reality
+through simulation: A real-to-sim-to-real approach for robust manipulation. arXiv preprint
+arXiv:2403.03949, 2024.
+[30] X. B. Peng, Z. Ma, P. Abbeel, S. Levine, and A. Kanazawa. Amp: Adversarial motion priors
+for stylized physics-based character control. ACM Transactions on Graphics (ToG), 2021.
+[31] P. J. Ball, L. Smith, I. Kostrikov, and S. Levine. Efficient online reinforcement learning with
+offline data. In International Conference on Machine Learning, pages 1577–1594. PMLR,
+2023.
+11
+
+
+[32] M. Nakamoto, S. Zhai, A. Singh, M. Sobol Mark, Y. Ma, C. Finn, A. Kumar, and S. Levine.
+Cal-ql: Calibrated offline rl pre-training for efficient online fine-tuning. Advances in Neural
+Information Processing Systems, 36, 2024.
+[33] H. Hu, S. Mirchandani, and D. Sadigh. Imitation bootstrapped reinforcement learning. arXiv
+preprint arXiv:2311.02198, 2023.
+[34] Z. Wang, J. J. Hunt, and M. Zhou. Diffusion policies as an expressive policy class for offline
+reinforcement learning. arXiv preprint arXiv:2208.06193, 2022.
+[35] P. Hansen-Estruch, I. Kostrikov, M. Janner, J. G. Kuba, and S. Levine. Idql: Implicit q-learning
+as an actor-critic method with diffusion policies. arXiv preprint arXiv:2304.10573, 2023.
+[36] S. Park, Q. Li, and S. Levine. Flow q-learning. arXiv preprint arXiv:2502.02538, 2025.
+[37] O. Celik, Z. Li, D. Blessing, G. Li, D. Palenicek, J. Peters, G. Chalvatzaki, and G. Neu-
+mann. Dime: Diffusion-based maximum entropy reinforcement learning. arXiv preprint
+arXiv:2502.02316, 2025.
+[38] Y. Chen, S. Tian, S. Liu, Y. Zhou, H. Li, and D. Zhao. Conrft: A reinforced fine-tuning method
+for vla models via consistency policy. arXiv preprint arXiv:2502.05450, 2025.
+[39] K. Lei, H. Li, D. Yu, Z. Wei, L. Guo, Z. Jiang, Z. Wang, S. Liang, and H. Xu. Rl-100: Performant
+robotic manipulation with real-world reinforcement learning. arXiv preprint arXiv:2510.14830,
+2025.
+[40] B. Yi, H. Choi, H. G. Singh, X. Huang, T. E. Truong, C. Sferrazza, Y. Ma, R. Duan, P. Abbeel,
+G. Shi, et al. Flow policy gradients for robot control. arXiv preprint arXiv:2602.02481, 2026.
+[41] D. Kingma and R. Gao. Understanding diffusion objectives as the elbo with simple data
+augmentation. Advances in Neural Information Processing Systems, 36:65484–65516, 2023.
+[42] P. E. Kloeden and R. Pearson. The numerical solution of stochastic differential equations. The
+ANZIAM Journal, 20(1):8–12, 1977.
+[43] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai, L. Groom, K. Hausman,
+B. Ichter, et al. π0: A vision-language-action flow model for general robot control. arXiv
+preprint arXiv:2410.24164, 2024.
+[44] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail, M. Equi,
+C. Finn, N. Fusai, et al. π0.5: a vision-language-action model with open-world generalization.
+arXiv preprint arXiv:2504.16054, 2025.
+[45] K. Chen, Z. Liu, T. Zhang, Z. Guo, S. Xu, H. Lin, H. Zang, Q. Zhang, Z. Yu, G. Fan,
+et al. πrl: Online rl fine-tuning for flow-based vision-language-action models. arXiv preprint
+arXiv:2510.25889, 2025.
+[46] J. Luo, Z. Hu, C. Xu, Y. L. Tan, J. Berg, A. Sharma, S. Schaal, C. Finn, A. Gupta, and S. Levine.
+Serl: A software suite for sample-efficient robotic reinforcement learning. arXiv preprint
+arXiv:2401.16013, 2024.
+[47] J. Luo, C. Xu, J. Wu, and S. Levine. Precise and dexterous robotic manipulation via human-in-
+the-loop reinforcement learning. Science Robotics, 10(105):eads5033, 2025.
+[48] I. Kostrikov, A. Nair, and S. Levine. Offline reinforcement learning with implicit q-learning.
+arXiv preprint arXiv:2110.06169, 2021.
+[49] C. Yu, Y. Wang, Z. Guo, H. Lin, S. Xu, H. Zang, Q. Zhang, Y. Wu, C. Zhu, J. Hu, et al. Rlinf:
+Flexible and efficient large-scale reinforcement learning via macro-to-micro flow transformation.
+In 20th USENIX Symposium on Operating Systems Design and Implementation (OSDI 26),
+pages 829–846, 2026.
+12
+
+
+[50] T. Z. Zhao, V. Kumar, S. Levine, and C. Finn. Learning fine-grained bimanual manipulation
+with low-cost hardware. arXiv preprint arXiv:2304.13705, 2023.
+[51] Y. Li, X. Zhang, R. Wu, Z. Zhang, Y. Geng, H. Dong, and Z. He. Unidoormanip: Learning
+universal door manipulation policy over large-scale and diverse door manipulation environments.
+arXiv preprint arXiv:2403.02604, 2024.
+[52] M. Janner, Y. Du, J. B. Tenenbaum, and S. Levine. Planning with diffusion for flexible behavior
+synthesis. arXiv preprint arXiv:2205.09991, 2022.
+[53] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, X. Chen, K. Choromanski, T. Ding, D. Driess,
+A. Dubey, C. Finn, et al. Rt-2: Vision-language-action models transfer web knowledge to
+robotic control. arXiv preprint arXiv:2307.15818, 2023.
+[54] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna, S. Nair, R. Rafailov, E. Foster,
+G. Lam, P. Sanketi, et al. Openvla: An open-source vision-language-action model. arXiv
+preprint arXiv:2406.09246, 2024.
+[55] A. Wagenmaker, M. Nakamoto, Y. Zhang, S. Park, W. Yagoub, A. Nagabandi, A. Gupta, and
+S. Levine. Steering your diffusion policy with latent space reinforcement learning. arXiv
+preprint arXiv:2506.15799, 2025.
+[56] L. Ankile, Z. Jiang, R. Duan, G. Shi, P. Abbeel, and A. Nagabandi. Residual off-policy rl for
+finetuning behavior cloning policies. arXiv preprint arXiv:2509.19301, 2025.
+[57] Z. Sun and S. Song. From prior to pro: Efficient skill mastery via distribution contractive rl
+finetuning. arXiv preprint arXiv:2603.10263, 2026.
+[58] Y. Jiang, C. Wang, R. Zhang, J. Wu, and L. Fei-Fei. Transic: Sim-to-real policy transfer by
+learning from online correction. arXiv preprint arXiv:2405.10315, 2024.
+[59] C. Xu, J. T. Springenberg, M. Equi, A. Amin, A. Esmail, S. Levine, and L. Ke. Rl token:
+Bootstrapping online rl with vision-language-action models. arXiv preprint arXiv:2604.23073,
+2026.
+13
+
+
+A
+Additional Method Details
+A.1
+ELBO Interpretation of the Surrogate Ratio
+RoboFFT constructs the policy ratio from the same score / flow matching loss used for imitation
+pretraining. This follows the forward-process surrogate-ratio idea used in flow policy optimization [15,
+40] and is motivated by the connection between weighted denoising objectives and the ELBO [41].
+For a rollout action a0
+t conditioned on ot, write the conditional ELBO as
+ELBOθ(a0
+t|ot) = log πθ(a0
+t|ot) −DKL
+θ
+(a0
+t, ot),
+(9)
+where DKL
+θ
+(a0
+t, ot) denotes the variational gap between the true conditional log-likelihood and the
+ELBO. Taking the ratio of exponentiated ELBOs under the current and previous policies gives
+eρt(θ) =
+exp
+ ELBOθ(a0
+t|ot)
+
+exp (ELBOθold(a0
+t|ot))
+=
+πθ(a0
+t|ot)
+πθold(a0
+t|ot) exp
+ DKL
+θold(a0
+t, ot) −DKL
+θ
+(a0
+t, ot)
+
+.
+(10)
+Thus, the ELBO ratio can be viewed as a surrogate likelihood ratio with an additional correction
+induced by the variational gap.
+For common diffusion parameterizations and monotonic weightings, Kingma and Gao [41] show that
+weighted denoising objectives are closely related to ELBO objectives up to constants independent of
+the learnable parameters. Following this connection, we use the score / flow matching loss defined in
+Sec. 3.2 as a surrogate negative log-likelihood:
+Lw
+θ (a0
+t, ot) ≈−ELBOθ(a0
+t|ot) + c(a0
+t, ot),
+(11)
+where c(a0
+t, ot) does not depend on θ and therefore cancels in the ratio. Substituting Eq. (11) into
+Eq. (10) yields
+bρt(θ) = exp
+ Lw
+θold(a0
+t, ot) −Lw
+θ (a0
+t, ot)
+
+,
+(12)
+which is the unscaled surrogate ratio in Eq. (5). In practice, we estimate the matching loss with
+Eq. (7) and use the temperature-scaled ratio in Eq. (8).
+A.2
+Advantage and Value Estimation
+For policy optimization, we estimate the advantage with generalized advantage estimation (GAE):
+ˆAt =
+T −t
+X
+l=0
+(γλGAE)l (rt+l + γVϕ(ot+l+1) −Vϕ(ot+l)) ,
+(13)
+where γ is the discount factor and λGAE controls the bias-variance trade-off. The value function is
+trained with the squared regression loss
+LV (ϕ) = E(ot, ˆ
+Rt)∼B
+
+Vϕ(ot) −ˆRt
+2
+,
+(14)
+where ˆRt is the return target.
+A.3
+Training Algorithm
+B
+Implementation Details for the Robomimic Experiments
+This section provides the implementation details for the Robomimic online finetuning experiments in
+Sec. 5. We follow the Robomimic benchmark protocol [16] and use the same processed demonstration
+data and environment preprocessing as the DPPO and ReinFlow Robomimic experiments [11, 12].
+14
+
+
+Algorithm 1 RoboFFT
+Require: Pretrained prediction network uθ, value function Vϕ, rollout buffer B, number of Monte
+Carlo samples Nmc, ratio temperature αratio, PPO clipping threshold ϵclip.
+1: for each iteration do
+2:
+Set θold ←θ.
+3:
+Collect online rollouts with the current generative policy; for flow-based policies, use the
+stochastic sampler in Eq. (4).
+4:
+Store transitions (ot, a0
+t, rt, ot+1) in B.
+5:
+Compute advantage estimates ˆAt and value targets ˆRt.
+6:
+for each policy update epoch do
+7:
+for each minibatch from B do
+8:
+Draw {(ki, ϵi)}Nmc
+i=1 with ki ∼U(0, 1) and ϵi ∼N(0, I).
+9:
+Construct noised actions aki
+t = αkia0
+t + σkiϵi.
+10:
+Compute bLw
+θ (a0
+t, ot) and bLw
+θold(a0
+t, ot) using Eq. (7).
+11:
+Compute the scaled ratio bρ s
+t (θ) using Eq. (8).
+12:
+Update θ by maximizing Eq. (6) with bρt(θ) replaced by bρ s
+t (θ).
+13:
+Update Vϕ by minimizing Eq. (14).
+14:
+Clear the rollout buffer B.
+15: return Fine-tuned generative policy uθ.
+All Robomimic tasks use sparse rewards and report success rates. The online interaction budget
+shown in the training curves is computed as
+Nonline = Hexec · nenv · nstep · nitr,
+(15)
+where Hexec is the number of low-level actions executed after each policy inference, nenv is the
+number of parallel environments, nstep is the number of decision steps collected per iteration, and
+nitr is the number of online finetuning iterations.
+B.1
+Robomimic Benchmark
+We use Robomimic [16] as the simulated manipulation benchmark throughout our main experiments.
+Robomimic provides sparse-reward robot manipulation tasks collected from human demonstrations,
+making it a suitable testbed for evaluating whether online finetuning can improve a behavior-cloned
+generative policy beyond its initial demonstration-trained performance. Following the data processing
+and environment conventions used in DPPO and ReinFlow [11, 12], we evaluate four Robomimic
+tasks: Lift, Can, Square, and Transport. The corresponding observation and action specifications are
+summarized in Table 1.
+The four tasks cover different manipulation difficulties. Lift requires the robot to grasp and lift an
+object, while Can is a pick-and-place task where the robot must manipulate a can into the target
+container. Square is a more precision-sensitive assembly task in which the robot must manipulate a
+square nut and place it onto a positioning peg. Transport is a long-horizon bimanual manipulation
+task that requires coordinated control of two robot arms to move an object across the workspace.
+Thus, the benchmark spans both short-horizon single-arm manipulation and longer-horizon bimanual
+manipulation.
+We consider both state-input and pixel-input variants. In the state-input setting, the policy observes
+low-dimensional proprioceptive and object state features. In the pixel-input setting, the policy
+observes RGB image(s) at 96 × 96 resolution together with a compact proprioceptive state. Lift,
+Can, and Square use a single camera view, while Transport uses two camera views. For all tasks, the
+action is continuous. Lift, Can, and Square use a 7-dimensional action space, whereas Transport uses
+a 14-dimensional action space due to its bimanual control setup.
+All Robomimic tasks use sparse rewards. We report success rate as the primary evaluation metric.
+The maximum episode length Tmax is task-dependent: 300 decision steps for Lift and Can, 400 for
+15
+
+
+Table 1: Robomimic task specifications used in our online finetuning experiments. For pixel-input
+tasks, “Prop. dim” denotes the low-dimensional proprioceptive input dimension paired with image
+observations, and “Image views” reports the number and spatial resolution of RGB camera views.
+Task
+State obs dim
+Pixel prop. dim
+Pixel image views
+Act dim
+Tmax
+Reward
+Lift
+19
+9
+1 × 96 × 96
+7
+300
+sparse
+Can
+23
+9
+1 × 96 × 96
+7
+300
+sparse
+Square
+23
+9
+1 × 96 × 96
+7
+400
+sparse
+Transport
+59
+18
+2 × 96 × 96
+14
+800
+sparse
+Table 2: Base policy checkpoints used for Robomimic online finetuning. The listed numbers are the
+behavior-cloning pretraining epochs of the selected checkpoints.
+Task
+Action chunk (H × da)
+State-input checkpoint
+Pixel-input checkpoint
+Lift
+4 × 7
+3000 epochs
+2000 epochs
+Can
+4 × 7
+3000 epochs
+2000 epochs
+Square
+4 × 7
+3000 epochs
+2000 epochs
+Transport
+8 × 14
+3000 epochs
+2000 epochs
+Square, and 800 for Transport. In online finetuning, the policy predicts action chunks and executes
+the first Hexec actions in each chunk; the detailed online interaction budget and algorithm-specific
+hyperparameters are described in the following sections.
+B.2
+Pretraining Setup
+All flow-based policies are pretrained with behavior cloning using the conditional flow matching
+objective, while diffusion based ones pretrained using the denoising score matching objective. The
+pretraining datasets follow the processed Robomimic data used by DPPO and ReinFlow, so no
+additional demonstrations are introduced for RoboFFT. In the state-input setting, the actor and critic
+are MLP-based networks. In the pixel-input setting, both the actor and critic use a ViT-based visual
+backbone with a proprioceptive encoder, following the architecture convention used in prior diffusion
+and flow policy finetuning works [11, 12]. For fairness, baseline policies use the same observation
+preprocessing, action chunking, and model sizes whenever applicable. Table 2 lists the pretrained
+checkpoints used as base policies in the main Robomimic experiments.
+B.3
+Online Finetuning Budget and Shared Environment Configuration
+All methods are evaluated under the same Robomimic environment wrappers and action chunking
+convention. A policy receives one observation step, i.e., cond_steps = 1, predicts an action chunk
+of horizon H, and executes the first Hexec low-level actions. For Lift, Can, and Square, we use
+H = Hexec = 4; for Transport, we use H = Hexec = 8. The episode caps are 300 decision steps for
+Lift and Can, 400 for Square, and 800 for Transport. We keep these task and model specifications
+aligned across RoboFFT and all baselines; the curves are plotted against the online sample budget in
+Eq. (15).
+B.4
+Baseline Methods and Configurations
+We compare RoboFFT with representative online RL fine-tuning baselines for diffusion- and flow-
+based robot policies.
+DPPO. Diffusion Policy Policy Optimization [11] is a representative reverse-process fine-tuning
+method for diffusion policies. It formulates the reverse denoising process together with the environ-
+ment interaction process as a two-level MDP, and applies PPO to optimize the Gaussian likelihoods of
+denoising transitions. We use DPPO as the canonical diffusion-policy RL baseline for long-horizon
+manipulation tasks.
+16
+
+
+Table 3: Online finetuning budgets for Robomimic experiments. The last column equals Hexec ·
+nenv · nstep · nitr, which gives the total number of online interaction samples.
+Task
+Input
+Hexec
+nenv
+nstep
+nitr
+Online samples
+Lift
+state
+4
+50
+300
+81
+4.86M
+Lift
+pixel
+4
+50
+300
+81
+4.86M
+Can
+state
+4
+50
+300
+151
+9.06M
+Can
+pixel
+4
+50
+300
+151
+9.06M
+Square
+state
+4
+50
+400
+201
+16.08M
+Square
+pixel
+4
+50
+400
+201
+16.08M
+Transport
+state
+8
+50
+400
+201
+32.16M
+Transport
+pixel
+8
+50
+400
+201
+32.16M
+ReinFlow. ReinFlow [12] extends the reverse-process policy-gradient paradigm to flow-based
+policies. It injects stochasticity into the deterministic flow trajectory, turns the sampler into a
+discrete-time Markov process with tractable Gaussian transition probabilities, and performs PPO-
+style optimization over the internal sampling trajectory. We use ReinFlow as the primary flow-policy
+baseline.
+FPO. Flow Policy Optimization [15] is a forward-process policy-gradient method that constructs
+a PPO-style surrogate ratio from conditional flow matching losses. We adapt FPO into our online
+fine-tuning codebase for Robomimic. To ensure fair comparison under the same tasks and pretrained
+policies, most environment and optimizer settings are shared with RoboFFT. The main algorithmic
+differences are that FPO does not use our SDE explorative sampling strategy and ratio-temperature
+calibration adopted in RoboFFT, while following the original FPO convention of using Nmc = 8
+(ki, ϵi) samples for ratio estimation.
+DRWR. DRWR is a lightweight diffusion reward-weighted regression baseline following the imple-
+mentation convention in DPPO [11]. It performs forward-noise matching style updates weighted by
+rewards or returns, and serves as a simple forward-process reference that is architecturally close to
+our approach but does not use the PPO-style objective and the many critical designs introduced by
+our work.
+For all baselines, we match the Robomimic environment wrappers, observation preprocessing,
+action chunking, base-policy training data, and evaluation protocol whenever applicable. The
+hyperparameters of DPPO, ReinFlow, and DRWR follow their original implementations unless a task-
+specific adaptation is necessary. Since the released ReinFlow manipulation implementation focuses on
+pixel-input Robomimic tasks, for state-input tasks we adapt secondary settings such as optimizer and
+update-batch configurations while keeping the core ReinFlow design unchanged. For fair comparison,
+the number of inference steps and finetuning steps are tuned on each task, so that each baseline
+achieves its nearly best performance. RoboFFT-F and RoboFFT-D are respectively implemented
+upon the ReinFlow [12] and DPPO [11] codebases, and use the same online interaction budget
+as the corresponding baselines on each task. We report the task success rate (fraction of multiple
+parallelized rollouts that complete the task at each evaluation point) as the principal performance
+metric for Robomimic tasks.
+B.5
+RoboFFT-F Hyperparameters
+Unless stated otherwise, RoboFFT uses 10 sampling steps during both rollout and evaluation and sets
+ft_denoising_steps = 10 during finetuning. Exploration is enabled by the stochastic forward-
+process perturbation in Eq. (4); in all main Robomimic runs we set the fixed denoising noise level
+to η = 0.25, implemented by min_std = max_std = 0.25. We use sample_t_type = linspace,
+i.e., the flow time used to compute the CFM surrogate loss is sampled uniformly from the discrete
+integration grid used at inference. The policy loss clipping coefficient is clip_ploss_coef = 0.02.
+17
+
+
+Table 4: Main RoboFFT-F optimizer hyperparameters for Robomimic. All runs use γ = 0.999, GAE
+parameter λ = 0.95, 10 update epochs per iteration, target KL 10−2, and the repeat-samples trick
+described in Sec. 4.3.
+Task
+Input
+Actor LR
+Critic LR
+Batch size
+Nmc
+αratio
+Lift
+state
+2 × 10−6
+1 × 10−3
+10000
+1
+2
+Can
+state
+2 × 10−6
+1 × 10−3
+10000
+1
+2
+Square
+state
+2 × 10−5
+1 × 10−3
+10000
+2
+2
+Transport
+state
+2 × 10−6
+1 × 10−3
+10000
+1
+1
+Lift
+pixel
+2 × 10−5
+6.5 × 10−4
+500
+1
+2
+Can
+pixel
+2 × 10−5
+6.5 × 10−4
+500
+1
+2
+Square
+pixel
+3.5 × 10−6
+4.5 × 10−4
+500
+1
+2
+Transport
+pixel
+3.5 × 10−6
+4.5 × 10−4
+500
+1
+1
+In Eq. (8), we calibrate the CFM-loss difference by αratio. In the paper-level notation, the surrogate
+log-ratio is normalized by the action feature dimension, but not by the action horizon. Under this
+convention, we set αratio = 2 for Lift, Can, and Square, and αratio = 1 for Transport. The smaller
+value for Transport compensates for its longer action chunk horizon. The Monte-Carlo repetition
+number is Nmc = 1 for all main runs except Square-state, where we use Nmc = 2. Table 4
+summarizes the task-specific optimizer settings.
+B.6
+Specialized Designs for RoboFFT-D
+RoboFFT-D is the diffusion-policy instantiation of RoboFFT and is implemented upon the DPPO
+codebase [11]. We keep the Robomimic environment wrappers, diffusion actor / critic architectures,
+rollout buffer, GAE estimation, PPO update loop, and evaluation protocol aligned with DPPO
+whenever applicable. The key difference is that RoboFFT-D does not treat the reverse denoising
+chain as a diffusion MDP for computing Gaussian transition likelihoods. Instead, it applies forward
+noising to the final rollout action a0
+t and uses a weighted denoising score matching loss Lw,D
+θ
+(a0
+t, ot)
+as the surrogate negative log-likelihood for PPO-style policy optimization.
+Delta-log-SNR weighting. For RoboFFT-F, we use the simplest flow matching weighting w(λk)
+so that the effective coefficient before the score / flow matching MSE is constant: ΩF (k) =
+w(λk)(−dλk/dk) ≡1. This makes the CFM surrogate loss reduce to the standard unweighted
+velocity-matching MSE loss used in flow pretraining. RoboFFT-D instead uses a diffusion-specific
+discrete log-SNR weighting. Let ¯αj denote the cumulative product of diffusion alphas at denoising
+index j. We define a clipped variance and the corresponding clipped log-SNR by
+eσ2
+j = max
+ 1 −¯αj, σ2
+min
+
+,
+eλj = log max
+ 1 −eσ2
+j , σ2
+min
+
+eσ2
+j
+.
+(16)
+For a sampled denoising index j, the discrete weighting coefficient is
+f
+∆λj = eλj−1 −eλj,
+(17)
+where the previous index follows the corresponding DDPM or DDIM finetuning grid. This discrete
+coefficient approximates (−dλk/dk) and the weighting schedule is chosen as w(λk) ≡1. It keeps
+the surrogate matching loss closer to the weighted denoising objective motivated by the ELBO
+interpretation [41], while the clipping in eλj avoids excessively large weights near nearly clean
+actions.
+Diffusion surrogate matching loss. For each rollout action a0
+t, RoboFFT-D samples Nmc forward-
+noising pairs and evaluates the noise-prediction error of the diffusion policy uθ = ϵθ. Specifically,
+for the i-th sample,
+aki
+t = αkia0
+t + σkiϵi,
+ϵi ∼N(0, I).
+(18)
+18
+
+
+The Monte Carlo estimate of the diffusion-specific weighted score matching loss is
+bLw,D
+θ
+(a0
+t, ot) =
+1
+Nmc
+Nmc
+X
+i=1
+H
+X
+h=1
+1
+da
+da
+X
+d=1
+f
+∆λji
+2
+
+ϵθ(aki
+t , ki, ot)h,d −ϵi,h,d
+2
+.
+(19)
+Here H is the action horizon and da is the action dimension. The implementation normalizes the
+score matching error by the action dimension but not by the action horizon, which is consistent with
+the implementation of RoboFFT-F. The resulting diffusion-specific surrogate ratio is
+bρD
+t (θ) = exp
+
+αratio
+h
+bLw,D
+θold (a0
+t, ot) −bLw,D
+θ
+(a0
+t, ot)
+i
+,
+(20)
+which follows the same matching-loss-ratio form as Eq. (5) and is used in the clipped PPO-style
+objective in Eq. (6).
+High-repetition Monte Carlo estimation. RoboFFT-D uses a notably larger number of Monte Carlo
+forward-noising samples than RoboFFT-F. In the main diffusion-policy Robomimic runs, we use
+Nmc = 16. This is important because the denoising score matching loss can be noisier than the
+flow matching loss when used as a surrogate negative log-likelihood, since the denoising process is
+intrinstically stochastic, and RoboFFT-D additionally enforces a lowerbound 0.1 on the single step
+sampling variance σj at sampling time as in DPPO, which aims for better exploration and induces
+more stochasticity to the score matching loss. A small number of forward-noising samples may
+produce a high-variance estimate of the matching-loss difference, especially when sampled timesteps
+fall near high-curvature regions of the log-SNR schedule. Averaging over multiple samples reduces
+the variance of the surrogate ratio and prevents the PPO update from being dominated by accidental
+high-error denoising samples.
+Best-evaluation anchor regularization. For difficult manipulation tasks, RoboFFT-D additionally
+uses a best-evaluation anchor network. We maintain a frozen anchor policy π¯θ, initialized from the
+pretrained diffusion policy. After each evaluation phase, if the current policy achieves a success rate
+no worse than the best recorded evaluation success rate, we update the anchor parameters:
+¯θ ←θ, SRbest ←SReval(θ)
+if
+SReval(θ) ≥SRbest.
+(21)
+The anchor loss then regularizes the trainable policy toward actions sampled from this best-evaluation
+policy:
+a0,anc
+t
+∼π¯θ(·|ot),
+Lanchor(θ) = Eot, a0,anc
+t
+h
+bLw,D
+θ
+(a0,anc
+t
+, ot)
+i
+.
+(22)
+Equivalently, this applies a BC-style denoising score matching loss to samples generated by the best
+historical policy. It helps prevent the diffusion policy from drifting away from empirically successful
+action regions. When enabled, the full actor loss is
+LD
+actor = −JRoboFFT−D(θ) + λanchorLanchor(θ).
+(23)
+Negative-advantage discount. RoboFFT-D also uses a task-dependent negative-advantage discount.
+In the diffusion score matching surrogate, samples with negative advantages can induce dispro-
+portionately large matching-loss-ratio gradients and over-penalize sampled actions, especially in
+sparse-reward manipulation tasks where advantage estimates are noisy. We therefore attenuate the
+PPO-style loss for negative-advantage samples:
+ψnegdisc
+
+bρD
+t , ˆAt
+
+=
+
+
+
+ψPPO
+
+bρD
+t , ˆAt
+
+,
+ˆAt ≥0,
+βneg ψPPO
+
+bρD
+t , ˆAt
+
+,
+ˆAt < 0,
+(24)
+where
+ψPPO (ρ, A) = min (ρA, clip (ρ, 1 −ϵclip, 1 + ϵclip) A) .
+(25)
+Here βneg ∈(0, 1] controls the strength of negative-advantage attenuation. When βneg = 1, the
+objective reduces to the standard clipped PPO-style update. This is related in spirit to the asymmetric
+stabilization used in FPO++ [40], but RoboFFT-D applies a simpler direct attenuation of negative-
+advantage gradients, which we find robust for diffusion-policy finetuning in manipulation tasks.
+19
+
+
+Table 5: Main RoboFFT-D hyperparameters for Robomimic. Nmc denotes the number of forward-
+noising Monte Carlo samples used for estimating the surrogate matching loss. “Anchor” reports the
+coefficient λanchor; a dash means the anchor loss is disabled. βneg is the negative-advantage discount
+coefficient in Eq. (24).
+Task
+Input
+Denoise steps
+FT steps
+Eval
+Actor LR
+Batch
+Nmc
+αratio
+Anchor / βneg
+Lift
+state
+20
+10
+DDPM
+2 × 10−5
+2500
+16
+1.0
+– / 0.125
+Can
+state
+20
+10
+DDPM
+2 × 10−5
+2500
+16
+1.0
+– / 0.125
+Square
+state
+20
+10
+DDPM
+2 × 10−5
+2500
+16
+0.5
+0.05 / 0.125
+Transport
+state
+20
+10
+DDPM
+2 × 10−5
+2500
+16
+0.5
+0.05 / 1.0
+Lift
+pixel
+100
+5
+DDIM
+2 × 10−5
+500
+16
+1.0
+– / 0.125
+Can
+pixel
+100
+5
+DDIM
+2 × 10−5
+500
+16
+1.0
+– / 0.125
+Square
+pixel
+100
+5
+DDIM
+4 × 10−6
+500
+16
+1.0
+0.05 / 1.0
+Transport
+pixel
+100
+5
+DDIM
+4 × 10−6
+500
+16
+0.5
+0.05 / 1.0
+Table 6: Implementation differences between RoboFFT-F and RoboFFT-D. Both methods use the
+same high-level RoboFFT objective, but require different stabilization choices due to their different
+generative parameterizations.
+Component
+RoboFFT-F
+RoboFFT-D
+Base codebase
+ReinFlow-based flow policy implementation
+DPPO-based diffusion policy implementation
+Prediction target
+Velocity field uθ = vθ
+Noise prediction uθ = ϵθ
+Forward-process loss
+Conditional flow matching loss
+Denoising score matching loss
+Effective weighting
+ΩF (k) ≡1
+Discrete f
+∆λ weighting
+Rollout stochasticity
+Explicit SDE exploration for deterministic flow sampling
+Diffusion sampler stochasticity
+MC repetition
+Small Nmc, typically 1 or 2
+Larger Nmc = 16
+Main stabilizers
+SDE exploration, ratio-temperature scaling
+f
+∆λ weighting, anchor loss, negative-advantage discount
+Hard-task regularization
+Mainly through ratio scale calibration
+anchor regularization and attenuated negative-advantage updates
+B.7
+RoboFFT-D Hyperparameters
+Table 5 summarizes the main RoboFFT-D hyperparameters used in the Robomimic experiments.
+Unless otherwise stated, all RoboFFT-D runs use γ = 0.999, GAE parameter λ = 0.95, target KL
+0.05, and Nmc = 16. State-input tasks use 20 diffusion denoising steps and finetune the last 10
+steps, while pixel-input tasks use 100 diffusion denoising steps and finetune the last 5 steps. We
+use DDPM-style evaluation for state-input runs and DDIM-style evaluation for pixel-input runs,
+consistent with the convention of DPPO.
+The anchor loss is enabled mainly on the more difficult Square and Transport tasks, where diffusion-
+policy updates are more prone to collapse under sparse rewards and long-horizon credit assignment.
+The negative-advantage discount is task-dependent. Smaller values of βneg more strongly suppress
+negative-advantage updates, while βneg = 1 disables the attenuation and recovers the standard clipped
+PPO-style loss.
+B.8
+Comparison Between RoboFFT-F and RoboFFT-D Implementations
+RoboFFT-F and RoboFFT-D share the same high-level forward-process policy-gradient principle:
+both apply forward noising to rollout actions and construct a PPO-style surrogate ratio from the
+corresponding score / flow matching loss. Their practical implementations differ because velocity-
+matching flow policies and noise-prediction diffusion policies have different sampling behavior, loss
+geometry, and surrogate-ratio variance.
+In summary, RoboFFT-F uses a velocity-matching CFM surrogate loss with a unit effective MSE
+coefficient and relies on SDE exploration and ratio-temperature calibration as its main stabilization
+mechanisms. RoboFFT-D uses a noise-prediction DSM surrogate loss with the f
+∆λ weighting,
+larger Monte Carlo repetition, and, on harder tasks, anchor regularization and negative-advantage
+attenuation. These diffusion-specific designs are necessary because the score matching surrogate loss
+can have higher estimation variance and more severe negative-advantage amplification than the flow
+matching surrogate loss used in RoboFFT-F.
+20
+
+
+C
+Additional Analyses for the Robomimic Experiments
+C.1
+Performance Analysis
+This subsection provides additional discussion for the main Robomimic comparison in Sec. 5.1,
+where the comprehensive performance of RoboFFT-F, RoboFFT-D and the baseline methods are
+evaluated under both state-input and pixel-input settings.
+Across the easier Lift and Can tasks, RoboFFT-D and RoboFFT-F reach final success rates comparable
+to reverse-process baselines such as DPPO and ReinFlow. Their convergence can be slightly slower
+in some early-stage curves, but the final policy quality remains competitive. This suggests that
+the forward-process surrogate ratio preserves enough policy-gradient signal for improving already
+competent pretrained policies, while avoiding explicit likelihood computation through the reverse
+denoising chain.
+The advantage of RoboFFT becomes more pronounced on the harder tasks. On Square and Transport,
+especially with pixel observations, RoboFFT shows a more sustained improvement trend and stronger
+final performance. Reverse-process methods can suffer from instability or later performance recession,
+likely because optimizing through a long internal sampling chain introduces a more complicated
+credit-assignment path and a heavier computation graph, making the gradients and parameter updates
+instable. In comparison, RoboFFT directly applies forward noising to the final rollout action and
+optimizes a matching-loss-based surrogate ratio, which keeps the optimization path closer to imitation
+pretraining.
+The forward-process baselines, DRWR and FPO, are generally less competitive in the Robomimic
+manipulation setting. DRWR uses reward-weighted regression and does not include a PPO-style
+trust region, making it more sensitive to high-variance reward weights in sparse-reward tasks. FPO
+uses a forward-process PPO-style ratio, but in our implementation it lacks the manipulation-oriented
+stabilization designs used in RoboFFT, including controlled SDE exploration and ratio-temperature
+calibration. These differences help explain why simply applying a forward matching loss is not
+sufficient for robust online fine-tuning on long-horizon manipulation tasks.
+C.2
+Evaluation with Additional Random Seeds
+To assess sensitivity to random initialization beyond the three-seed benchmark results in Fig. 3, we
+evaluate RoboFFT-F, FPO, and ReinFlow with 10 random seeds on Square-state and 5 on Transport-
+state. Figure 11 reports the mean success rate and one standard deviation across seeds.
+The expanded evaluations are consistent with the main results in Fig. 3. On Square-state, RoboFFT-F
+and ReinFlow attain similarly high success rates, while FPO deteriorates during finetuning. On
+Transport-state, RoboFFT-F maintains a higher mean success rate than the two flow-policy baselines.
+These results strengthen the evidence for the reported trends in Sec. 5.1.
+C.3
+Efficiency Analysis
+We measure the wall-clock training time per iteration for RoboFFT-F and ReinFlow, and for RoboFFT-
+D and DPPO. The training timer covers policy and value-network optimization, excluding action
+sampling and environment rollout. For each configuration, we report the mean and standard deviation
+over the first 10 training iterations. The error bars therefore characterize variation across iterations,
+rather than across independent random seeds.
+The comparisons are made within each policy family using the corresponding Robomimic implemen-
+tations. For the diffusion timing runs, we disable critic-only warmup and learning-rate warmup for
+both methods (n_critic_warmup_itr=0 and warmup_steps=0). Other algorithm-specific settings
+are retained, including Nmc = 16 for RoboFFT-D.
+21
+
+
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+RoboFFT-F (ours)
+FPO
+ReinFlow
+(a) Square-state: 10 seeds
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.2
+0.4
+0.6
+0.8
+Success Rate
+1e7
+RoboFFT-F (ours)
+FPO
+ReinFlow
+(b) Transport-state: 5 seeds
+Figure 11: Additional-seed evaluation of RoboFFT-F, FPO, and ReinFlow. Curves indicate means
+and shaded regions indicate one standard deviation across random seeds.
+For task configuration τ, let tbase,τ and tours,τ denote the mean training times of the baseline and
+RoboFFT, respectively. We summarize efficiency using the arithmetic mean of task-wise speedups:
+S =
+1
+|T |
+X
+τ∈T
+tbase,τ
+tours,τ
+,
+where T contains the task and observation configurations included in the corresponding comparison.
+RoboFFT-F achieves an average training-time speedup of 1.53× over ReinFlow. On Lift-state,
+Can-state, Square-state, and Transport-state, RoboFFT-D achieves an average speedup of 38.0× over
+DPPO. The latter result shows that the cost of repeated forward-noising evaluations does not outweigh
+the computational savings of the matching-loss update in the measured diffusion implementations.
+The two comparisons evaluate the complete training stages of the respective implementations. Their
+speedups can depend on network architecture, update settings, and the number of internal sampling
+steps; they should not be interpreted as an isolated measurement of a single operation. Moreover, a
+training-time speedup does not translate directly into the same full-iteration speedup, because rollout
+collection and other operations contribute additional cost.
+C.4
+Surrogate-Ratio Evaluation Protocol
+We evaluate the matching-loss surrogate during RoboFFT-F finetuning on Robomimic Square-state.
+At each evaluated iteration, we randomly sample 2,048 action chunks to compare the temperature-
+scaled surrogate in Eq. (8) with a ReinFlow-style closed-form reference as is implemented by [12].
+Both ratios are evaluated for the same current and old policy parameters using the same sampled
+actions.
+Let bρj,i and ρref
+j,i denote the surrogate and reference for chunk i at iteration j. We compute the
+Spearman correlation between their sample rankings within each iteration, together with quantiles of
+the relative error:
+ej,i =
+bρj,i −ρref
+j,i
+
+ρref
+j,i
+
+.
+The diagnostics in Fig. 8 show distinct aspects of agreement. Spearman correlation remains around
+0.2, indicating limited agreement in sample ordering. Meanwhile, relative-error quantiles decrease,
+with errors below 5% for at least 90% of samples near the end of training. Small ratio errors
+do not imply high rank correlation, particularly when reference ratios are concentrated near one.
+The experiment therefore characterizes numerical discrepancy in the evaluated setting, without
+establishing strict correspondence of different forms of surrogate likelihoods.
+22
+
+
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+LR- =0.25
+LR- =0.5
+LR- =1
+LR- =2
+LR- =4
+(a) Ratio temperature
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+RoboFFT-F (ours)
+w/o AW
+(b) Advantage weighting
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.4
+0.6
+0.8
+Success Rate
+1e7
+RoboFFT-F (ours)
+w/o PPO
+(c) PPO-style update
+Figure 12: Additional ablation studies on Robomimic Square-state. We evaluate the effects of ratio
+temperature, advantage weighting, and PPO-style clipping. Ratio temperature calibrates the surrogate
+likelihood-ratio scale, advantage weighting reduces unstable return-weighted updates, and PPO-style
+clipping stabilizes early finetuning by constraining the surrogate-ratio update.
+D
+Additional Ablation Studies
+D.1
+Additional RoboFFT-F Ablations on Square-State
+The ablation studies for RoboFFT-F in Sec. 5.3 are conducted on Robomimic Square with state
+input. This task has a representative difficulty level: it is sparse-reward, requires precise object
+manipulation, and is sensitive to unstable online updates. Unless otherwise specified, all ablations
+are based on the same hyperparameters as the main configuration in Table 4. The online interaction
+budget and optimization schedule are kept unchanged across variants, so that each ablation isolates
+the intended design factor. We introduce additional ablation studies for other factors that contribute
+to the performance and stability of RoboFFT-F.
+Temperature Scaling in the Surrogate Ratio. As discussed in Sec. 4.3, the score / flow matching
+loss is used as a surrogate negative log-likelihood through the ELBO interpretation of diffusion
+and flow objectives [41, 15]. However, the numerical scale of a matching-loss difference does not
+necessarily match the log-scale of the true action likelihood ratio used in PPO [21]. If the scale is too
+small, the effective policy ratio remains close to one and learning becomes slow. If the scale is too
+large, the ratio may frequently saturate the clipping interval and destabilize updates.
+We therefore introduce the ratio-temperature coefficient αratio in Eq. (8). Fig. 12(a) reports the
+ablation on Robomimic Square-state. A moderate value, αratio = 2, gives the best balance between
+policy improvement and trust-region stability. Smaller values under-scale the policy ratio and slow
+down learning, while overly large values do not provide further gain and can reduce optimization
+stability.
+Advantage Weighting. RoboFFT weights the surrogate policy ratio by the advantage estimate
+ˆAt, following the PPO objective in Eq. (6). To test whether advantage weighting is necessary
+in our framework, we introduce a variant called RoboFFT w/o AW, which replaces ˆAt with the
+corresponding return target. Concretely, we use
+ˆRt = ˆAt + Vϕ(ot),
+and normalize it in the same minibatch-wise manner before using it as the ratio weight.
+As shown in Fig. 12(b), removing advantage weighting causes severe instability and performance
+degradation. This is consistent with the role of advantages in policy-gradient methods: subtracting a
+state-dependent baseline reduces variance and prevents all high-return states from indiscriminately
+increasing the likelihood of their sampled actions. In sparse-reward manipulation tasks, this variance
+reduction is particularly important because successful trajectories can be rare and reward signals are
+delayed.
+PPO-Style Clipped Update. RoboFFT can be viewed as augmenting advantage-weighted score / flow
+matching with a PPO-style trust region. To clarify the role of this constraint, we consider RoboFFT
+w/o PPO, which removes the clipped ratio objective and instead applies a simpler advantage-weighted
+23
+
+
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+RoboFFT-F (ours)
+w/o AW
+(a) Advantage weighting
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+LR- =0.5
+LR- =1
+LR- =2
+(b) Ratio temperature
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+N-MC=1
+N-MC=4
+N-MC=8
+(c) MC repetition
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+RoboFFT-F (ours)
+w/o PPO
+(d) PPO-style update
+0
+0.5
+1
+1.5
+2
+2.5
+3
+Samples
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+Std=0.1
+Std=0.25
+Std=0.5
+(e) SDE noise strength
+Figure 13: RoboFFT-F ablations on Robomimic Transport-state. Advantage weighting and the
+PPO-style update prevent the severe degradation observed in the corresponding ablated variants.
+Ratio temperature, MC repetition, and SDE noise also affect convergence and stability.
+matching update. This variant is conceptually closer to reward-weighted or energy-weighted flow
+matching baselines [11], where the current policy is updated directly according to weighted matching
+losses without a clipped likelihood-ratio surrogate.
+For fair comparison, we align learning rates and other optimization hyperparameters with the reward-
+weighted regression baseline whenever applicable. Fig. 12(c) shows that the w/o PPO variant suffers
+from less stable early fine-tuning, while the full RoboFFT objective maintains smoother improvement.
+The performance gap can shrink in later stages, but the early instability indicates that the clipped ratio
+is useful for preventing overly aggressive updates induced by the surrogate matching-loss difference.
+D.2
+RoboFFT-F Ablations on Transport-State
+We repeat the five RoboFFT-F ablations on Transport-state: advantage weighting, ratio temperature,
+MC repetition, the PPO-style update, and SDE noise strength (Fig. 13).
+Replacing advantage weights with return-based weights causes performance to collapse, consistent
+with the Square-state result. The w/o PPO variant also collapses on Transport, revealing a stronger
+dependence on the PPO-style surrogate update than on Square, where the performance gap can narrow
+later in training.
+Ratio temperature again affects stability: the smallest tested value performs poorly, whereas the larger
+tested values support sustained improvement. Increasing MC repetition from one to four accelerates
+convergence. The SDE-noise ablation also favors an intermediate tested noise level, with both smaller
+and larger values producing weaker late-stage performance.
+The results from this section and the previous section together support the qualitative relevance and
+common roles of the RoboFFT-F design choices across two tasks. Note that this does not imply
+identical optimal hyperparameters or identical ablation effects across tasks.
+D.3
+RoboFFT-D Ablations on Square-State
+Besides the ablations for RoboFFT-F, we examine five design choices in the diffusion-policy im-
+plementation RoboFFT-D: negative-advantage discount, log-SNR weighting, anchor regularization,
+24
+
+
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.2
+0.4
+0.6
+0.8
+1.0
+Success Rate
+1e7
+NegDisc=0.125
+NegDisc=0.5
+NegDisc=1
+(a) Negative-advantage discount
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+Delta Lambda
+Plain
+(b) Log-SNR weighting
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+Anchor=0
+Anchor=0.05
+Anchor=0.1
+(c) Anchor coefficient
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+N-MC=1
+N-MC=4
+N-MC=16
+(d) MC repetition
+0
+0.2
+0.5
+0.8
+1
+1.2
+1.5
+Samples
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Success Rate
+1e7
+LR- =0.25
+LR- =0.5
+LR- =1
+(e) Ratio temperature
+Figure 14: RoboFFT-D ablations on Robomimic Square-state. Negative-advantage discount, log-SNR
+weighting and MC repetition substantially affect finetuning performance. Anchor regularization and
+ratio temperature have comparatively modest effects in the tested configuration.
+MC repetition and ratio temperature (Fig. 14), where the first three are design choices unique to
+RoboFFT-D. Their definitions are given in Appendix B.6.
+Negative-advantage discount. Without discount (βneg = 1), performance deteriorates sharply and
+finetuning becomes unstable. The tested discounted variants improve stability, with βneg = 0.125
+providing the strongest sustained performance. The result suggest a critical impact of negative-
+advantage discount on the stability of RoboFFT-D.
+Log-SNR weighting. The f
+∆λ-weighted surrogate improves convergence and final performance
+relative to the plain-weighting variant. This ablation concerns the weighting of denoising errors
+across noise levels, rather than the SDE exploration-noise strength used in RoboFFT-F.
+MC repetition. Using a single forward-noising sample leads to substantially slower and weaker
+improvement than using 4 or 16 samples. This contrasts with RoboFFT-F on Square-state, where
+a much smaller MC budget is sufficient, and supports the larger MC budget used in the diffusion
+implementation. We suppose that this is due to the fact that the diffusion policy adopts more stochastic
+and complicated parametrization compared to the flow policy, thus requiring more repetitions for
+better likelihood estimation.
+Anchor regularization and ratio temperature. Compared to without the anchor loss, the anchor
+coefficients which are > 0 lead to broadly similar mean success rate on Square-state while slightly
+reducing the variance, suggesting a relatively modest effect in this configuration. Ratio temperature
+affects learning speed, with smaller tested values producing faster early improvement. These results
+suggest that these factors have relatively minor impacts on the performance of RoboFFT-D.
+E
+Details of Visualization Experiments
+In Sec. 5.3, we provide a rollout-level visualization on Robomimic Square to understand how
+RoboFFT changes the action distribution of a pretrained rectified-flow policy. This section describes
+the full protocol and additionally includes the t-SNE action-embedding visualization that is omitted
+from the main text for space. We use the same notation as in the main text whenever possible: st
+denotes the environment state or observation at decision step t, at denotes an action chunk, Vϕ(st) is
+25
+
+
+the learned PPO value critic, and πθ denotes the rectified-flow policy. We write πpre for the pretrained
+policy and πft for the finetuned policy.
+E.1
+Auxiliary Visualization Critic
+To score sampled action chunks during visualization, we train an auxiliary action-conditioned critic
+Qviz(s, a). This network is used only for analysis and is not used in the actor update. Unlike an
+optimal-Q critic, Qviz is not trained with a Bellman-optimal target or a maximization over next
+actions. Instead, it is fitted to the one-step policy-Q target induced by the current rollout policy:
+yviz
+t
+= rviz
+t
++ γ(1 −dt)Vϕ(st+1),
+(26)
+where dt is the true termination indicator and rviz
+t
+is the reward used for fitting Qviz. Since Vϕ is
+trained with reward normalization in our experiments, we use the same normalized reward scale for
+rviz
+t , so that Qviz and Vϕ are numerically aligned. The auxiliary critic is optimized by
+LQviz = E(st,at,rt,st+1)
+h Qviz(st, at) −yviz
+t
+2i
+.
+(27)
+This makes Qviz a diagnostic state-action quality probe for the finetuned policy, rather than a critic
+used for policy optimization.
+For Robomimic Square, the low-dimensional state has dimension ds = 23. We use one observation
+step and predict action chunks with horizon H = 4 and action dimension da = 7. Thus, Qviz takes
+as input s ∈R1×23 and a ∈R4×7. The network is implemented as an MLP over the flattened state
+and flattened action chunk. During fine-tuning, Qviz is updated for 4 epochs per iteration, with batch
+size 4096, learning rate 10−3, and gradient clipping with maximum norm 25.
+After training, we define the visualization advantage of an action chunk as
+Aviz(s, a) = Qviz(s, a) −Vϕ(s).
+(28)
+This quantity measures the relative quality of an action chunk under a fixed state, using the PPO value
+critic as a state-dependent baseline.
+E.2
+Anchor State Collection
+The t-SNE visualization uses a set of anchor states collected during online fine-tuning. At each
+fine-tuning iteration, we sample states from the rollout buffer and label them according to whether the
+corresponding episode succeeds. At each iteration, we collect up to 64 states from successful episodes
+and 64 states from failed episodes. The collected states are merged across fine-tuning iterations.
+In the evaluation stage, we sample at most 512 anchor states from this merged set, approximately
+balancing successful and failed anchors when both are available.
+E.3
+Paired Action Sampling
+Both visualizations compare πpre and πft under identical state and latent conditions. Given an anchor
+state si, we sample K = 64 initial latent noises
+zi,k ∼N(0, I),
+k = 1, . . . , K.
+(29)
+Let Φθ(s, z) denote the deterministic rectified-flow sampling map from initial latent z to the final
+action chunk under policy parameters θ. We generate paired action chunks
+apre
+i,k = Φθpre(si, zi,k),
+aft
+i,k = Φθft(si, zi,k).
+(30)
+Using the same zi,k for both policies reduces Monte Carlo noise and makes the comparison depend
+mainly on the learned policy mapping. For each sampled action chunk, we compute Qviz(si, a),
+Aviz(si, a), and the sample-based action diversity defined below.
+26
+
+
+E.4
+Sample-Based Action Diversity
+Since rectified-flow policies do not provide a convenient closed-form entropy, we use a sample-based
+diversity metric. For a policy π, let
+Aπ(s) = {aπ
+1(s), . . . , aπ
+K(s)}
+be the K action chunks sampled at state s. Each aπ
+k(s) ∈RH×da. We define the pair-wise diversity
+as
+Dπ(s) =
+2
+K(K −1)
+X
+1≤k<ℓ≤K
+∥vec(aπ
+k(s)) −vec(aπ
+ℓ(s))∥2
+2
+Hda
+.
+(31)
+The normalization by Hda makes the metric less sensitive to the action dimension and action horizon.
+We use this metric for all diversity curves in Fig. 7.
+E.5
+Rollout-Timeline Visualization
+For Fig. 7, we first collect rollouts using the finetuned policy πft in Robomimic Square. We run
+20 parallel environments for at most 400 decision steps. Among completed episodes, we retain
+successful ones. To select a representative trajectory that contains both pre-success and post-success
+phases, we compute the positive-reward ratio
+ρ = 1
+T
+T
+X
+t=1
+1[rt > 0],
+(32)
+where T is the trajectory length in decision steps. We choose the successful trajectory minimizing
+Straj = |ρ −0.5| −0.01 · Std({rt}T
+t=1).
+(33)
+This favors trajectories whose reward transition occurs near the middle of the rollout while avoiding
+completely flat reward traces.
+For every state st along the selected trajectory, we repeat the paired action sampling in Eq. (30). We
+then compute the action-value gap between the finetuned and pretrained policies:
+∆Qviz(st) = 1
+K
+K
+X
+k=1
+Qviz(st, aft
+t,k) −1
+K
+K
+X
+k=1
+Qviz(st, apre
+t,k ).
+(34)
+We also compute
+Dpre(st) = Dπpre(st),
+Dft(st) = Dπft(st),
+(35)
+and their difference
+∆D(st) = Dpre(st) −Dft(st).
+(36)
+Positive ∆D(st) indicates that the finetuned policy produces a more concentrated sampled action
+distribution at st. The rollout-timeline visualization plots rt, ∆Qviz(st), Dpre(st), Dft(st), and
+∆D(st) over decision steps. The main-text observation that ∆Qviz increases while diversity decreases
+around key decision stages indicates that RoboFFT guides the policy toward more concentrated and
+higher-quality action samples.
+E.6
+t-SNE Action-Embedding Visualization
+For the t-SNE visualization, we use the collected anchor states rather than a single trajectory. For
+each selected anchor state, we sample K = 64 action chunks from both πpre and πft using the same
+latent noises. Each action chunk is flattened into a vector in RHda, which is 28-dimensional for
+Robomimic Square.
+To make the embedding balanced and computationally manageable, we randomly subsample at most
+2500 action chunks from each policy. We then form a joint action set
+X =
+n
+vec(apre
+i,k )
+o
+i,k ∪
+
+vec(aft
+i,k)
+	
+i,k .
+(37)
+27
+
+
+A single two-dimensional embedding is computed on the joint set X, and the resulting points are
+split into pretrained and finetuned panels for visualization. Before t-SNE, we mean-center X and
+apply PCA preprocessing to at most 30 dimensions. We then run t-SNE with perplexity 35 and 1000
+optimization iterations. If t-SNE is unavailable or fails, we fall back to a two-dimensional PCA
+projection.
+Each point in Fig. 15 corresponds to one sampled action chunk and is colored by Aviz(s, a) from
+Eq. (28). The pretrained and finetuned panels use separate blue and orange color maps but share the
+same color range. To reduce the influence of outliers, the color limits are determined by the 98-th
+percentile range of all Aviz values from both policies. In the default setting, we do not subtract anchor-
+wise action means before t-SNE; therefore, the embedding visualizes the global action manifold
+across both state-dependent action variations and task-phase differences.
+E.7
+Interpretation of the t-SNE Visualization
+The t-SNE visualization in Fig. 15 provides a complementary view of how RoboFFT reshapes the
+action distribution beyond a single rollout trajectory. Compared with the pretrained policy, whose
+sampled action chunks are more diffusely distributed and contain many low- or negative-advantage
+samples, the finetuned policy forms a more concentrated region with noticeably higher diagnostic
+advantages. In particular, after fine-tuning, a dense cluster of positive-advantage actions emerges in
+the embedding space, indicating that RoboFFT increases the probability mass around actions that are
+preferred by the diagnostic critic Qviz.
+This observation is consistent with the rollout-timeline analysis in Fig. 7. The timeline visualization
+shows that, at key decision stages such as grasping, transporting, and aligning the object, the finetuned
+policy improves the average action quality while reducing sample diversity. The t-SNE visualization
+further shows that this effect is not restricted to one selected trajectory: across a broader set of anchor
+states collected from successful and failed rollouts, the finetuned policy tends to move sampled action
+chunks toward higher-advantage regions. Together, these results suggest that RoboFFT improves the
+pretrained generative policy by concentrating its action distribution around more task-relevant and
+higher-quality action modes, rather than merely increasing random exploration. Note that the density
+of a t-SNE embedding is an intuitive signal of action mode concentration instead of a direct estimate
+of policy likelihood or the number of behavioral modes. The observed concentration therefore does
+not by itself establish either mode collapse or preservation of all useful modes.
+−60
+−40
+−20
+0
+20
+40
+60
+80
+t-SNE dimension 1
+−60
+−40
+−20
+0
+20
+40
+60
+t-SNE dimension 2
+Pretrained
+−60
+−40
+−20
+0
+20
+40
+60
+80
+t-SNE dimension 1
+Finetuned
+−1.5
+−1.0
+−0.5
+0.0
+0.5
+1.0
+Aviz(s, a)
+−1.5
+−1.0
+−0.5
+0.0
+0.5
+1.0
+Aviz(s, a)
+Action diversity colored by advantage
+Figure 15: t-SNE visualization of action chunks sampled from the pretrained and finetuned policies
+under matched anchor states and latent noises. Each point is colored by the diagnostic advantage
+Aviz(s, a) = Qviz(s, a) −Vϕ(s). The finetuned policy forms a denser region of higher-advantage
+actions, complementing the rollout-timeline analysis.
+28
+
+
+F
+Implementation details for VLA
+We use RLinf [49] for implementing RoboFFT for VLA finetuning. Specifically, we only replace the
+calculation of log probability with the surrogate matching loss. The data collection and PPO update
+stay the same. Tab.7 demonstrates the configuration difference between RoboFFT and πRL [45].
+Table 7: Differences in training configurations between RoboFFT and πRL baseline.
+Parameter
+RoboFFT
+πRL
+Log probability calculation
+score/ flow matching loss
+multi step MDP
+KL coefficient β
+0.5
+0.0
+PPO clipping range
+0.05 / 0.05
+0.20 / 0.20
+Samples per action Nmc
+8
+Not used
+G
+Real World Experiments
+G.1
+Real world settings
+Figure 16: Real world settings
+Fig.16 demonstrates the settings of our two real world platforms. For Pick Eggplant and Cabinet
+Retrieval task, we use Franka Research 3. Two wrist Realsense D405 cameras are mounted on the
+end effector to capture fine-grained manipulation details, where a third-view camera is employed
+for whole scene observation. For Peg Insertion and Pour, we use Franka Emika Panda. The camera
+settings are the same except for the position of the third-view camera. Tab. 8 and Tab. 9 summarize
+the task configurations and observation/action spaces, respectively..
+G.2
+Training Details
+We adapt RoboFFT into a practical offline-to-online training paradigm for deployment on physical
+robots (Algo. 2). For each real-world task, we first collect Ndemo = 50 human demonstrations Ddemo
+using SpaceMouse teleoperation. A rectified-flow policy uθ is pretrained on Ddemo via imitation
+learning, while the critic is pretrained using IQL [48]. We adopt rectified flow as the base generative
+policy because its efficient sampling enables practical real-time execution on physical robots. We use
+a sparse binary reward r ∈{0, 1} based on task completion, which is directly judged by a human
+evaluator without training an additional reward model.
+Offline RL. Starting from the pretrained actor and critic, we first perform offline RoboFFT optimiza-
+tion using the available offline trajectories. Since the training data are not collected by the current
+policy, we use the IQL critic to estimate the offline advantage ˆAt = Qψ(ot, a0
+t) −Vϕ(ot). The
+estimated advantages are then used in the same forward process policy optimization objective as in
+the main RoboFFT algorithm. Specifically, we perturb the sampled actions through forward noising,
+29
+
+
+Table 8: Real-world task suite and key challenges.
+Task
+Embodiment
+Task Type
+Randomization
+Key Challenges
+Pick Eggplant
+Franka Research 3 Pick-and-place
+Object position
+randomized within
+3 cm along x/y
+Grasping an irregular
+object under position
+variation; stable transport
+and accurate placement.
+Peg Insertion
+Franka Emika
+Panda
+Precision
+assembly
+Initial end-effector
+position randomized
+within 1.5 cm along
+x/y
+Fine-grained pose
+alignment, tight insertion
+tolerance, and contact-rich
+manipulation.
+Pouring
+Franka Emika
+Panda
+Granular
+Object position
+randomized within
+1 cm along x/y
+Continuous orientation
+control, target alignment,
+and error propagation
+across sequential stages.
+Cabinet
+Retrieval
+Franka Research 3 Long-horizon
+Object position
+randomized within
+1 cm along x/y
+Long-horizon control,
+confined-space
+manipulation, partial
+occlusion, and sensitivity
+to intermediate failures.
+Table 9: State and action components of the real-world tasks. We abbreviate dimension as “dim.” and
+proprioception as “prop.”.
+Task
+Observation Space
+Action Space
+Visual Obs.
+Prop.
+dim.
+Prop. State
+Dim.
+Action Representation
+Pick Eggplant
+RGB
+(224, 224, 3) × 3
+8
+7-D joint state + 1-D
+gripper state
+7
+6-D target end-effector pose
++ 1-D gripper command
+Peg Insertion
+RGB
+(224, 224, 3) × 3
+7
+7-D joint state
+6
+6-D target end-effector pose;
+gripper fixed during insertion
+Pouring
+RGB
+(224, 224, 3) × 3
+8
+7-D joint state + 1-D
+gripper state
+7
+6-D target end-effector pose
++ 1-D gripper command
+Cabinet
+Retrieval
+RGB
+(224, 224, 3) × 3
+8
+7-D joint state + 1-D
+gripper state
+7
+6-D target end-effector pose
++ 1-D gripper command
+evaluate the matching losses under the current and reference policies, construct the surrogate policy
+ratio, and optimize the PPO-style clipped objective. Thus, the algorithmic core of RoboFFT remains
+unchanged, while IQL provides the advantage estimates required for offline policy optimization.
+Real-world rollout and policy aggregation. After offline RL, we deploy the resulting policy on the
+physical robot and collect Nroll rounds of rollout trajectories, denoted as Droll, where each round
+contains d trajectories. To stabilize subsequent online optimization, we combine the newly collected
+trajectories with the original human demonstrations, Dagg = Ddemo ∪Droll, and perform imitation
+learning on the aggregated dataset. This step distills the improved behaviors discovered by offline
+RL and real-world interaction while preserving reliable behaviors from the human demonstrations,
+thereby reducing policy drift before online finetuning. We normally set Nroll = 1 and d = 30.
+Online RL. The policy obtained from data aggregation is used to initialize the online actor, while the
+pretrained IQL critic provides the initialization for the online value function. We then perform online
+RoboFFT for Kon iterations. At each iteration, the current policy is deployed to collect a batch Bon
+of on-policy trajectories, from which advantage estimates ˆAt and value targets ˆRt are computed. The
+actor is optimized using the same forward-noising surrogate ratio and PPO-style clipped objective as
+in the simulation experiments, while the value function is updated using the newly collected on-policy
+data. After each update, the new policy is deployed for the next interaction round. We normally set
+Kon = 5.
+30
+
+
+Algorithm 2 Real-World Offline-to-Online RoboFFT
+Require: Pretrained prediction network uθ, human demonstrations Ddemo, offline dataset Doff, IQL
+critic Qψ and value function Vϕ, number of Monte Carlo samples Nmc, ratio temperature αratio,
+PPO clipping threshold ϵclip.
+1: Pretrain uθ on Ddemo via imitation learning.
+2: Deploy uθ to collect initial real-world rollouts and initialize Doff.
+3: for each offline RL iteration do
+4:
+Train Qψ and Vϕ with IQL on Doff.
+5:
+Compute offline advantages ˆAt = Qψ(ot, a0
+t) −Vϕ(ot).
+6:
+Set θold ←θ.
+7:
+for each policy update epoch do
+8:
+for each minibatch from Doff do
+9:
+Draw {(ki, ϵi)}Nmc
+i=1 , where ki ∼U(0, 1) and ϵi ∼N(0, I).
+10:
+Construct noised actions aki
+t = αkia0
+t + σkiϵi.
+11:
+Compute bLw
+θ (a0
+t, ot) and bLw
+θold(a0
+t, ot) using Eq. (7).
+12:
+Compute bρ s
+t (θ) using Eq. (8).
+13:
+Update θ by maximizing Eq. (6) with offline advantage ˆAt.
+14:
+Deploy the updated policy and collect new real-world rollouts Droll.
+15:
+Update Doff ←Doff ∪Droll.
+16:
+Perform imitation learning on Ddemo ∪Droll to obtain the base policy for the next iteration.
+17: Initialize the online actor with the offline-trained uθ and the critic with the IQL value function
+Vϕ.
+18: for each online RL iteration do
+19:
+Set θold ←θ.
+20:
+Collect on-policy real-world rollouts with uθ and store (ot, a0
+t, rt, ot+1) in B.
+21:
+Compute advantage estimates ˆAt and value targets ˆRt.
+22:
+for each policy update epoch do
+23:
+for each minibatch from B do
+24:
+Draw {(ki, ϵi)}Nmc
+i=1 with ki ∼U(0, 1) and ϵi ∼N(0, I).
+25:
+Construct aki
+t = αkia0
+t + σkiϵi.
+26:
+Compute bLw
+θ and bLw
+θold using Eq. (7).
+27:
+Compute bρ s
+t (θ) using Eq. (8).
+28:
+Update θ by maximizing Eq. (6).
+29:
+Update Vϕ by minimizing Eq. (14).
+30:
+Clear B.
+31: return Fine-tuned generative policy uθ.
+H
+Extended Related Work
+H.1
+Generative Models for Robot Manipulation
+Generative models have become an increasingly important policy class for robot manipulation, as they
+provide expressive distributions over complex and potentially multimodal action sequences. Early
+approaches [50, 51] formulate imitation learning with a conditional variational autoencoder (CVAE).
+More recently, diffusion-based policies have demonstrated substantially greater expressiveness for
+continuous control. Diffusion Policy [5, 52] models the conditional action distribution through an
+iterative denoising process, enabling stable learning of high-dimensional and multimodal action
+distributions and motivating a broad family of diffusion-based manipulation policies. Flow-matching
+models provide an alternative generative formulation by learning continuous transport from a simple
+noise distribution to the action distribution. Methods such as ManiFlow [7] further improve sampling
+efficiency and policy expressiveness through consistency-based flow training, demonstrating strong
+performance on diverse manipulation tasks. In parallel, vision-language-action (VLA) models have
+extended robot policies toward large-scale generalist control by leveraging pretrained vision-language
+representations and heterogeneous robot datasets. RT-2 [53] and OpenVLA [54] generate discretized
+31
+
+
+robot actions within large autoregressive vision-language models, while π0 [43] and π0.5 [44] combine
+a pretrained vision-language backbone with a flow-matching action expert for continuous action
+generation.
+H.2
+RL for Generative Robot Policy
+Reinforcement learning has been increasingly explored to improve generative policies beyond
+behavior cloning. Early studies mainly focus on offline RL with fixed datasets. Diffusion Q
+Learning [34] parameterizes the actor as a diffusion model and combines diffusion regression with Q
+value maximization, while IDQL [35] uses an implicit Q-function to select actions sampled from a
+diffusion behavior policy. This idea has also been extended to flow-based policies. Flow Q Learning
+(FQL) [36] learns a flow matching behavior policy together with a one-step RL policy, avoiding
+recursive differentiation through iterative flow generation. Although these methods exploit the
+expressiveness of generative policies, their improvement is constrained by the coverage of the offline
+dataset and the accuracy of learned value functions.
+More recent work considers online or offline-to-online adaptation of pretrained generative robot
+policies. One direction keeps the base policy frozen and learns a lightweight steering or residual
+component. DSRL [55] performs RL in the latent-noise space of a pretrained diffusion or flow policy
+without modifying its parameters, while residual RL methods learn corrective actions on top of a
+frozen behavior cloning policy [56, 57, 58]. These approaches preserve pretrained behaviors and
+reduce the complexity of online optimization, but restrict policy improvement to the residual or latent
+space exposed by the frozen policy.
+In contrast, full policy finetuning directly updates the generative model parameters. DPPO [11]
+formulates diffusion denoising as a multi-step MDP and applies PPO over reverse denoising tran-
+sitions. ReinFlow [12] extends likelihood-based online optimization to flow policies by injecting
+stochasticity into deterministic flow trajectories. Forward process methods such as FPO [15] and
+its extensions [40] instead construct policy-gradient objectives from flow matching losses, avoiding
+explicit marginal likelihood computation. Reinforced finetuning has also been extended to VLA
+policies, with [38, 59] combining offline value learning and online policy optimization for real-world
+manipulation. RoboFFT belongs to the full policy finetuning family, but performs PPO-style opti-
+mization through the forward noising process, providing a unified framework for diffusion, flow, and
+VLA policies.
+32
