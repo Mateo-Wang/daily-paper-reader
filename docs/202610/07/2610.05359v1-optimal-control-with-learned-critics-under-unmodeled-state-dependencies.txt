@@ -1,0 +1,1172 @@
+Title: Optimal Control with Learned Critics under Unmodeled State Dependencies
+
+URL Source: https://arxiv.org/pdf/2610.05359v1
+
+Published Time: Tue, 06 Oct 2026 02:11:37 GMT
+
+Number of Pages: 22
+
+Markdown Content:
+# Optimal Control with Learned Critics under Unmodeled State Dependencies 
+
+Philipp Schoch, Markus Ryll 
+
+Autonomous Aerial Systems Lab Technical University of Munich 
+
+{philipp.schoch,markus.ryll }@tum.de 
+
+Abstract: Model Predictive Control (MPC) provides a structured and constraint-aware mechanism for decision-making, but its reliance on optimization-friendly analytical dynamics models limits its use in tasks with contacts and other hard-to-model state dependencies. Model-free reinforcement learning avoids explicit modeling assumptions but typically requires large amounts of interaction data. We present a learning-based MPC framework that combines the data efficiency and structure of local model-based planning with learned components that compen-sate for incomplete dynamics and finite-horizon myopia. The method augments a nominal analytical model with a residual dynamics network that learns miss-ing state-dependent effects from data and combines the resulting planner with a learned action-value critic that injects long-horizon MDP structure into the local iLQR optimization. To make this practical at reinforcement-learning scale, we develop a GPU-accelerated batched iLQR solver that evaluates learned dynam-ics and critic networks inside the optimal-control loop and solves thousands of trajectory-optimization problems in parallel. The complete system is integrated into a robotics simulator, enabling scalable model-based reinforcement learning under incomplete dynamics. Experiments on biased and incompletely modeled control tasks show that the approach improves closed-loop control performance while preserving the model-based structure needed for efficient constrained tra-jectory optimization. 
+
+Keywords: Model Predictive Control, Model-Based Reinforcement Learning, iLQR, Value Function Approximation 
+
+# 1 Introduction 
+
+Computing optimal control policies for agents acting in stochastic environments is a central chal-lenge in sequential decision making. Formally, this amounts to solving a Markov Decision Process (MDP) [1]: finding a policy that maximizes expected cumulative reward over potentially infinite horizons. The field has produced a rich landscape of approaches, broadly organized into trajec-tory optimization, model-free reinforcement learning (RL), and model-based reinforcement learning methods [2]. Model Predictive Control (MPC) performs trajectory optimization in a receding-horizon fashion, enabling precise control and explicit satisfaction of state and input constraints. However, MPC re-quires an optimization-friendly analytical dynamics model, often difficult or impossible to derive for systems involving contacts or other highly nonlinear effects, and breaks down if relevant state vari-ables remain unmodeled. Contact-rich tasks are a representative case, because making and breaking contact introduces discontinuous phase boundaries over which gradient information can become un-informative [3], while classical multi-phase or mixed-integer formulations lead to large nonlinear programs that are brittle and rarely compatible with real-time replanning [4]. A second limitation is the finite horizon itself. MPC applies a finite-horizon surrogate to an infinite-horizon MDP, so 
+
+10th Conference on Robot Learning (CoRL 2026), Austin TX, USA. arXiv:2610.05359v1 [cs.RO] 4 Oct 2026 a horizon that is too short can make the controller greedy, trap it in local minima, or prevent task completion when intermediate subgoals must be reached before the final objective becomes attain-able [5]. A third limitation is that standard MPC formulations operate on explicit state variables and analytical models, making it nontrivial to use high-dimensional sensor observations such as rgb or depth images directly inside the planner. Model-free RL sidesteps these limitations: learned policies are cheap at inference and can consume high-dimensional observations. However, model-free methods are notoriously sample-inefficient, scale poorly with state-space dimensionality, and struggle with long-horizon tasks where reward-sparsity impedes exploration [1, 6]. Model-based RL promises to combine the data efficiency of planning with the flexibility of learn-ing [2]. A compelling paradigm in this space is to use MPC as a critic: the planner provides a structured, locally accurate estimate of the action-value function, which can be used to bootstrap a global Q-approximator which after training supplies long-horizon guidance back to the MPC, al-lowing even to correct for mismatches in the dynamics model. [7] demonstrates this in the setting of gradient-free sampling-based control. A key remaining challenge is that MPC critics still require an accurate dynamics model, a requirement that fails whenever relevant state variables lack a tractable analytical description, e.g. object contact dynamics in manipulation. In this work, we develop a learning-augmented constrained MPC framework that embeds two learned components directly into the planner. A residual dynamics model augments the nominal analytical model and exposes otherwise unmodeled state dependencies to optimization, while a learned critic injects global MDP information into the finite-horizon objective to reduce myopia and improve guidance under multi-phase cost-structure; unlike in sampling-based MPC [7], the critic enters the Riccati recursion through its first- and second-order derivatives. Following the DDP formulation, we realize this approach with a GPU-accelerated batched ALM-iLQR solver that inte-grates both learned components inside the optimal-control loop and scales to thousands of parallel environments, enabling efficient model-based reinforcement learning. 
+
+Core contributions: (i) a constrained MPC formulation that combines residual dynamics learning with a learned critic, and (ii) a learning-based DDP-style solver that makes this formulation practical for model-based reinforcement-learning, scaling to thousands of parallel environments. 
+
+# 2 Preliminaries 
+
+We consider a discrete-time MDP M = ( S, A, l, P, γ, p 0) [1], where S is the state space, A the action space, l(x, u ) a stage cost, P a stochastic transition model with xk+1 ∼ P (· | xk, u k), γ ∈
+
+(0 , 1] a discount factor, and p0 the initial state distribution. Let Pπ
+
+> M
+
+(· | x, u ) denote the trajectory distribution induced by (x0, u 0) = ( x, u ) and following π thereafter. The action-value and value functions are Qπ
+
+> M
+
+(x, u ) = EPπ
+
+> M(·| x,u )
+
+P ∞ 
+
+> i=0
+
+γil(xi, u i) and V π
+
+> M
+
+(x) = Eu∼π(·| x)[Qπ
+
+> M
+
+(x, u )] . The control objective is π∗ = arg min π Ex∼p0 [V π
+
+> M
+
+(x)] . For any horizon H ≥ 2, the action-value function admits the finite-horizon decomposition 
+
+Qπ
+
+> M
+
+(x, u ) = EPπ
+
+> M(·| x,u )
+
+"H−2X
+
+> i=0
+
+γil(xi, u i) + γH−1Qπ
+
+> M
+
+(xH−1, u H−1)
+
+#
+
+. (1) Classical MPC closes this recursion with a terminal cost, Qπ
+
+> M
+
+(xH−1, u H−1) ≈
+
+lT (xH−1, u H−1) [8]. While sufficient when the terminal cost is well designed, this local ap-proximation may miss the global structure of the MDP, especially when the objective requires reaching an intermediate subgoal [5]. In the following we work with deterministic planned trajectories to simplify notation; the stochastic setting is retained by taking expectations over the induced trajectory distribution. The paper is structured as follows: Section 3 introduces the blended-critic objective and explains how learning of the residual dynamics function and the learned critic integrates into the framework. Section 4 describes the iLQR solver and the specific realization of the blended-critic objective. 2Section 5 evaluates the method on a set of simulated control tasks, and Sections 6 and 7 discuss the method’s shortcomings and give an outlook on potential extensions. 
+
+# 3 Optimal Control Objective 
+
+3.1 Blending the Learned Critic 
+
+As established in Eq. (1), MPC estimates Qπ 
+
+> M
+
+by rolling out a local trajectory. However, the accu-racy of this estimate depends heavily on the length of the rollout and well-designed terminal cost function. A global learned critic ˆQθ (x, u ), parameterized by a neural network with weights θ, can in principle capture the full MDP structure, but suffers from the usual approximation errors of neural networks, making it both hard to train and hard to integrate into a planner (cf. Section 3.2, cf. [1]). Following [7], we therefore blend both estimates along the H-step planned trajectory (xi, u i)H−1 
+
+> i=0
+
+.As can be seen later, this will allow us to trade off bias in the nominal model with approximation bias in the learned critic, while reducing variance in the value targets during training. Following the general Bellman recursion Qi = li + γQ i+1 , for any λ ∈ [0 , 1] , we define the blended Q-estimate recursively for i = 0 , . . . , H − 2 as 
+
+Qλ(xi, u i) = (1 − λ) ˆQ(xi, u i) + λ l(xi, u i) + γ Q λ(xi+1 , u i+1 ), (2) but contrary to [7], we terminate the recursion at the last step by Qλ(xH−1, u H−1) = (1 −
+
+λ) ˆQ(xH−1, u H−1) + λ l (xH−1, u H−1), as a weighted average between the finite horizon approxi-mation of MPC and the learned critic. Following Appendix A we can rollout this recursion into the explicit form 
+
+Qλ 
+
+> 0
+
+= ˆQ0 + λ
+
+> H−2
+
+X
+
+> k=0
+
+(λγ )kBk + ( λγ )H−1 lH−1 − ˆQH−1
+
+!
+
+, (3) where Bi = li + γ ˆQi+1 − ˆQi is the one-step Bellman residual of the learned critic. Setting λ = 0 
+
+recovers ˆQ directly; λ = 1 recovers the standard MPC rollout; intermediate values let ˆQ act as a global shaping term while preserving local model accuracy. In Section 5, we additionally vary the blend weight of the critic at the end of the horizon separately, denoted λf ; in all other experiments, 
+
+λf = λ.
+
+3.2 Learning the Critic 
+
+The critic ˆQθ is trained by stochastic gradient descent on the mean squared Bellman error [1] 
+
+LQ(θ) = E(xk ,u k ,y k )∼D 
+
+ ˆQθ (xk, u k) − yk
+
+2
+
+. (4) The target yk is constructed either from short rollout fragments or from the MPC continuation value 
+
+V λ(xk+1 ) = min u Qλ(xk+1 , u ) which can be obtained for free after each MPC solve. 
+
+TD( n) targets. A first option is to use standard n-step targets built from contiguous rollout frag-ments [1]. This is simple and efficient, and larger n can stabilize the targets through the usual bias-variance trade-off. However, the method becomes sensitive to stale replay data when buffers are small or policy updates are infrequent. 
+
+MPC-based targets. A second option is to use this continuation value and form the one-step target yMPC  
+
+> k
+
+= l(xk, u k) + γV λ(xk+1 ), with the usual truncation at terminal transitions. In the offline variant, the planner stores the successor blended-Q-estimate during data collection and train-ing reuses this cached value [7]. This is fast and benefits from the full planner lookahead, but the targets become stale as the critic changes. In the online variant, the successor value is recomputed during training by solving a fresh MPC problem for each minibatch element. This removes staleness and supports fully off-policy replay, but is typically prohibitively expensive: with iLQR, each batch element requires a converged optimal control solve, and shuffled minibatches prevent amortizing convergence across time steps. 3Value ensembles. Both target constructions remain bootstrapped and therefore inherit the usual risk of amplifying value-estimation errors [9]. In our setting this is especially problematic because MPC will immediately exploit critic mismatches induced by epistemic uncertainty. To reduce this effect, we follow the spirit of double Q-learning and ensemble bootstrapping [9, 10] and use an ensemble critic with N value heads. During each SGD step, one head is randomly selected for updating, while the remaining N −1 heads provide the target values. Their outputs can be aggregated by a (soft/hard) maximum, minimum, or mean operator; under our cost convention, the maximum is conservative, the minimum is optimistic, and we use the mean as a balanced compromise [10]. At inference time, the ensemble disagreement and the disagreement of the ensembles gradients also provide an uncertainty estimate of the learned critic. This gives us a way to downweigh the 
+
+λ-contribution of in the MPC in regions where the Value-heads disagree. Contrary to [5], where a softmax (softmin under our cost-convention) is used to encourage exploration, we compute the standard deviation across the normalized value-head outputs (and their gradients) and attenuate the learned-critic contribution by an exponential factor α = e−κσ where κ is a tuning parameter. 
+
+3.3 Learning the Dynamics Residual 
+
+Many control tasks involve state variables that are directly observable, but for which no sufficiently accurate analytical dynamics model is available. In manipulation, for example, one may observe the pose and velocity of a grasped object without modeling the underlying contact dynamics explicitly. To allow the planner to reason over such quantities, we augment the state with components whose dynamics are incomplete and learn only the missing part from data. Formally, we partition the state as x = [ x⊤ 
+
+> p
+
+, x ⊤ 
+
+> s
+
+]⊤, where xp ∈ Rnp denotes primary states with known dynamics and xs ∈ Rns
+
+denotes secondary states whose evolution must be learned. We then use the composite dynamics 
+
+˙x = ftot (x, u ) = fp(x, u ) + I fϕ(x, u ), (5) where I = diag( m1, . . . , m n) with mi ∈ { 0, 1} is a binary mask selecting which state dimen-sions receive a learned residual correction, while dimensions with trusted dynamics, such as trivial integrators, are left unchanged. We fit the residual from rollout data. Given samples (xk, u k, x k+1 ), a one-step target is obtained from the finite difference ˙xk ≈ (xk+1 − xk)/∆t; for states containing quaternion components, standard finite differences are replaced by logarithmic-map differences on SO (3) so that the targets are well defined despite the q ≡ − q sign ambiguity, as described in Appendix H. Because one-step fitting alone does not control the error accumulated over repeated numerical integration inside the planner, we optimize both over mini-batches of the local regression loss and a rollout-consistency loss on contiguous trajectory fragments, 
+
+L(ϕ) = X
+
+> k
+
+I ftot (xk, u k) − ˙xk
+
+ 2, Lroll (ϕ) = 1
+
+R
+
+> R
+
+X
+
+> t=1
+
+I(xpred  
+
+> k+t
+
+− xtrue 
+
+> k+t
+
+)/∆t 2
+
+, (6) where xpred  
+
+> k+t
+
+is obtained by recursively integrating ftot from the previous predicted state. This term penalizes compounding rollout error on the residual-enabled state components, rather than only minimizing local one-step errors. The resulting model allows MPC to plan directly in the augmented state space. Training then alternates between collecting rollouts, fitting the residual dynamics, and updating the learned critic. 
+
+3.4 Guiding the Critic Integration of Auxiliary Information. Rather than learning directly from raw (x, u ), both learned modules in the solver have the option to tap into task-specific feature pre-processors, 
+
+˙x = fp(x, u ) + I fϕ
+
+ gf (x, u, o ), ˆQθ (x, u | o) = ˆQθ
+
+ gQ(x, u, o ), (7) where o denotes optional task context, such as a goal, object pose, or a latent visual embedding 
+
+z = eψ (o) produced by a shared visual encoder. The maps gf and gQ may differ and let the 4learned components operate in task coordinates rather than embodiment-specific raw states. For manipulation tasks, for instance, it can be convenient to compute inside gQ forward-kinematics-derived features such as pcube − pEE , pgoal − pcube , and vEE instead of raw joint variables. 
+
+# 4 OCP Solver 
+
+4.1 iLQR 
+
+Approaching the MPC from the MDP perspective (cf. Section 2), the DDP [8] based iLQR ap-proach [11] is a natural choice for our optimal control solver. Given an initial control sequence 
+
+(ui)H−1 
+
+> i=0
+
+, a forward rollout under xi+1 = f (xi, u i) produces a reference trajectory (xi, u i)H−1 
+
+> i=0
+
+and its rollout value V . Following DDP, the backward pass uses the Bellman recursion Qi = li + γQ i+1 
+
+and forms a local quadratic model of the action-value function at each time step, 
+
+Q(δx, δu ) ≈ 12
+
+" 1
+
+δx δu 
+
+#T  0 QTx QTu
+
+Qx Qxx Qxu 
+
+Qu Qux Quu 
+
+" 1
+
+δx δu 
+
+#
+
+. (8) Minimizing this local model yields the affine feedback update 
+
+δu i = ki + Kiδx i, ki = −Q−1
+
+> uu,i
+
+Qu,i , Ki = −Q−1
+
+> uu,i
+
+Qux,i . (9) iLQR drops the second-order dynamics tensor terms of full DDP, yielding the more economic Gauss-Newton approximation [11]. In the backward sweep, we compute the feed-forward terms ki, feed-back gains Ki, and the expected value-change terms used by the line search. The stage derivatives, dynamics Jacobians, and Hessians can be batch-computed before this sequential sweep, which al-lows us to GPU-parallelize the heavy computations related to auto-diff gradient and Hessian evalu-ation beforehand and keep the backward-sweep loop as lightweight as possible. We regularize Quu 
+
+using the scheme of Tassa et al. [12], with an aggressive schedule for decreasing or increasing the regularizer depending on line-search success. The forward line search rolls out candidate controls ˆui = ui + αk i + Ki dx(ˆ xi, x i) from ˆx0 = x0,where α is the line-search step size [12]. The state displacement dx(·, ·) is Euclidean for vector states and uses the manifold distance for quaternion states, as described in Appendix H. We accept a candidate when the actual rollout improvement agrees with the expected local-model improvement, using either an Armijo condition or the ratio rule of Tassa et al. [12]; otherwise α is reduced and the rollout is repeated. 
+
+4.2 Augmented Lagrangian Method 
+
+To handle equality and inequality constraints, we wrap the iLQR primal solve in an Aug-mented Lagrangian Method (ALM). Let τ = ( x0, u 0, . . . , x H−1, u H−1) denote the planned tra-jectory. We write the constrained finite-horizon problem with a generic additive objective J(τ ) = 
+
+PH−1 
+
+> i=0
+
+˜li(xi, u i), where ˜li will later be instantiated by the blended MPC stage objective: 
+
+min  
+
+> τ
+
+J(τ ) = 
+
+> H−1
+
+X
+
+> i=0
+
+˜li(xi, u i)
+
+subject to x0 = x, xi+1 = f (xi, u i),gi(xi, u i) ≤ 0,hi(xi, u i) = 0 , i = 0 , . . . , H − 1.
+
+(10) Let ci = [ h⊤ 
+
+> i
+
+, g ⊤ 
+
+> i
+
+]⊤ collect constraint residuals and let μi = [ μ⊤
+
+> h,i
+
+, μ ⊤
+
+> g,i
+
+]⊤ collect the correspond-ing multipliers. For fixed multipliers and penalties, the iLQR subproblem uses the augmented La-grangian stage objective [13, 14], 
+
+LAL  
+
+> i
+
+(xi, u i, μ i, ρ i) = ˜li(xi, u i) + μ⊤ 
+
+> i
+
+ci(xi, u i) + 12 ci(xi, u i)⊤Iρ,i ci(xi, u i). (11) 5The diagonal penalty matrix is Iρ,i = diag( ρh,i , m i ⊙ ρg,i ), where mij = 0 when gij (xi, u i) < 0
+
+and μg,ij = 0 , and mij = 1 otherwise. Thus, inactive inequality constraints do not contribute residuals, gradients, or Hessians to the local model. ALM alternates between a primal and a dual step. In the primal step, iLQR minimizes PH−1 
+
+> i=0
+
+LAL 
+
+> i
+
+with μi and Iρ,i fixed, using the rollout and line-search procedure of Section 4.1. After the inner solve returns the primal trajectory (x⋆i , u ⋆i ), the dual step updates 
+
+μ+ 
+
+> h,i
+
+= μh,i + ρh,i hi(x⋆i , u ⋆i ), μ+ 
+
+> g,i
+
+= max  0, μ g,i + ρg,i gi(x⋆i , u ⋆i ). (12) For constraints that remain violated, the penalty is increased as ρ+ 
+
+> i
+
+= min(Φ ρi, ρ max ) with Φ > 1.When the multiplier update vanishes, the residuals approach zero, and stationarity of the augmented subproblem reduces to the KKT stationarity conditions of the original constrained problem [15]. 
+
+4.3 Blended-iLQR 
+
+The constrained blended-MPC objective is obtained by substituting the ALM stage objective 
+
+LAL  
+
+> i
+
+(xi, u i, μ i, ρ i) into the blended recursion of Section 3.1. Define the marginalized continua-tion value V λi+1 (xi+1 ) = min ui+1 Qλi (xi+1 , u i+1 ). For fixed ALM multipliers and penalties, the constrained recursion is 
+
+Qλi (xi, u i) = (1 − λ) ˆQ(xi, u i) + λ  LAL  
+
+> i
+
+(xi, u i, μ i, ρ i) + γV λi+1 (xi+1 )
+
+= λL AL  
+
+> i
+
+(xi, u i, μ i, ρ i) + (1 − λ) ˆQ(xi, u i)
+
+| {z } 
+
+> ˜Lλi(xi,u i)
+
++λγV λi+1 (f (xi, u i)) . (13) At the last control step, the continuation is omitted and QλH−1 = ˜LλH−1. Thus the blended AL-iLQR has the same dynamic-programming form as standard iLQR, but with blended ALM stage-objective 
+
+˜Lλi and effective discount λγ . The backward pass therefore uses the same quadratic expansion as Eq. (8); only the derivatives of the local objective change. In particular, the constrained stage derivatives combine the ALM derivatives with the learned critic derivatives, e.g., 
+
+˜Lλx,i = λ(LAL  
+
+> i
+
+)x + (1 − λ) ˆQx, ˜Lλu,i = λ(LAL  
+
+> i
+
+)u + (1 − λ) ˆQu, (14) and analogously for ˜Lλxx,i , ˜Lλuu,i , and ˜Lλux,i . The full expansions are given in Appendix B. The remaining recursion is unchanged, except that the next-state value contribution is scaled by λγ .
+
+# 5 Results 
+
+We evaluate the proposed framework in four complementary experiments. We begin with a runtime benchmark to verify our solver is amenable to the large-throughput requirement of reinforcement learning. We test the solver on randomly generated optimal-control problems to characterize how our implementation scales with batch size, hardware, and the method of derivative computation. Next, we isolate the effect of the critic blend on a point-mass task, where the optimal critic is available in closed form. We then study a quadrotor task with a biased dynamics model and an unmodeled suspended payload, which tests whether joint residual-dynamics learning and critic learning can compensate for model bias, capture missing state couplings, and remain compatible with quaternion kinematics. Finally, we consider Franka cube stacking as a contact-rich manipulation task to assess whether the framework can plan over incompletely modeled contact interactions and benefit from visual and haptic information for grasp detection. 
+
+Speed Benchmarking. The experimental setup and detailed timing curves are given in Ap-pendix C. The main result is that GPU execution becomes decisive once learned dynamics and critic models are part of the solve: on the tested hardware, batched GPU execution is roughly one to two orders of magnitude faster than CPU execution over the relevant batch-size range. In the purely non-learning setting, CPU execution is competitive only for the smallest batches, after which GPU execution overtakes it as batching exposes more parallel work. Figure 4 further shows that the amortized runtime per problem decreases strongly up to about 10 4 parallel QPs before saturating, and that automatic differentiation remains close to analytical derivatives in this benchmark. 6Figure 1: Parallel environments used for training and evaluation. Left: The stack-cube task with a 6-dof manipulator. The robot must pick up the target cube (blue) and stack it on top of the goal cube (red). Right: The quadrotor task, where the drone must hover at a target position while carrying an unmodeled, suspended payload. Both tasks are simulated using Genesis [16]. 
+
+Figure 2: Point-mass reach task with the analytical LQR critic Q∗, V ∗. Columns: success rate and mean episode cost. Top: all-stage blend, λ = λf swept jointly. Bottom: terminal-only blend, λ = 1 
+
+and λf swept. 
+
+Isolating the Effect of the Critic Blend. To separate the effect of the blend from critic approxima-tion errors, a force-controlled 2-D point mass must reach a fixed goal position and come to rest. For this linear-quadratic task, the optimal infinite-horizon discounted Q∗ and V ∗ follow in closed form from the discrete algebraic Riccati equation and take the place of the learned critic (Appendix D). We sweep the blend for horizons H ∈ { 2, 5, 10 , 20 } in two settings: blending Q∗ at all stages with 
+
+λf = λ, and blending only the terminal value with λf , while λ = 1 at all other stages. Figure 2 shows the results. Without the critic ( λ = λf = 1 ), MPC overshoots the goal for H ∈ { 2, 5, 10 } and fails the task, whereas H = 20 succeeds. Lowering λf towards zero recovers the success rate and cost of the optimal policy at all horizons. Blending at all stages reaches the same performance al-ready at values of λ closer to 1. We interpret this as the stage-wise critic terms supplying long-range information along the whole planned trajectory, in addition to the terminal value. These results rely on the exact Q∗; Section 6 discusses why learned critics restrict λ to values close to 1.7Overcoming Biased Dynamics and Unmodeled State-Dependencies. In this experiment, a quadrotor starts in a random pose and must hover to a target position while carrying an unmod-eled payload suspended by a rod. With all learning components disabled, the nominal MPC baseline reaches a success rate of only 0.05 and a mean cost of 2.6e4, with most failures caused by crashes. The learned critic variant, which combines residual-dynamics learning with the blended critic ob-jective, raises the success rate to 0.79 and lowers the mean cost to 4.7e3. As an adaptive-control baseline, an idealized incremental nonlinear dynamic inversion (INDI) controller [17] without sen-sor noise or delay reaches a higher success rate of 0.94 , but a higher mean cost of 5.6e3, since it overshoots more and settles more slowly around the goal (Appendix E.1). In our setting, learning the dynamics model alone is not sufficient to solve the task reliably. We attribute this to the short look-ahead of 1s for the MPC, not capturing the fatal swing-up motion of the pendulum early enough, and the approximation bias of the learned dynamics model, requiring careful alignment of planning frequency, integration scheme, and look-ahead distance to trade off approximation bias with real-time-ness. However, we observe that combining the learned dynamics model with the learned critic, which injects infinite-horizon MDP information into the MPC, yields more conservative approaches towards the goal, keeping the oscillations bounded and avoiding crashing. The learned critic can drive the system away from high action-value regions that lead to failure, including the ones with high pendulum deflection. This observation is broadly in line with the remarkable success of model-free policy-gradient methods, which achieve high task performance not by meticulously modeling the underlying dynamics but by directly learning mitigation strategies that avoid task failure [18]. To further demonstrate the sample-efficiency claim, we establish a PPO baseline [19] with the hyperpa-rameters of Table 6 reaching comparable asymptotic performance but requiring training for 1.5 hours on 1e4 parallel environments, collecting roughly 1e8 environment transitions (collected at 200 Hz, the policy frequency), whereas our learned-critic achieves the reported performance after roughly 30 minutes using 10 5 transitions (collected at 20 Hz, the planner frequency, cf. Appendix G). Fig-ure 3 shows how this improvement emerges during training: as λ is decreased, the learned critic gradually takes over a larger share of the objective, correcting the nominal behavior and improving both success rate and cost. Detailed task and training settings are given in Appendix E.1, whereas empirical evidence for the efficacy of our approach and further insights into the learned critic are given in Appendix E.2. 
+
+Figure 3: Quadrotor learning progress while decreasing the critic blend parameter λ. Early updates behave like nominal MPC and fail under the biased incomplete model (cf. Section 3.1); once the learned critic is allowed to shape the objective more strongly, the success rate increases and the cost drops. 
+
+Learning to Plan over Contacts Using Visual and Haptic Information. In this experiment, a 6-DOF manipulator must pick up a cube and stack it precisely on top of another cube using only a sim-ple kinematic robot model and no explicit contact model. Unsurprisingly, a naive grasp-uninformed nominal MPC with a single global cost function fails completely (success rate of 0, stuck in pre-grasp pose) since it cannot reason over the grasp. Following Appendix F.1, we add to the state vector the cube’s position and a grasp-score, which is initialized from an external grasp detection using tactile sensors, and replace the global cost with a multi-phase cost function. This modification 8raises the nominal baseline to 0.361 success rate. Further learning a residual to the grasp-score state lifts the success rate to moderate 0.401 . Employing a learned critic, which is conditioned on visual depth and haptic observations (cf. Figure 9) improves task performance significantly to 0.94 success rate. We observe more delicate and better-informed recovery behaviors than with nominal MPC, including corrections after failed grasp attempts and poor approaches that tip over the target cube. More insights into the task setup and further discussions of the results are given in Appendix F.1 and Appendix F.2. 
+
+# 6 Limitations 
+
+A first limitation is that the solver relies on first- and second-order derivatives of the learned resid-ual and critic models, and optimization remains sensitive to irregular derivatives. This restricts the blend: with the exact critic of Section 5, lower values of λ consistently recover the performance of the optimal policy, whereas with learned critics only modest reductions from λ = 1 , roughly in the range 0.98 to 0.9, outperformed the nominal baselines in our experiments. Since the weight of the nominal rollout decays as (γλ )k along the horizon (Eq. (3)), low λ removes the model information that would compensate imperfect critic derivatives, particularly at long horizons (cf. Appendix F.2). We therefore start training at λ = 1 , lower λ only once the critic has acquired sufficient state-space coverage, and mitigate irregular derivatives by disagreement-based attenuation of the critic, smooth-ing, and clipping. Nevertheless, poor gradients can still steer the optimizer toward uninformative regions of the state space, degrade data collection early-on, and ultimately stall training; stronger training-time regularization, efficient off-policy target construction and priority-sampling from the replay-buffer should therefore be investigated. A second limitation concerns real-time deployment on a single system. While all solver computations are batched across environments, and costs and derivatives are evaluated in batch over all time steps, the forward rollout, the Riccati recursion, and the line search remain sequential over the horizon, which precludes replanning at rates above 
+
+100 Hz in the current implementation. However, iLQR returns the time-indexed local feedback pol-icy ˆui = ui + Ki dx(ˆ xi, x i) around the planned trajectory, so the planner can run at a low rate while this policy closes the loop at the control rate. 
+
+# 7 Conclusion 
+
+To conclude, this paper presented a learning-augmented constrained MPC framework for planning under model mismatch. While dynamics learning enabled the planner to account for directly observ-able but incompletely modeled state variables, the main driver of the observed performance gains was the integration of a learned critic into the gradient-based optimization framework. By pro-viding corrective descent directions during the backward recursion, the critic injected long-horizon behavioral information that is inaccessible to a finite-horizon MPC objective alone. In this way, the method mitigated the inherent myopia of MPC by leveraging value information from the underlying infinite-horizon MDP. Across the reported runtime and control experiments, the framework scaled to thousands of parallel optimal control problems and improved performance under biased and in-complete dynamics models. Future work will focus on addressing the aforementioned limitations and on stronger critic pre-training, including representation learning from video demonstrations. 9A Bellman-Residual Form of the Blended Objective 
+
+We have H control steps, hence the planned rollout contains the state-action pairs (xi, u i)H−1 
+
+> i=0
+
+and terminal state xH . For compactness, write Qi = Q(xi, u i), ˆQi = ˆQ(xi, u i), and li = l(xi, u i).For i = 0 , . . . , H − 2, the blended recursion in the main text reads 
+
+Qλi = (1 − λ) ˆQi + λ  li + γQ λi+1 
+
+ ,
+
+where ˆQi is the learned Q-estimate and Qλi is the MPC-blended Q estimate at timestep i. At the last control step we close the recursion with 
+
+QλH−1 = (1 − λ) ˆQH−1 + λl H−1.
+
+To expose the relation to temporal-difference style corrections, define the deviation of the blended objective from the learned critic by 
+
+δi = Qλi − ˆQi.
+
+Subtracting ˆQi from both sides of the recursion gives 
+
+δi = (1 − λ) ˆQi + λ  li + γQ λi+1 
+
+ − ˆQi = λ
+
+
+
+li + γQ λi+1 − ˆQi
+
+
+
+.
+
+Now add and subtract γ ˆQi+1 inside the parentheses: 
+
+δi = λ
+
+
+
+li + γ ˆQi+1 − ˆQi + γ(Qλi+1 − ˆQi+1 )
+
+
+
+.
+
+This separates the local Bellman residual of the learned critic from the downstream blended correc-tion. Define the one-step Bellman residual 
+
+Bi = li + γ ˆQi+1 − ˆQi.
+
+Using δi+1 = Qλi+1 − ˆQi+1 , we obtain the recursion 
+
+δi = λ(Bi + γδ i+1 ),
+
+At the last control step, the terminal approximation gives 
+
+δH−1 = QλH−1 − ˆQH−1 = λ
+
+
+
+lH−1 − ˆQH−1
+
+
+
+.
+
+For any intermediate step we get 
+
+δi = λ
+
+> H−i−2
+
+X
+
+> k=0
+
+(λγ )kBi+k + ( λγ )H−i−1δH−1
+
+!
+
+.
+
+Setting i = 0 and substituting back Qλ 
+
+> 0
+
+= ˆQ0 + δ0 yields 
+
+Qλ 
+
+> 0
+
+= ˆQ0 + λ
+
+> H−2
+
+X
+
+> k=0
+
+(λγ )kBk + ( λγ )H−1 
+
+lH−1 − ˆQH−1
+
+!
+
+.
+
+Hence, the blended objective can be interpreted as the learned critic plus a geometrically weighted accumulation of local Bellman-residual corrections along the planned trajectory. In particular, when the learned critic satisfies the Bellman relation well along the planned rollout, the residual terms Bi
+
+are small and the blended objective stays close to ˆQ0; when the local model-based rollout disagrees with the learned critic, the residual terms accumulate and correct the objective accordingly. 
+
+# B Quadratic Q Expansion for blended ALM-iLQR 
+
+For the ALM-iLQR the gradients and hessians for the quadratic Q expansion in each timestep read: 
+
+Qx = eLx + f ⊤ 
+
+> x
+
+V ′
+
+> x
+
+,Qu = eLu + f ⊤ 
+
+> u
+
+V ′
+
+> u
+
+,Qxx = eLxx + f ⊤ 
+
+> x
+
+V ′
+
+> xx
+
+fx + V ′ 
+
+> x
+
+· fxx ,Quu = eLuu + f ⊤ 
+
+> u
+
+V ′
+
+> uu
+
+fu + V ′ 
+
+> x
+
+· fuu ,Qux = eLux + f ⊤ 
+
+> u
+
+V ′
+
+> xx
+
+fx + V ′ 
+
+> x
+
+· fux .
+
+10 with the learned Q-function terms, and using a locally-linear approximation of the constraint func-tion ci ≈ c0 
+
+> i
+
++ cx,i δx i + cu,i δu i,
+
+eLx = λ(LAL  
+
+> i
+
+)x + (1 − λ) ˆQx, (LAL  
+
+> i
+
+)x = lx + c⊤
+
+> x,i
+
+(μi + Iρ,i ci),
+
+eLu = λ(LAL  
+
+> i
+
+)u + (1 − λ) ˆQu, (LAL  
+
+> i
+
+)u = lu + c⊤
+
+> u,i
+
+(μi + Iρ,i ci),
+
+eLxx = λ(LAL  
+
+> i
+
+)xx + (1 − λ) ˆQxx , (LAL  
+
+> i
+
+)xx ≈ lxx + c⊤
+
+> x,i
+
+Iρ,i cx,i ,
+
+eLuu = λ(LAL  
+
+> i
+
+)uu + (1 − λ) ˆQuu , (LAL  
+
+> i
+
+)uu ≈ luu + c⊤
+
+> u,i
+
+Iρ,i cu,i ,
+
+eLux = λ(LAL  
+
+> i
+
+)ux + (1 − λ) ˆQux , (LAL  
+
+> i
+
+)ux ≈ lux + c⊤
+
+> u,i
+
+Iρ,i cx,i .
+
+the next-state value-function gradient V ′ 
+
+> x
+
+and hessian V ′ 
+
+> xx
+
+are carried over in the recursion. 
+
+# C Runtime Scaling Benchmark 
+
+To isolate solver throughput, we benchmark the batched iLQR implementation on random control instances with an 8-dimensional state, a 4-dimensional action, a planning horizon of 32 steps, and a planning time step of 0.05 s . The learned dynamics model and learned critic are fully connected MLPs with three hidden layers of width 256 and ELU activations. Each timing run measures a single iLQR iteration, comprising one forward rollout, one backward pass, up to six regularization trials, and up to eight line-search evaluations. We discard two warmup runs and report averages over 20 measured runs. The benchmark is executed on an NVIDIA RTX 5080 mobile GPU (175 W) and an AMD Ryzen 9 9955HX CPU with 64 GB RAM. 
+
+Figure 4: Runtime scaling of one batched iLQR iteration with analytical and autodiff derivatives on CPU and GPU. GPU execution becomes decisive once learned models are part of the solve, while autodiff remains close to analytical derivatives; runtime per QP decreases with batching up to about 
+
+10 4 parallel problems before flattening on the tested hardware. The figure separates total solve time from amortized runtime per QP. For the learned-model setting, the GPU curves stay well below the CPU curves across the relevant batch sizes, yielding roughly one to two orders of magnitude lower runtime on the tested hardware. For the analytical setting, CPU execution is competitive only at the smallest batches, after which GPU execution overtakes it as batching exposes more parallel work. The amortized runtime decreases strongly up to about 10 4
+
+11 parallel QPs and then saturates, which in our setup coincides with the practical hardware limit of the tested mobile GPU. 
+
+# D Point-Mass Experiment Details 
+
+The point mass has mass m = 2 kg , state x = [ p⊤, v ⊤]⊤ ∈ R4 with planar position p and velocity 
+
+v, and is driven by a planar force u ∈ [−20 , 20] 2 N with ˙p = v and ˙v = u/m . The stage cost is 
+
+ℓ(x, u ) = βp∥p − p⋆∥22 + βv ∥v∥22 + βu∥u∥22 with βp = 1 , βv = 0 .05 , and βu = 0 .1. Linearizing the discretized dynamics at ∆tplan = 0 .1 s gives (A, B ), and the discounted algebraic Riccati equation with γ = 0 .95 gives P , so that V ∗(x) = e⊤P e and Q∗(x, u ) = ℓ(x, u ) + γ V ∗(Ae + Bu ) in the error coordinates e = x − [p⋆⊤, 0] ⊤. An episode of 10 s counts as successful once the position error falls below 0.1 m and the speed below 0.05 m /s. Each sweep runs 10 3 parallel environments and holds each blend value for one episode, λ ∈ { 1, 0.99 , 0.98 , 0.97 , 0.95 , 0.93 , 0.9, 0.8, . . . , 0} for the all-stage sweep and λf ∈ { 1, 0.9, . . . , 0} for the terminal-only sweep. 
+
+# E Quadrotor Experiment Details 
+
+E.1 Task Setup Dynamics Model. The nominal MPC model uses the rigid-body state and control given by 
+
+x =
+
+
+
+pWW B 
+
+qW B 
+
+vWW B 
+
+ωBW B 
+
+ , u =
+
+ aBz
+
+αBW B 
+
+
+
+,
+
+The virtual controls are subject to componentwise box constraints, 
+
+umin ≤ u ≤ umax , aBz ∈ [−20 , 40] m s −2, αBW B ∈ [−40 , 40] 3 rad s −2,
+
+equivalently written in the inequality-constraint form as hmin (u) = umin − u ≤ 0 and hmax (u) = 
+
+u−umax ≤ 0. For the quaternion block, the solver uses the reduced local coordinates and projection matrix 
+
+xred =
+
+
+
+pWW B 
+
+ϕW B 
+
+vWW B 
+
+ωBW B 
+
+ , E =
+
+
+
+I 0 0 00 G(qW B ) 0 00 0 I 00 0 0 I
+
+ ,
+
+so the quaternion state is optimized in a three-dimensional tangent coordinate ϕW B ∈ R3 rather than directly in qW B ∈ S3. The dynamics are 
+
+˙x = f (x, u ) = 
+
+
+
+vWW B  
+
+> 12
+
+qW B ⊗
+
+ 0
+
+ωBW B 
+
+
+
+gW + R(qW B )
+
+ 00
+
+aBz
+
+
+
+αBW B 
+
+
+
+.
+
+where gW =
+
+" 00
+
+−g
+
+#
+
+and R(qW B ) maps body-frame accelerations into the world frame. To inject structured model mismatch, the simulator additionally exposes a swing-load state with roll- and pitch pendulum coordinates, 
+
+xaug =
+
+xθ
+
+˙θ
+
+ , θ ∈ R2,
+
+corresponding to a 0.172 kg suspended load ( 0.15 kg payload, 0.02 kg rod, 0.002 kg bearing) at-tached to a 0.15 m rod. These state variables are observed during training but are not modeled in 12 the nominal rigid-body dynamics above; their effect on the translational and rotational motion must therefore be captured from data alone. The model bias ¯m = m/ 1.5 and ¯JB = 1 .5JB is introduced in the the actuator model 
+
+˙vWW B = gW + ¯ m−1R(qW B )fB (ω2),
+
+˙ωBW B = ¯J−1
+
+> B
+
+ τB (ω2) − ωBW B × ¯JB ωBW B 
+
+ ,
+
+which computes the the squared rotor-speed commands ω2 
+
+> i
+
+from the virtual controls u using the wrench model 
+
+fB (ω2) = 
+
+ 00 
+
+> kf
+> P4
+> j=1 ω2
+> j
+
+
+
+, τB (ω2) = 
+
+> 4
+
+X
+
+> j=1
+
+rj ×
+
+ 00 
+
+> kfω2
+> j
+
+
+
++
+
+ 00  
+
+> kd
+> P4
+> j=1 sjω2
+> j
+
+
+
+,
+
+with kf and kd the force and drag coefficients, rj the rotor-arm vectors, and sj ∈ {− 1, +1 } the propeller spin directions. Hence the benchmark combines parameter bias on the modeled rigid-body states with additional unmodeled state dependencies from the swing-load coordinates. 
+
+Cost Function The quadrotor stage cost is a quadratic hover-tracking objective, where (·)⋆ denotes the hover goal state, 
+
+ℓ(x, u ) = 12
+
+
+
+βp∥pWW B − pW,⋆ W B ∥22 + βq ∥rotvec( q⋆W B ⊗ q−1 
+
+> W B
+
+)∥22
+
++ βv ∥vWW B − vW,⋆ W B ∥22 + βω ∥ωBW B − ωB,⋆ W B ∥22
+
++ βu∥u∥22
+
+
+
+,
+
+where βp, βq , βv , βω , and βu are positive cost weights. 
+
+INDI Baseline. INDI [17] computes control increments from measured accelerations and thereby compensates unmodeled forces and moments, including those of the suspended payload, without an explicit model of them. We evaluate an idealized variant, in which these measurements are free of noise and delay, on the same task and with the same cost function as the MPC variants. 
+
+E.2 Experimental Insights Failure mode of nominal MPC. Figure 5 compares representative closed-loop trajectories of nominal MPC and the blended-critic controller under the biased incomplete model (random seeds). The nominal controller initially reduces the position error, but it does so with the wrong inertial model and without explicit payload dynamics. This injects excessive rotational motion into the suspended load, which amplifies and destabilizes the quadrotor. Around the end of the episode, the nominal controller tips over, loses altitude and crashes. The learned critic avoids this failure: by learning to favor a lower-velocity approach, it keeps the pendulum motion bounded, avoiding catastrophic tip-over even under presence of severe cross-couplings. 
+
+Monte Carlo analysis. The single-rollout picture is confirmed by the Monte Carlo envelopes in Figure 6, computed from N = 300 randomized closed-loop runs. Under the learned controller, the mean trajectories converge toward hover and the state dispersion contracts after the initial transient. Under nominal MPC, the dispersion grows late in the episode as the quadrotor tips over and crashes during breaking. The nominal mean also develops a clear downward drift in z. This is the aggregate version of the same failure mode seen in Figure 5. 
+
+Local structure of the learned critic. Figures 7 and 8 show local x-y slices of the learned critic. Each slice is generated from one state-action sample taken during MPC optimization: only the quadrotor position coordinates px and py are swept, while the remaining state and action entries are fixed. The plots therefore describe the value density around this specific rollout condition; they 13 Figure 5: Two closed-loop trajectories under the biased incomplete quadrotor model. Solid lines denote the trajectories stabilized by the learned critic controller; dashed lines denote the nominal MPC. Different random initial states are shown for the two controllers. The nominal controller initially moves toward the goal but excites the suspended load, which then lead to tip-over late into the flight. The learned controller approaches the goal more conservatively, keeping the pendulum motion bounded and stabilizing the system throughout the episode. are not global projections of the learned Q function, which is fitted over the full 21 -dimensional state-action input. Figure 7 shows that the four value heads converge to almost identical spatial value distributions in this slice. The critic is therefore certain about the correction signal used at this rollout state. Figure 8 compares this learned correction to the nominal stage cost. The critic remains consistent with the stage cost in the important failure case: it does not create spurious low-value basins far away from the goal and remains locally smooth. At the same time, the value minimum is shifted relative to the instantaneous stage-cost minimum. For the fixed velocity, attitude, and payload state in this snapshot, positions closer to the goal have higher predicted continuation cost; the same non-position states would be preferable farther back along the approach direction. This is the correction to account for the increased momentum the nominal model cannot express. The critic surface is smooth over the plotted region, which is required for stable iLQR derivatives. The final panel shows the uncertainty-based scaling derived from value-head variance, which is used to weight the critic against the nominal MPC objective (cf. Section 3.2). 14 Blended Critic MPC Nominal MPC 
+
+Figure 6: Monte Carlo envelopes over N = 300 randomized rollouts. Left: blended-critic MPC. Right: nominal MPC. The learned controller keeps the mean close to the hover target and prevents late-episode variance growth. The nominal controller develops large dispersion and a systematic loss of altitude, consistent with repeated crash trajectories. 
+
+# F Cube Stacking Experiment Details 
+
+F.1 Task Setup Dynamics Model. The manipulation benchmark asks the robot to pick up a target cube and place it on top of a support cube. The planner uses the reduced state and control 
+
+x =
+
+
+
+qarm 
+
+wg
+
+pWW T 
+
+g
+
+ , u =
+
+ ˙qarm 
+
+˙wg
+
+
+
+, ˙x = f (x, u ) = 
+
+
+
+˙qarm 
+
+˙wg
+
+g v WW E (qarm , ˙qarm )0
+
+ ,
+
+where qarm are arm joints, wg is gripper width, pWW T is target-cube position, and g ∈ [0 , 1] is a learned continuous grasp gate. Thus the nominal model transports the cube kinematically only in proportion to the current grasp estimate: for g ≈ 0 the target cube is effectively decoupled from the end effector, whereas for g ≈ 1 it follows the commanded end-effector motion. The end-effector translational velocity is computed from differentiable forward kinematics of the manipulator. Let pWW E = FK E (qarm ) denote the end-effector position obtained from the robot’s batched forward-kinematics model. The corresponding geometric Jacobian is 
+
+JWE (qarm ) = ∂p WW E 
+
+∂q arm 
+
+, vWW E (qarm , ˙qarm ) = JWE (qarm ) ˙ qarm .
+
+15 Figure 7: Local x-y slices of the four learned value heads at one MPC optimization snapshot. All state and action entries except planar position are held fixed. The heads agree on the spatial value distribution, indicating low ensemble uncertainty for the critic correction at this rollout state. 
+
+Figure 8: Local critic analysis for the same slice as Figure 7. The learned value remains consistent with the stage cost by avoiding low-value regions far from the goal, but shifts the local optimum according to the fixed velocity, attitude, and payload state. The critic is smooth in the plotted region, and the value-head variance defines the guidance scale used to blend the critic with the nominal MPC objective. In the implementation, the forward kinematics and geometric Jacobians are evaluated in batch across all environments and are fully differentiable. Contact dynamics are not modeled explicitly; instead, the missing interaction effects must be absorbed by the learned residual and the learned value func-tion. 
+
+Cost Function. Let pWW A denote the support-cube center and define the desired stacked target position pWW G = pWW A + [0 , 0, 1.2sz ]⊤, with sx and sz the cube width and height. We implement a multi-phase cost function, where the pregrasp-term and the transport term are weighted by the grasping gate 
+
+ℓ(x, u ) = βp∥pWW T − pWW E ∥2 + βp clip(1 .8sx − pWW T,z , 0, 1.8sx)+ g β p∥pWW G − pWW E ∥2 + (1 − g) sg βp∥pWW G − pWW E ∥2
+
+
+
+− βg
+
+
+
+ρ(pWW T ) ˙ wg −  1 − ρ(pWW T )g ˙wg
+
+
+
++ βu∥ ˙qarm ∥22 + βg ˙w2 
+
+> g
+
+,
+
+where βp, βg , and βu are positive cost weights, ρ(pWW T ) = exp  −∥ pWW G − pWW T ∥2/(0 .4sx), and 
+
+sg[ ·] denotes the stop-gradient evaluation used in the implementation. 
+
+Preprocessed Inputs. The residual dynamics model receives the feature vector 
+
+ϕf = x⊤ u⊤ (f WL )⊤ (f WR )⊤ g z⊤
+
+> img
+
+⊤ ,
+
+16 Table 1: Influence of iLQR horizon length on cube-stacking performance at ∆tctrl = 0 .05 s . Nomi-nal MPC requires an intermediate horizon, whereas the learned critic maintains strong performance even for short horizons. 
+
+H Nominal SR Nominal cost Critic SR Critic cost 2 0.00 – 0.03 278 5 0.116 280 0.685 266 10 0.318 254 0.885 223 20 0.361 251 0.941 220 30 0.298 253 0.018 335 50 0.0 411 0.02 421 Table 2: Influence of critic input features on cube-stacking performance. Adding depth and hap-tic observations improves success rate monotonically, indicating that richer observations improve grasp-phase inference and critic stability.            
+
+> Critic input SR Mean cost
+> [x, u, p goal ]0.230 238.0
+> [x, u, p goal ,depth] 0.543 234.0
+> [x, u, p goal ,depth ,haptic] 0.941 257.0
+
+that is, the full state, control, left and right finger contact forces, the scalar grasp score, and optional image features zimg . The value model receives 
+
+ϕQ = (pWW G )⊤ x⊤ u⊤ (f WL )⊤ (f WR )⊤ z⊤
+
+> img
+
+⊤ ,
+
+so it additionally gets the goal location but does not take the grasp score as a separate input in the current implementation. 
+
+F.2 Experimental Insights 
+
+The ablations in Tables 1, 2, and 3 support the findings summarized in Section 5. On this task, the main benefit comes from critic learning with informative observations, whereas residual dynamics learning yields only moderate improvement. 
+
+Effect of planning horizon. Table 1 shows that nominal MPC works best with a medium length optimization horizon. Very short horizons do not result in a sufficiently strong grasp, keeping the robot stuck in the approach phase, while very long horizons degrade due to unsteadiness in the iLQR backward pass when optimizing over the grasp. The learned critic improves success across the full horizon range and already reaches 0.685 success rate at H = 5 , where nominal MPC barely succeeds. This supports the main-text claim that the critic gives iLQR consistently a descent direc-tion aligned with the long-horizon stacking objective, leading to more directed behavior and more robust grasping. The learned critic also degrades at long horizons; unlike the exact critic of Sec-tion 5, it supplies imperfect gradients and curvature at every stage, while the weight of the nominal rollout decays as (γλ )k, and both effects can destabilize the backward pass over long horizons (cf. Section 6). 
+
+Effect of visual and haptic inputs. Table 2 shows a consistent gain when depth and haptic obser-vations are added to the critic input. Using only state, action, and goal features yields a success rate of 0.23 . Adding depth raises this to 0.543 , and adding haptic information further raises it to 0.941 .Figure 9 illustrates the transport phase together with the predicted cube and end-effector trajectories available to the controller. This matches the main-text result: visual and haptic observations stabilize the critic by reducing ambiguity about grasp quality and task phase, which is the dominant source of uncertainty in this benchmark. 
+
+Effect of residual dynamics learning. Table 3 shows only minor benefit from learning residual dynamics on this task. The learned variants remain close to or below the baseline success rate and 17 Figure 9: Cube-stacking phases. (1) Approach and Grasp; (2) Pickup and Transport; (3) Align and Drop; Depth (B) and haptic observations (contact-probes in gripper fingers visualized by red markers, figure A1..3) improve grasp estimation. The predicted cube trajectory (C2, blue) matches the predicted end-effector trajectory (C2, green) during the transport phase (2). Table 3: Influence of residual dynamics learning on cube-stacking performance. Residual variants do not improve significantly over the nominal baseline and often increase cost.                          
+
+> Experiment SR Mean cost Baseline 0.394 234.7
+> ˙g←[x, u, contact] 0.341 275.6
+> ˙g←[contact ,depth] 0.401 278.2
+> ˙g←[x, u, contact ,depth] 0.323 273.4
+> ˙x←[x, u, contact] 0.361 296.4
+
+consistently increase the mean cost. This supports the hypothesis stated in the results section: mod-eling the exact dynamics of the cube is not the bottleneck in this task. Once the task phase is inferred robustly, the phased nominal model is already sufficient to plan approach, lift, and transport, whereas additional residual dynamics introduces optimization non-convexity that hurts iLQR. In practice, the added residual model occasionally induced erratic motions, such as brief gripper opening or slight end-effector jerks. During the transport phase, when the end effector had to maintain a firm grasp, such events often led to dropping the object, reducing success rate and increasing cost. 18 G Solver and Learning Settings 
+
+Tables 4, 5, and 6 summarize the shared solver and learning configuration, the task-specific settings used in the quadrotor and cube-stacking experiments, and the PPO hyperparameters. Table 4: Shared solver, optimization, and data-collection settings used in both tasks. 
+
+Setting Value Planning time step ∆tplan 0.05 s 
+
+Horizon H 20 
+
+Parallel environments 100 
+
+iLQR iterations 8
+
+Maximum line-search trials 9
+
+Maximum regularization updates 10 
+
+Executed control steps per replan 3
+
+Residual-model initialization Gaussian, standard deviation 10 −3
+
+Residual rollout loss 10 steps, weight 0.1, midpoint integration Critic initialization Gaussian, standard deviation 10 0
+
+Value-target construction TD(5) Variance-based λ attenuation κ = 4 .0
+
+Blend schedule 1.0 → 0.9
+
+Update interval every 20 control steps Transitions per update 2 × 10 3
+
+Mini-batches per update 10 
+
+Critic replay buffer 10 4
+
+Dynamics replay buffer 10 7
+
+Table 5: Task-specific timing and network settings. 
+
+Setting Quadrotor Cube stacking Episode length 5 s 8 s 
+
+Control time step ∆tctrl 0.005 s 0.01 s 
+
+Residual model ELU MLP, 3 layers, width 
+
+128 
+
+ELU MLP, 3 layers, width 
+
+256 
+
+Critic trunk ELU MLP, 3 layers, width 
+
+128 
+
+ELU MLP, 3 layers, width 
+
+256 
+
+Value ensemble 4 heads, 1 layer, width 128 ,mean aggregation 
+
+4 heads, 1 layer, width 256 ,mean aggregation 
+
+Table 6: PPO hyperparameters. 
+
+Setting Value Parallel Environments 10 4
+
+Learning epochs 5
+
+Mini-batches 4
+
+Clipping parameter 0.2
+
+Discount factor γ 0.99 
+
+GAE parameter λ 0.95 
+
+Value-loss coefficient 1.0
+
+Entropy coefficient 0.01 
+
+Learning rate 10 −3
+
+Desired KL 0.01 
+
+# H Quaternion Projection 
+
+Often in aerospace and robotics, one is interested in optimizing over singularity-free rotation parametrizations. To make the solver accessible to a broad range of tasks, we require native sup-port for state vectors that mix Euclidean states with quaternion components. During the forward rollout, quaternion states are renormalized after numerical integration, and during line search, the displacement dx(ˆ xi, x i) uses Euclidean differences on vector blocks and local rotation errors on 19 quaternion blocks. In the backward pass, quaternion derivatives are projected to local tangent coor-dinates because direct perturbations in the four-dimensional quaternion coordinates introduce radial components that violate ∥q∥ = 1 and make the local quadratic model inconsistent after renormal-ization [20]. We therefore map derivatives from the quaternion representation q to a local angle-axis coordinate ϕ ∈ R3 using the geometric Jacobian G(q). For a quaternion-dependent function h,this gives hred  
+
+> x
+
+= E⊤hx and hred  
+
+> xx
+
+≈ E⊤hxx E, where the Hessian projection omits second-order curvature terms in the spirit of the iLQR Gauss-Newton approximation. For dynamics, input and output states lie in different tangent spaces, so f red  
+
+> x,i
+
+= E⊤
+
+> i+1
+
+fx,i Ei and f red  
+
+> u,i
+
+= E⊤
+
+> i+1
+
+fu,i [20]. Ap-pendix E.1 gives a concrete quadrotor example, and in the following we will detail the construction of G(q).Given a current unit quaternion q and a local Rodrigues perturbation ψ ∈ R3, define 
+
+δq (ψ) = 1
+
+p1 + ∥ψ∥2
+
+1
+
+ψ
+
+
+
+, q+(ψ) = q ⊗ δq (ψ).
+
+For a function h : S3 → Rp, the local rotational Taylor expansion is 
+
+h(q+(ψ)) = h(q) + ∂h (q ⊗ δq (ψ)) 
+
+∂ψ ψ=0 
+
+ψ + O(∥ψ∥2).
+
+Using left quaternion multiplication q ⊗ δq = L(q)δq , the projected Jacobian is 
+
+∂h ∂ψ = ∂h ∂q L(q) ∂δq ∂ψ ψ=0 
+
+.
+
+For the Cayley parametrization, 
+
+∂δq ∂ψ ψ=0 
+
+=
+
+01×3
+
+I3
+
+
+
+and therefore G(q) = L(q)
+
+01×3
+
+I3
+
+
+
+, (15) which gives the result in [20]. with q = [ w, v ⊤]⊤ and quaternion left-multiplication matrix 
+
+L(q) = 
+
+w −v⊤
+
+v wI 3 + [ v]×
+
+
+
+.
+
+For the Hessian, we reuse the first-order projection matrix from Eq. (15), yielding the projected Hessian (without 2nd-order curvature) 
+
+hϕϕ = G(q)⊤hqq (q)G(q).
+
+20 References 
+
+[1] R. S. Sutton and A. G. Barto. Reinforcement Learning: An Introduction . The MIT Press, second edition, 2018. URL http://incompleteideas.net/book/the-book-2nd.html .[2] R. Reiter, J. Hoffmann, D. Reinhardt, F. Messerer, K. Baumg¨ artner, S. Sawant, J. Boedecker, M. Diehl, and S. Gros. Synthesis of model predictive control and reinforcement learning: Survey and classification, 2025. URL https://arxiv.org/abs/2502.02133 .[3] H. J. T. Suh, M. Simchowitz, K. Zhang, and R. Tedrake. Do differentiable simulators give better policy gradients? CoRR , abs/2202.00817, 2022. URL https://arxiv.org/abs/ 2202.00817 .[4] T. Marcucci, J. Umenberger, P. A. Parrilo, and R. Tedrake. Shortest paths in graphs of convex sets. CoRR , abs/2101.11565, 2021. URL https://arxiv.org/abs/2101.11565 .[5] K. Lowrey, A. Rajeswaran, S. M. Kakade, E. Todorov, and I. Mordatch. Plan online, learn offline: Efficient learning and exploration via model-based control. CoRR , abs/1811.01848, 2018. URL http://arxiv.org/abs/1811.01848 .[6] A. Aubret, L. Matignon, and S. Hassas. A survey on intrinsic motivation in reinforce-ment learning. ArXiv , abs/1908.06976, 2019. URL https://api.semanticscholar.org/ CorpusID:201103910 .[7] M. Bhardwaj, S. Choudhury, and B. Boots. Blending MPC & value function approximation for efficient reinforcement learning. CoRR , abs/2012.05909, 2020. URL https://arxiv. org/abs/2012.05909 .[8] D. MAYNE. A second-order gradient method for determining optimal trajectories of non-linear discrete-time systems. International Journal of Control , 3(1):85–95, 1966. doi:10.1080/ 00207176608921369. URL https://doi.org/10.1080/00207176608921369 .[9] H. van Hasselt, A. Guez, and D. Silver. Deep reinforcement learning with double q-learning. 
+
+CoRR , abs/1509.06461, 2015. URL http://arxiv.org/abs/1509.06461 .[10] O. Peer, C. Tessler, N. Merlis, and R. Meir. Ensemble bootstrapping for q-learning. CoRR ,abs/2103.00445, 2021. URL https://arxiv.org/abs/2103.00445 .[11] E. Todorov and W. Li. A generalized iterative lqg method for locally-optimal feedback control of constrained nonlinear stochastic systems. Proceedings of the 2005, American Control Con-ference, 2005. , pages 300–306 vol. 1, 2005. URL https://api.semanticscholar.org/ CorpusID:14762932 .[12] Y. Tassa, T. Erez, and E. Todorov. Synthesis and stabilization of complex behaviors through on-line trajectory optimization. In 2012 IEEE/RSJ International Conference on Intelligent Robots and Systems , pages 4906–4913, 2012. doi:10.1109/IROS.2012.6386025. [13] M. J. D. Powell. A method for nonlinear constraints in minimization problems. 1969. URL 
+
+https://api.semanticscholar.org/CorpusID:115810962 .[14] T. A. Howell, B. E. Jackson, and Z. Manchester. Altro: A fast solver for constrained trajectory optimization. In 2019 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS) , pages 7674–7679, 2019. doi:10.1109/IROS40897.2019.8967788. [15] Penalty and Augmented Lagrangian Methods , pages 497–528. Springer New York, New York, NY, 2006. ISBN 978-0-387-40065-5. doi:10.1007/978-0-387-40065-5 17. URL https: //doi.org/10.1007/978-0-387-40065-5_17 .[16] G. Authors. Genesis: A generative and universal physics engine for robotics and beyond, December 2024. URL https://github.com/Genesis-Embodied-AI/Genesis .21 [17] E. J. J. Smeur, Q. Chu, and G. C. H. E. de Croon. Adaptive incremental nonlinear dynamic inversion for attitude control of micro air vehicles. Journal of Guidance, Control, and Dynam-ics , 39(3):450–461, 2016. doi:10.2514/1.G001490. URL https://doi.org/10.2514/1. G001490 .[18] J. Peters and J. A. Bagnell. Policy Gradient Methods , pages 774–776. Springer US, Boston, MA, 2010. ISBN 978-0-387-30164-8. doi:10.1007/978-0-387-30164-8 640. URL https: //doi.org/10.1007/978-0-387-30164-8_640 .[19] C. Schwarke, M. Mittal, N. Rudin, D. Hoeller, and M. Hutter. Rsl-rl: A learning library for robotics research. arXiv preprint arXiv:2509.10771 , 2025. [20] B. E. Jackson, K. Tracy, and Z. Manchester. Planning with attitude. IEEE Robotics and Automation Letters , 6(3):5658–5664, 2021. doi:10.1109/LRA.2021.3052431. 22

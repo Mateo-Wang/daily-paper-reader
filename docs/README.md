@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-06</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-07</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 38 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 22 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
-    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>2 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>15</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>23</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-06 23:14:10 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-07 23:44:19 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,7 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-06 日报筛选38篇、精读15篇，聚焦自动驾驶语言规划与生成场景评估两大高分方向。最值得看的是两篇9.0分工作：doPlan 提供多阶段语言条件规划数据集，另一篇则评估生成场景模型的物理一致性与合理性。普通读者可先读这两篇精读，再按兴趣速读机器人策略适配与空间时序表示等8分方向。</p>
+<p>2026-10-07 日报精选 22 篇自动驾驶与具身智能论文，精读 10 篇、速读 12 篇。最值得关注 ExceptionDrive 提出的面向规划的反事实 corner-case 基准（9.0），以及 Magic-W0 结构化世界-动作基础模型（9.0），速读中 VLA 策略学习与长程动态操作方向也较集中。普通读者可先看这两篇精读了解评测与基础模型思路，再按兴趣挑 VLA 相关速读跟进。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -48,12 +48,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">15 篇</strong>
+    <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="doPlan: A Variable-Horizon Dataset for Multi-Stage Language-Conditioned Planning in Autonomous Driving">doPlan: A Variable-Horizon Dataset for Multi-Stage Language-Conditioned Planning in Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Evaluating Physical Consistency and Plausibility in Generative Scenario Models for Autonomous Driving">Evaluating Physical Consistency and Plausibility in Generative Scenario Models for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive">GOTT: Object-centric Dexterous Manipulation with a Reusable Cross-Embodiment Primitive</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ExceptionDrive: A Planning-Oriented Counterfactual Corner-Case Benchmark for Autonomous Driving">ExceptionDrive: A Planning-Oriented Counterfactual Corner-Case Benchmark for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Magic-W0: A Structured World-Action Foundation Model for Physical Intelligence">Magic-W0: A Structured World-Action Foundation Model for Physical Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="Social-WM: Safety-Aware Latent World Models for Robot Social Navigation">Social-WM: Safety-Aware Latent World Models for Robot Social Navigation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>9</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>6</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -61,12 +61,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">速读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">23 篇</strong>
+    <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Principal Steering Subspaces for Online Adaptation of Frozen Generative Robot Policies">Principal Steering Subspaces for Online Adaptation of Frozen Generative Robot Policies</span></li><li><span class="dpr-home-dashboard-paper-title" title="Achieve What You Imagined: Learning to Align Actions with Visual Plans">Achieve What You Imagined: Learning to Align Actions with Visual Plans</span></li><li><span class="dpr-home-dashboard-paper-title" title="Robot-GST: geometry-aware spatial-temporal robot policy representation and evaluation">Robot-GST: geometry-aware spatial-temporal robot policy representation and evaluation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Alignment-Guided Flow Transformer for Efficient Vision-Language-Action Policy Learning">Alignment-Guided Flow Transformer for Efficient Vision-Language-Action Policy Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="D$^2$-VLA: Dual-Memory Dual-Frequency Vision-Language-Action Model For Long Dynamic Manipulation">D$^2$-VLA: Dual-Memory Dual-Frequency Vision-Language-Action Model For Long Dynamic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking Causal Action Tokenization with Conditional Annealing in Flow Matching">Rethinking Causal Action Tokenization with Conditional Annealing in Flow Matching</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>20</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
 </div>
 
