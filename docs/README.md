@@ -18,7 +18,7 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-07</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-08</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
     <strong class="dpr-home-dashboard-count">共 22 篇</strong>
@@ -28,7 +28,7 @@
     <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-07 23:44:19 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-08 23:59:28 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,7 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>2026-10-07 日报精选 22 篇自动驾驶与具身智能论文，精读 10 篇、速读 12 篇。最值得关注 ExceptionDrive 提出的面向规划的反事实 corner-case 基准（9.0），以及 Magic-W0 结构化世界-动作基础模型（9.0），速读中 VLA 策略学习与长程动态操作方向也较集中。普通读者可先看这两篇精读了解评测与基础模型思路，再按兴趣挑 VLA 相关速读跟进。</p>
+<p>今日日报完成22篇筛选，精读10篇、速读12篇，重点聚焦可控世界动作模型与基于流的视觉-语言-动作模型。</p>
+<p>最值得看的是两篇9.0分工作：CtrlWAM关注意图与预见对齐的可控世界动作模型，NarrativeFlow用机器人速度场构建流式VLA；速读中的CogWAM、RawVLA和Speed in the Blind Spot分别指向事件驱动对齐、具身图像信号处理与自动驾驶VLM动态感知。</p>
+<p>普通读者可先读CtrlWAM和NarrativeFlow，再按兴趣追CogWAM、RawVLA、Speed in the Blind Spot，重点关注“世界模型+动作控制”和“VLA效率与可解释性”两条线。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -51,9 +53,9 @@
     <strong class="dpr-home-dashboard-count">10 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="ExceptionDrive: A Planning-Oriented Counterfactual Corner-Case Benchmark for Autonomous Driving">ExceptionDrive: A Planning-Oriented Counterfactual Corner-Case Benchmark for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="Magic-W0: A Structured World-Action Foundation Model for Physical Intelligence">Magic-W0: A Structured World-Action Foundation Model for Physical Intelligence</span></li><li><span class="dpr-home-dashboard-paper-title" title="Social-WM: Safety-Aware Latent World Models for Robot Social Navigation">Social-WM: Safety-Aware Latent World Models for Robot Social Navigation</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CtrlWAM: Controllable World Action Models with Aligned Intent and Foresight">CtrlWAM: Controllable World Action Models with Aligned Intent and Foresight</span></li><li><span class="dpr-home-dashboard-paper-title" title="NarrativeFlow: Flow-Based Vision-Language-Action Model Using Robot Velocity Fields">NarrativeFlow: Flow-Based Vision-Language-Action Model Using Robot Velocity Fields</span></li><li><span class="dpr-home-dashboard-paper-title" title="UniWAM: Unified World-Action Model">UniWAM: Unified World-Action Model</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>5</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>5</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>7</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -64,7 +66,7 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Alignment-Guided Flow Transformer for Efficient Vision-Language-Action Policy Learning">Alignment-Guided Flow Transformer for Efficient Vision-Language-Action Policy Learning</span></li><li><span class="dpr-home-dashboard-paper-title" title="D$^2$-VLA: Dual-Memory Dual-Frequency Vision-Language-Action Model For Long Dynamic Manipulation">D$^2$-VLA: Dual-Memory Dual-Frequency Vision-Language-Action Model For Long Dynamic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="Rethinking Causal Action Tokenization with Conditional Annealing in Flow Matching">Rethinking Causal Action Tokenization with Conditional Annealing in Flow Matching</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Speed in the Blind Spot: An Interpretability Analysis of Dynamic Perception in VLMs for Autonomous Driving">Speed in the Blind Spot: An Interpretability Analysis of Dynamic Perception in VLMs for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation">RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces">CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces</span></li></ul>
   </div>
   <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
 </section>
