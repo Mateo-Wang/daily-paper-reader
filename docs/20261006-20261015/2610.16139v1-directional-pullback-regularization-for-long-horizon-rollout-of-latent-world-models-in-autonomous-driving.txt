@@ -1,0 +1,1212 @@
+Directional Pullback Regularization for Long-Horizon Rollout of Latent
+World Models in Autonomous Driving
+Shatadal Mishra, Ahmadreza Moradipari, Nejib Ammar
+Abstract— Learned world models for autonomous driving
+operate in unconstrained latent spaces, yet the physical sys-
+tems they represent are governed by strict non-holonomic
+constraints: ground vehicles cannot realize instantaneous pure
+lateral motion. We study long-horizon latent rollout modeling
+for autonomous driving and ask whether rollout quality can
+be improved by assigning a motion-aware geometry to latent
+transitions, rather than by redesigning the predictor architec-
+ture. Starting from an unconstrained latent rollout baseline, we
+introduce Directional Pullback Regularization (DPR), a training-
+time method that defines a kinematics-aware anisotropic Rie-
+mannian metric in decoded state space and pulls it back through
+the decoder Jacobian to the latent manifold. The resulting
+latent-space metric assigns higher cost to latent directions that
+decode to lateral vehicle motion, while preserving the original
+encoder–dynamics–decoder backbone. This yields a clean three-
+way comparison among an Unconstrained Latent Rollout model
+(ULR), an Euclidean Pullback Regularization ablation (EPR),
+and the full directional method (DPR). We evaluate all models
+on open-loop ego-motion rollout over a common 10-second
+test horizon, using training rollout lengths of 1, 3, 5, and 10
+steps. Across all four training regimes, DPR achieves lower 10-
+second final displacement error than both ULR and EPR. The
+strongest relative accuracy gain appears for models trained
+with 3-step rollout supervision, where DPR reduces the 10-
+second final displacement error by approximately 44% relative
+to ULR. The strongest overall control-relevant tradeoff is
+obtained for longer rollout-trained models, especially at 10
+steps, where DPR simultaneously improves displacement error,
+lateral-motion consistency, and forward-motion preservation
+relative to both ULR and EPR.
+I. INTRODUCTION
+Ground vehicles obey non-holonomic kinematic con-
+straints: instantaneous motion must align with the vehicle
+heading, so a car cannot move by pure sideways slip. Stan-
+dard latent world models impose no corresponding geometric
+constraint on decoded state increments, creating a mismatch
+in which latent transitions can decode to kinematically in-
+consistent motion. Over long roll-out horizons, this mismatch
+can accumulate even when the loss of one-step prediction is
+small.
+We ask whether this mismatch can be corrected without
+changing the predictor architecture. To that end, we introduce
+Directional Pullback Regularization (DPR), which defines a
+kinematics-aware anisotropic Riemannian metric in decoded
+state space and pulls it back through the decoder Jacobian
+to latent space. In the spirit of prior work on decoder-
+induced Riemannian geometry and pullback metrics for
+Toyota
+Motor
+North
+America
+R&D
+-
+InfoTech
+Labs,
+{shatadal.mishra, ahmadreza.moradipari,
+nejib.ammar}@toyota.com,
+latent-variable models [1]–[4], DPR penalizes latent direc-
+tions that decode to lateral vehicle motion while preserving
+the original encoder–dynamics–decoder backbone, thereby
+acting as a training-time geometric bias for long-horizon
+rollout consistency.
+Building on a mature lineage of latent world models
+[5]–[11], the dominant trend in driving world models has
+been toward richer architectures, larger generative stacks,
+and more specialized scene representations. Autonomous
+driving is a particularly compelling setting for world models
+because safe decision-making depends on anticipating the
+consequences of ego motion in complex, interactive, and
+partially observed scenes. Recent surveys emphasize that
+world models are becoming a central tool for simulation,
+forecasting, and planning in driving [13]. Representative
+examples include TrafficBots for data-driven traffic sim-
+ulation and motion prediction [14], GAIA-1 and GAIA-
+2 for controllable generative driving world models [16],
+[17], Copilot4D for tokenized discrete-diffusion world mod-
+eling [18], BEVWorld for multimodal bird’s-eye-view latent
+simulation [19], and Drive-OccWorld for action-conditioned
+four-dimensional occupancy forecasting and planning [20].
+Collectively, these works show that learned latent represen-
+tations can support increasingly realistic and controllable
+autonomous-driving world models. However, they rely on
+heavyweight video-generation pipelines, specialized scene
+representations, or auxiliary components that make it difficult
+to isolate a simple geometric mechanism for improving ego-
+motion rollout. As a result, they do not directly answer a
+narrower control-oriented question: can long-horizon latent
+rollout be improved by shaping the local geometry of latent
+transitions themselves?
+This question is especially important because long-horizon
+latent rollout remains fragile. A model may reduce one-step
+prediction loss while still drifting toward motion patterns that
+are difficult to reconcile with the local geometry of feasible
+vehicle motion [12]. In driving, this issue is particularly acute
+because local motion is anisotropic: forward translation,
+heading evolution, and speed change are natural directions of
+motion, whereas pure lateral displacement is kinematically
+forbidden by the non-holonomic constraint. Recent efforts
+have therefore begun to inject stronger physical or kinematic
+structure into learned world models. Examples include physi-
+cally informed driving world models, physically interpretable
+world models, and kinematics-aware latent world models
+for autonomous driving [21]–[23]. These works reinforce
+an important point: unconstrained latent prediction is often
+insufficient in safety-critical dynamical domains.
+arXiv:2610.16139v1  [cs.RO]  12 Oct 2026
+
+
+However, existing physically grounded approaches often
+introduce structure through auxiliary modules, architectural
+changes, additional supervision, or specialized representa-
+tions [21]–[24]. In contrast, this paper asks a more tar-
+geted question: can one improve a latent rollout model by
+regularizing the decoded tangent geometry induced by the
+latent transition itself, without redesigning the predictor?
+This question is attractive from a control perspective because
+the local rollout tangent directly determines how a latent
+model moves through decoded state space and how error
+accumulates during open-loop prediction, which is central to
+planning and model- based control. If that tangent is geomet-
+rically misaligned with feasible motion, long-horizon rollout
+can degrade even when one-step fitting appears acceptable.
+The proposed framework yields a clean three-way decom-
+position. The first model is Unconstrained Latent Rollout
+(ULR), which serves as the baseline trained only with predic-
+tion loss. The second is Euclidean Pullback Regularization
+(EPR), obtained by removing directional preference from
+the pullback metric; this ablation penalizes overall decoded
+tangent magnitude but does not distinguish between feasible
+and lateral motion. The third is the full Directional Pullback
+Regularization (DPR) model, which adds explicit directional
+cost to the lateral decoded component. This decomposition
+separates three distinct questions: whether pullback reg-
+ularization improves over unconstrained training, whether
+any gain can be explained by generic smoothing alone,
+and whether an explicitly directional geometric penalty is
+necessary.
+Our central hypothesis is that a pullback metric aligned
+with vehicle-motion geometry can improve long-horizon
+rollout quality more effectively than either unconstrained
+training or Euclidean pullback regularization alone. To test
+this hypothesis, we evaluate ULR, EPR, and DPR using
+long-horizon open-loop ego-motion rollout metrics that are
+directly relevant to control-oriented world modeling, in-
+cluding displacement error, lateral-motion error, curvature
+consistency, and preservation of forward motion.
+The contributions of this work are threefold:
+• To the best of our knowledge, this is the first work
+to study directional pullback regularization for long-
+horizon latent ego-motion rollout in autonomous driv-
+ing, using an explicit projector-based motion metric that
+penalizes decoded lateral motion while preserving the
+original encoder–dynamics–decoder backbone.
+• We provide a clean experimental decomposition among
+the unconstrained baseline (Unconstrained Latent Roll-
+out, ULR), the Euclidean pullback ablation (Euclidean
+Pullback Regularization, EPR), and the full directional
+method (Directional Pullback Regularization, DPR).
+• We
+characterize
+the
+interaction
+between
+pullback
+strength β and training rollout length U, showing
+that longer self-fed rollout training allows DPR to
+simultaneously improve displacement accuracy, lateral
+consistency, and preservation of forward motion.
+Taken together, these contributions provide a concise and
+control-relevant perspective on how latent world models can
+be shaped by the geometry of feasible motion rather than by
+prediction loss alone.
+II. PROBLEM SETUP AND METHOD
+Figure 1 summarizes the proposed training pipeline. The
+upper row shows the baseline latent rollout model, which
+predicts state increments in open loop from motion history,
+current state, and road curvature. The lower row shows
+the additional geometric regularization path introduced by
+the proposed method: the latent update induces a decoded
+tangent through the decoder Jacobian, this tangent is evalu-
+ated under a kinematics-aware decoded-space metric, and the
+resulting pullback metric loss is combined with the standard
+prediction loss during training.
+A. Problem Setup
+We study latent rollout modeling for ego-motion prediction
+in autonomous driving. To avoid overloading notation, we
+use θ for vehicle heading and ψ(·) for the decoder map. At
+each time step t, the physical state is
+xt = [px, py, θ, v]⊤∈R4,
+(1)
+where (px, py) denotes planar position, θ is heading, and v
+is speed. We also define the state increment
+∆xt = [∆px, ∆py, ∆θ, ∆v]⊤∈R4.
+(2)
+Given a history of the past K increments,
+Ht = {∆xt−K, . . . , ∆xt−1},
+(3)
+the current state xt, and the local road-curvature input κt,
+the goal is to predict the next increment ∆xt and to roll the
+model forward over multiple steps in open loop.
+We consider both one-step and multi-step rollout training.
+In the multi-step case, the model is trained by self-feeding
+its own predicted increments for U steps, where U
+∈
+{1, 3, 5, 10} in our experiments. All models are ultimately
+evaluated using long-horizon open-loop rollout over a fixed
+10-second horizon.
+B. Unconstrained Latent Rollout (ULR)
+Our baseline model is the Unconstrained Latent Rollout
+model (ULR). It consists of an encoder, a latent transition
+model, and a decoder. We first construct the normalized
+model input
+ot =
+
+norm(Ht), norm(xt), norm(κt)
+
+.
+(4)
+The latent state and latent increment are computed as
+zt = E(ot),
+∆zt = F([zt, κt]),
+(5)
+and the next latent state is updated additively:
+zt+1 = zt + ∆zt.
+(6)
+The decoder ψ(·) maps latent states back to the physical state
+space:
+ˆxt = ψ(zt),
+ˆxt+1 = ψ(zt+1).
+(7)
+
+
+Latent Dynamics
+Encoder
+Curvature
+History
+Current State
+Observation
+Decoder
+Predicted Increment
+Rollout Update
+Decoded Tangent
+Kinematics-aware Riemannian Metric
+Pullback Metric on Latent Space
+Metric Loss
+Prediction Loss
+Total Loss
+Gradients Shape 
+Latent Transitions
+Fig. 1.
+Method overview of the proposed directional pullback regularization (DPR) framework. The upper row shows the baseline open-loop rollout
+pipeline: the motion history, current state, and road curvature are assembled into the observation ot, encoded into the latent state zt, propagated by the latent
+dynamics model to produce ∆zt, decoded back to state space, converted to the predicted increment c
+∆xt, and integrated to obtain the next rollout state.
+The lower row shows the regularization path. The latent update and decoder Jacobian define the decoded tangent ut = Jψ(zt)∆zt/∆t, which is evaluated
+under the kinematics-aware Riemannian metric Mβ(ˆxt). Pulling this metric back through the decoder Jacobian yields the latent-space metric Gβ(zt), and
+the resulting metric loss is combined with the prediction loss to form the total training objective. The dashed arrow indicates the backpropagated training
+signal through which the pullback regularizer shapes latent transitions.
+We define the predicted state increment by decoder differ-
+encing:
+c
+∆xt = ˆxt+1 −ˆxt.
+(8)
+Open-loop rollout then proceeds by integrating this predicted
+increment from the current rollout state xroll
+t
+:
+xroll
+t+1 = I(xroll
+t
+, c
+∆xt).
+(9)
+where I(·) performs additive integration on position and
+speed, and wrapped integration on heading:
+I(xt, ∆xt) =
+
+
+px + ∆px
+py + ∆py
+wrap(θ + ∆θ)
+v + ∆v
+
+.
+(10)
+The rollout history is then updated by appending c
+∆xt and
+dropping the oldest increment.
+ULR is trained using only prediction loss. Over a rollout
+of length U, we define the increment loss
+L∆x = 1
+U
+U−1
+X
+u=0
+norm( c
+∆xt+u) −norm(∆xgt
+t+u)
+
+2
+2 ,
+(11)
+and the state loss
+Lstate = 1
+U
+U−1
+X
+u=0
+1
+wt + wt+1
+
+wt ℓstate(xroll
+t+u, xgt
+t+u)
++ wt+1 ℓstate(xroll
+t+u+1, xgt
+t+u+1)
+
+.
+(12)
+where ℓstate is a normalized state error with wrapped heading
+difference. The overall ULR training objective is
+Lpred = L∆x + αstate Lstate.
+(13)
+C. Latent Pullback Geometry from a Kinematics-Aware Rie-
+mannian Metric
+The unconstrained model above optimizes prediction accu-
+racy only. It does not explicitly distinguish between decoded
+motion that is compatible with local vehicle kinematics and
+decoded motion that contains excessive lateral drift. To inject
+such a structure without changing the backbone architecture,
+we define a motion-aware metric in decoded state space
+and pull it back to the latent manifold through the decoder
+Jacobian.
+For a decoded state
+ˆxt = [ˆpx, ˆpy, ˆθt, ˆvt]⊤,
+(14)
+we define a local feasible tangent subspace in decoded state
+space. Let
+g1(ˆxt) =
+
+
+cos ˆθt
+sin ˆθt
+0
+0
+
+,
+g2 =
+
+
+0
+0
+1
+0
+
+,
+g3 =
+
+
+0
+0
+0
+1
+
+. (15)
+The vector g1 corresponds to forward translation in the
+current heading direction, while g2 and g3 correspond to
+heading change and speed change, respectively. Let Pfeas(ˆxt)
+denote the orthogonal projector onto
+span{g1(ˆxt), g2, g3}.
+(16)
+We then define the anisotropic decoded-space metric
+Mβ(ˆxt) = I + β
+ I −Pfeas(ˆxt)
+
+,
+β > 0.
+(17)
+For β > 0, Mβ(ˆxt) is symmetric positive definite, and
+therefore defines a kinematics-aware anisotropic Riemannian
+metric in decoded state space. This metric assigns additional
+cost to motion outside the feasible subspace, which in the
+present setting corresponds to the decoded lateral direction.
+
+
+Let Jψ(zt) denote the Jacobian of the decoder. Pulling
+the decoded-space metric back through the decoder yields a
+latent-space metric
+Gβ(zt) = Jψ(zt)⊤Mβ(ˆxt) Jψ(zt).
+(18)
+Thus, the decoder pulls the decoded-space Riemannian met-
+ric back to latent space, endowing latent transitions with a
+state-dependent geometric cost. In this sense, DPR does not
+merely penalize decoded motion heuristically; it equips latent
+transitions with a pullback geometry induced by the vehicle-
+motion metric in decoded space.
+D. Euclidean Pullback Regularization and Directional Pull-
+back Regularization
+For a latent update ∆zt at latent state zt, the decoder
+induces the decoded tangent
+ut = Jψ(zt)∆zt
+∆t
+.
+(19)
+We regularize this tangent using the pullback metric. The
+per-step metric loss is
+ℓmetric(t) =
+Jψ(zt)∆zt
+∆t
+⊤
+Mβ(ˆxt)
+Jψ(zt)∆zt
+∆t
+
+,
+(20)
+or equivalently,
+ℓmetric(t) =
+∆zt
+∆t
+⊤
+Gβ(zt)
+∆zt
+∆t
+
+.
+(21)
+Averaging over the rollout gives
+Lmetric = 1
+U
+U−1
+X
+u=0
+ℓmetric(t + u).
+(22)
+The overall training objective is then
+L = Lpred + λreg Lmetric.
+(23)
+This formulation yields two regularized variants of the
+baseline:
+Euclidean Pullback Regularization (EPR): When β =
+0, the decoded-space metric reduces to
+M0(ˆxt) = I,
+(24)
+and therefore
+G0(zt) = Jψ(zt)⊤Jψ(zt).
+(25)
+In this case, the regularizer penalizes the overall decoded
+tangent magnitude without imposing any directional prefer-
+ence. EPR is therefore the Euclidean pullback ablation of the
+method.
+Directional Pullback Regularization (DPR): When β >
+0, the metric assigns additional cost to the component of
+decoded motion orthogonal to the feasible subspace. This
+is the full proposed method. In DPR, the latent manifold
+is endowed with an anisotropic pullback geometry that
+penalizes latent transitions according to the local geometry
+of feasible vehicle motion.
+The resulting three-way decomposition is therefore:
+• ULR: unconstrained latent rollout, with prediction loss
+only;
+• EPR: Euclidean pullback regularization, corresponding
+to β = 0;
+• DPR: directional pullback regularization, corresponding
+to β > 0.
+This decomposition is important because it allows us to
+distinguish gains due to generic smoothing from gains
+specifically for imposing a directional geometric penalty on
+decoded lateral motion.
+E. Interpretation
+The proposed method is a lightweight geometric bias
+on latent rollout rather than a hard kinematic model. The
+encoder, latent dynamics, decoder, and rollout mechanism
+remain unchanged. What changes is the geometry used
+to score latent transitions during training. ULR learns by
+prediction loss alone. EPR penalizes the overall size of the
+decoded tangent. DPR goes further by shaping the latent
+manifold with a pullback metric derived from a motion-aware
+decoded-space metric, thereby making latent directions that
+decode to lateral motion more expensive. In this sense, DPR
+encourages motion-consistent rollouts by acting directly on
+the geometry of latent transitions.
+F. Local Lateral-Drift Bound
+This result shows that up to the linearization error of the
+decoder, reducing the metric loss controls the decoded lateral
+component of the rollout increment. This local bound is
+intended to clarify the mechanism of DPR rather than to
+establish global rollout accuracy or closed-loop stability.
+For a rollout segment of length H, define
+¯L(H)
+metric := 1
+H
+H
+X
+t=1
+ℓmetric(t).
+(26)
+Proposition 1: Assume Jψ
+is LJ-Lipschitz and that
+∥∆zt∥≤ρ for t = 1, . . . , H. Let
+ut := Jψ(zt)∆zt
+∆t
+,
+˜ut := ψ(zt + ∆zt) −ψ(zt)
+∆t
+, (27)
+and
+define
+the
+local
+lateral
+direction
+as
+nt
+=
+
+−sin ˆθt
+cos ˆθt
+0
+0
+⊤, ˆxt = ψ(zt). Then, we have
+1
+H
+H
+X
+t=1
+(n⊤
+t ˜ut)2 ≤2
+β
+¯L(H)
+metric + L2
+Jρ4
+2∆t2 .
+(28)
+Consequently,
+H
+X
+t=1
+n⊤
+t
+ ψ(zt + ∆zt) −ψ(zt)
+ ≤H∆t
+s
+2
+β
+¯L(H)
+metric + L2
+Jρ4
+2∆t2 .
+(29)
+
+
+Average displacement error (ADE) over evaluation horizon
+Evaluation horizon [s]
+1
+3
+5
+10
+ADE [m]
+0
+10
+20
+30
+Training rollout length U = 1, selected -* = 100
+Evaluation horizon [s]
+1
+3
+5
+10
+ADE [m]
+0
+10
+20
+30
+40Training rollout length U = 3, selected -* = 50
+Evaluation horizon [s]
+1
+3
+5
+10
+ADE [m]
+0
+2
+4
+6
+8
+10
+Training rollout length U = 5, selected -* = 3
+Evaluation horizon [s]
+1
+3
+5
+10
+ADE [m]
+0
+2
+4
+6
+8Training rollout length U = 10, selected -* = 5
+ULR
+EPR
+DPR
+Fig. 2. Average displacement error over the evaluation horizon for the three
+compared models: the unconstrained baseline (ULR), the Euclidean pullback
+ablation (EPR), and the proposed directional pullback model (DPR). Each
+subplot corresponds to a different training rollout length U ∈{1, 3, 5, 10},
+and DPR is shown with the validation-selected directional weight β∗for
+that training regime. Across all training rollout lengths, DPR reduces long-
+horizon displacement error relative to both ULR and EPR, with the strongest
+gains appearing for longer self-fed rollout training.
+Proof: Since I −Pfeas(ˆxt) = ntn⊤
+t , the decoded-space
+metric satisfies Mβ(ˆxt) = I + βntn⊤
+t , and hence
+ℓmetric(t) = u⊤
+t Mβ(ˆxt)ut = ∥ut∥2+β(n⊤
+t ut)2 ≥β(n⊤
+t ut)2.
+(30)
+Now write the true decoded increment velocity as
+˜ut = ut+rt,
+rt := ψ(zt + ∆zt) −ψ(zt) −Jψ(zt)∆zt
+∆t
+.
+(31)
+Because Jψ is LJ-Lipschitz and ∥∆zt∥≤ρ, the first-order
+remainder obeys
+∥rt∥≤LJρ2
+2∆t .
+(32)
+Therefore
+(n⊤
+t ˜ut)2 ≤2(n⊤
+t ut)2+2∥rt∥2 ≤2
+β ℓmetric(t)+ L2
+Jρ4
+2∆t2 . (33)
+Averaging over t gives the first claim. Summing the stepwise
+lateral displacements and applying Cauchy–Schwarz yields
+the second bound.
+III. EXPERIMENTS
+A. Experimental Setup
+We evaluate the proposed pullback-regularized model on
+long-horizon open-loop ego-motion rollout prediction. The
+physical state is xt = [px, py, θ, v]⊤, where (px, py) is
+planar position, θ is heading, and v is speed. The model
+input consists of the previous K = 4 state increments, the
+current state, and the local road curvature. All models use
+the same encoder–dynamics–decoder backbone and the same
+latent dimension dz = 64. The backbone uses a lightweight
+feedforward architecture consisting of a two-layer MLP
+encoder (K·4+4+1 →256 →dz), a two-layer MLP latent
+dynamics model (dz+1 →256 →dz), and a two-layer MLP
+decoder (dz →128 →4), with dz = 64. The only difference
+between models is the regularization applied during training.
+We intentionally use a lightweight shared backbone to isolate
+the effect of the proposed geometric regularizer; evaluating
+DPR with stronger sequence architectures is an important
+direction for future work.
+All experiments are conducted on ego-motion trajectories
+derived from the NVIDIA open-source driving dataset [25].
+We use the released egomotion streams and construct trajec-
+tory windows from the physical state and its corresponding
+increment
+∆xt = [∆px, ∆py, ∆θ, ∆v]⊤.
+The raw egomotion timestamps are irregular, so all sequences
+are resampled to a uniform rate of 10 Hz before preprocess-
+ing. We then extract fixed-length windows of 20 seconds,
+yielding 200 steps per trajectory window, and compute the
+local road curvature at each step as an additional model input.
+We use the standard training /validation / test split provided
+with the data set, consisting of 126,839 training clips, 65,971
+validation clips, and 35,175 test clips. All quantitative results
+reported in this paper are computed on test windows that are
+disjoint from the training and validation data. We compare
+three model variants:
+1) ULR (Unconstrained Latent Rollout): the baseline
+model trained only with prediction loss;
+2) EPR
+(Euclidean
+Pullback
+Regularization):
+the
+pullback-regularized
+ablation
+obtained
+by
+setting
+β = 0, which penalizes the overall magnitude of
+the decoded tangent without introducing directional
+preference;
+3) DPR (Directional Pullback Regularization): the full
+proposed method, in which β > 0 assigns additional
+cost to the lateral component of the decoded tangent.
+We train separate models with rollout training lengths U ∈
+{1, 3, 5, 10}. We chose U ∈{1, 3, 5, 10} to span short,
+intermediate, and long self-fed rollout regimes while keeping
+the training sweep tractable. Here, U denotes the number
+of self-fed training steps used during optimization, not the
+evaluation horizon. At test time, all models are rolled forward
+in open loop for 100 steps, corresponding to a 10-second
+horizon with ∆t = 0.1 s. All test results are reported on the
+same set of 2000 held-out windows.
+For each training rollout length, we report one selected
+value of the directional weight β:
+β⋆
+1 = 100,
+β⋆
+3 = 50,
+β⋆
+5 = 3,
+β⋆
+10 = 5.
+Each selected DPR model is compared against both ULR
+and the EPR ablation.
+Our primary evaluation focuses on the quality of open-loop
+state rollout. To assess both trajectory accuracy and motion
+consistency, we report the following metrics:
+• average displacement error, defined as the mean Eu-
+clidean position error accumulated over the rollout
+horizon;
+
+
+Key 10-second results across training rollout lengths
+Selected directional weights: U=1 ! -*=100, U=3 ! -*=50, U=5 ! -*=3, U=10 ! -*=5
+Long-horizon rollout accuracy
+Training rollout length
+U=1
+U=3
+U=5
+U=10
+10-second FDE [m]
+0
+50
+100
+Ground-truth-frame lateral motion
+Training rollout length
+U=1
+U=3
+U=5
+U=10
+10-s lateral error
+[m/s]
+0
+10
+20
+30
+40
+Preservation of forward motion
+Training rollout length
+U=1
+U=3
+U=5
+U=10
+Fraction of rollout
+steps with vfwd > 0:5 m/s
+0
+0.5
+1
+ULR
+EPR
+DPR
+Fig. 3.
+Key 10-second results across training rollout lengths for the unconstrained baseline (ULR), the Euclidean pullback ablation (EPR), and the proposed
+directional pullback model (DPR). The panels show final displacement error, ground-truth-frame lateral error, and the fraction of rollout steps with forward
+velocity above 0.5 m/s. DPR is the only variant that consistently improves 10-second final displacement error across all training rollout lengths, and in
+the longer-rollout regimes it also maintains or improves the forward-valid fraction while reducing lateral-motion error.
+• final displacement error, defined as the Euclidean posi-
+tion error at the final rollout step;
+• the 95th percentile of the absolute lateral-velocity error,
+measured in the ground-truth heading frame;
+• the 95th percentile of the curvature-consistency error,
+defined as | ˙θ −vfwdκ|;
+• the median forward velocity over the rollout;
+• the fraction of rollout steps for which the forward ve-
+locity exceeds the minimum forward-motion threshold
+vmin = 0.5 m/s.
+Lower values are better for displacement error, lateral-
+motion error, and curvature-consistency error. Higher values
+are better for median forward velocity and for the fraction
+of rollout steps with positive forward motion.
+B. Main Quantitative Results
+Table I summarizes the 10-second open-loop rollout re-
+sults. Among the regimes tested, the largest relative reduction
+in 10-second final displacement error appears for the 3-step
+rollout-trained model. At the same time, the strongest overall
+control-relevant tradeoff is obtained for longer rollout-trained
+models, especially at U = 10, where DPR combines lower
+displacement error with improved lateral consistency and
+forward-motion preservation. The main conclusion is that
+DPR improves over both baselines across all four training
+rollout lengths. In particular, for every training rollout length
+U, the selected DPR model achieves the lowest 10-second
+final displacement error among the three compared models.
+Figure 2 shows the full average displacement error tra-
+jectories over the evaluation horizon for ULR, EPR, and
+DPR across all four training rollout lengths. The one-step
+training regime (U = 1) already shows a large gain in long-
+horizon rollout error. Relative to ULR, DPR reduces the 10-
+second mean displacement error from 31.366 m to 19.254
+m and the final displacement error from 80.646 m to 47.172
+m. It also reduces the 95th percentile ground-truth-frame
+lateral error from 18.370 m/s to 9.395 m/s. However, this
+gain comes with a clear forward-motion tradeoff: the median
+forward velocity drops from 16.345 m/s in ULR to 0.946
+m/s in DPR. Thus, for one-step training, directional pullback
+regularization substantially improves geometric consistency
+and final error, but also makes the long-horizon rollout more
+conservative.
+The three-step training regime (U = 3) provides a stronger
+and more balanced result. DPR with β = 50 reduces the 10-
+second mean displacement error from 33.913 m to 17.057
+m and the final displacement error from 84.163 m to 47.160
+m. It also reduces the 95th percentile lateral error from
+32.377 m/s to 13.748 m/s and the curvature-consistency error
+from 1.868 rad/s to 0.902 rad/s. Unlike the one-step model,
+the three-step DPR model also improves median forward
+velocity relative to ULR, from 1.712 m/s to 3.115 m/s,
+while increasing the fraction of rollout steps with meaningful
+forward motion from 0.530 to 0.599. The five-step and ten-
+step training regimes yield the strongest overall tradeoffs.
+For U = 5, DPR with β = 3 improves the 10-second
+mean displacement error from 7.022 m to 6.894 m and the
+final displacement error from 22.470 m to 19.399 m. More
+importantly, it dramatically reduces the 95th percentile lateral
+error from 12.096 m/s to 5.593 m/s while also improving
+forward behavior, increasing the median forward velocity
+from 6.554 m/s to 8.185 m/s and the forward-valid fraction
+from 0.666 to 0.980. For U = 10, DPR with β = 5 gives
+the strongest overall result among all models tested: the 10-
+second mean displacement error decreases from 6.839 m to
+5.962 m, the final displacement error decreases from 22.980
+m to 17.322 m, the lateral error drops from 30.114 m/s to
+4.971 m/s, and the median forward velocity increases from
+7.268 m/s to 9.189 m/s. Figure 3 summarizes the key 10-
+second trends across training rollout lengths, highlighting the
+tradeoff among final displacement error, lateral consistency,
+and preservation of forward motion.
+Overall, these results show that the pullback metric is
+effective not only in reducing displacement error, but also
+in shaping the rollout toward lower lateral drift and better
+kinematic consistency. The most favorable balance between
+geometric correction and preservation of forward motion is
+obtained for the longer self-fed training rollouts U = 5 and
+
+
+U = 10.
+C. Ablation: Euclidean Versus Directional Pullback Regu-
+larization
+A central question is whether the observed gain is due
+merely to adding any regularization term, or whether the
+directional lateral penalty is the crucial ingredient. The
+comparison between EPR and DPR answers this question
+directly.
+EPR already changes the behavior of the latent rollout
+model because it penalizes the overall magnitude of the
+decoded tangent. In some cases this is beneficial. For ex-
+ample, when the training rollout length is 10, EPR reduces
+the final displacement error from 22.980 m in ULR to
+18.063 m. However, Euclidean pullback regularization alone
+is not sufficient. It does not consistently produce the best
+long-horizon rollout and can even hurt performance. For
+training rollout length 5, EPR increases the 10-second final
+displacement error from 22.470 m to 33.475 m, even though
+DPR reduces it to 19.399 m.
+The directional term consistently improves on the Eu-
+clidean ablation. For training rollout length 1, the final
+displacement error decreases from 50.927 m with EPR to
+47.172 m with DPR, and the 95th percentile lateral error
+decreases from 13.689 m/s to 9.395 m/s. For training rollout
+length 3, the final displacement error decreases from 65.300
+m to 47.160 m, and the lateral error decreases from 29.309
+m/s to 13.748 m/s. Notably, for U = 3, EPR yields a negative
+median forward velocity (−0.623 m/s), indicating that back-
+ward motion occurs in more than half of the evaluated rollout
+steps; this failure mode reinforces that isotropic shrinkage
+alone can distort motion realism and that directional structure
+is necessary. For training rollout length 5, DPR reverses the
+failure mode of EPR and improves both displacement error
+and forward behavior. For training rollout length 10, DPR
+again improves over EPR, reducing final displacement error
+from 18.063 m to 17.322 m and increasing median forward
+velocity from 5.546 m/s to 9.189 m/s.
+This ablation is important because it shows that the gains
+do not come from generic damping alone. The extra penalty
+on the lateral decoded tangent is the component that makes
+the regularizer effective. In other words, the model benefits
+not just from shrinking decoded motion, but from shrinking
+it in a geometrically meaningful direction.
+D. Effect of Training Rollout Length
+The duration of the training rollout changes how the
+pullback regularizer interacts with long-horizon prediction.
+One-step training can already produce large reductions in
+long-horizon displacement error, but the selected DPR model
+becomes overly conservative in forward motion. As the
+training rollout length increases, the selected pullback model
+becomes better at balancing displacement accuracy, lateral
+consistency, and preservation of forward motion.
+This trend is especially clear when comparing the selected
+DPR models across U = 1, 3, 5, 10. The one-step model
+achieves a large reduction in final displacement error but
+nearly stalls by the end of the rollout. The three-step model
+offers a better balance, reducing both long-horizon error and
+lateral drift while preserving more forward motion. The five-
+step and ten-step models are stronger still: they improve
+long-horizon position error, reduce lateral drift substantially,
+and maintain high fractions of forward-valid rollout steps.
+Among the models tested, the ten-step DPR model provides
+the strongest overall 10-second result.
+These observations suggest that pullback regularization is
+most effective when the model is trained under sufficiently
+long self-fed rollout, so that the geometric penalty acts on
+the same type of error accumulation that appears at test time.
+Short rollout training can still benefit from the regularizer,
+but is more prone to the tradeoff between reduced lateral
+drift and reduced forward aggressiveness.
+E. Summary of Experimental Findings
+The experiments lead to three main findings. First, DPR
+improves long-horizon rollout over the unconstrained latent
+baseline ULR. Second, the gain is not explained by Euclidean
+pullback regularization alone; the directional lateral penalty
+is necessary for the strongest results. Third, the quality of
+the final tradeoff depends on the training rollout length:
+short-rollout training can over-regularize motion, whereas
+longer self-fed rollout training allows the proposed method
+to improve displacement accuracy, geometric consistency,
+and preservation of forward motion simultaneously. Among
+the regimes tested, U = 3 shows the strongest relative
+improvement in 10-second final displacement error over
+ULR, while U = 10 provides the strongest overall trade-
+off among displacement accuracy, lateral consistency, and
+forward-motion preservation.
+IV. LIMITATIONS
+Several aspects of this study remain open. First, the di-
+rectional weight β is selected by validation and its preferred
+value varies with the training rollout length, indicating that
+the strength of the geometric bias interacts with the amount
+of self-fed rollout. Second, stronger lateral-motion control
+can trade off against preservation of forward motion, partic-
+ularly for shorter rollout-trained models. Third, the pullback
+metric acts locally on decoded tangents and does not by
+itself guarantee global long-horizon accuracy or closed-loop
+stability. Finally, the experiments are limited to ego-motion
+rollout; multi-agent interaction, action-conditioned planning,
+and closed-loop evaluation are left for future work.
+V. CONCLUSION AND FUTURE WORK
+This paper introduced Directional Pullback Regulariza-
+tion (DPR) for long-horizon latent ego-motion rollout in
+autonomous driving. By defining an anisotropic metric in
+decoded state space and pulling it back through the decoder
+to the latent space, the method assigns a motion-aware ge-
+ometry to latent transitions without changing the underlying
+encoder–dynamics–decoder backbone. The resulting exper-
+imental comparison among Unconstrained Latent Rollout
+(ULR), Euclidean Pullback Regularization (EPR), and DPR
+
+
+TABLE I
+TEN-SECOND OPEN-LOOP ROLLOUT RESULTS FOR ULR (UNCONSTRAINED LATENT ROLLOUT), EPR (EUCLIDEAN PULLBACK REGULARIZATION),
+AND DPR (DIRECTIONAL PULLBACK REGULARIZATION).
+Train rollout
+Model
+β
+10 s mean
+displacement
+error (m)
+10 s final
+displacement
+error (m)
+95th lateral
+error
+(m/s)
+95th curvature
+error
+(rad/s)
+Median
+forward
+velocity (m/s)
+Forward-valid
+fraction
+1
+ULR
+–
+31.366
+80.646
+18.370
+0.683
+16.345
+0.953
+1
+EPR
+0
+23.165
+50.927
+13.689
+0.687
+16.983
+0.692
+1
+DPR
+100
+19.254
+47.172
+9.395
+0.773
+0.946
+0.531
+3
+ULR
+–
+33.913
+84.163
+32.377
+1.868
+1.712
+0.530
+3
+EPR
+0
+24.067
+65.300
+29.309
+1.716
+-0.623
+0.483
+3
+DPR
+50
+17.057
+47.160
+13.748
+0.902
+3.115
+0.599
+5
+ULR
+–
+7.022
+22.470
+12.096
+0.257
+6.554
+0.666
+5
+EPR
+0
+10.344
+33.475
+12.646
+0.248
+6.951
+0.856
+5
+DPR
+3
+6.894
+19.399
+5.593
+0.127
+8.185
+0.980
+10
+ULR
+–
+6.839
+22.980
+30.114
+0.325
+7.268
+0.722
+10
+EPR
+0
+6.378
+18.063
+6.882
+0.087
+5.546
+0.942
+10
+DPR
+5
+5.962
+17.322
+4.971
+0.060
+9.189
+0.984
+shows that the directional pullback term improves long-
+horizon rollout beyond both the unconstrained baseline and
+the Euclidean pullback ablation. In particular, the results
+show that the gains are not explained by generic smoothing
+alone but by explicitly penalizing latent transitions that
+decode to lateral vehicle motion. Empirically, the largest rel-
+ative reduction in 10-second final displacement error appears
+in the U = 3 regime, while the U = 10 regime provides the
+strongest overall control-relevant balance of error reduction,
+lateral-motion suppression, and forward-motion preservation.
+Several directions remain for future work. A natural next
+step is to develop more principled strategies for selecting
+or adapting the directional weight β. It is also important to
+extend the present formulation beyond ego-motion rollout to
+richer multi-agent and action-conditioned settings. Finally,
+studying how the proposed latent-space geometry affects
+downstream planning and closed-loop control remains an im-
+portant direction for connecting improved rollout consistency
+to decision-making performance.
+REFERENCES
+[1] G. Arvanitidis, L. K. Hansen, and S. Hauberg, “Latent Space Odd-
+ity: on the Curvature of Deep Generative Models,” in International
+Conference on Learning Representations (ICLR), 2018.
+[2] H. Shao, A. Kumar, and P. T. Fletcher, “The Riemannian Geome-
+try of Deep Generative Models,” in Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition Workshops
+(CVPRW), pp. 315–323, 2018.
+[3] G. Arvanitidis, S. Hauberg, and B. Sch¨olkopf, “Geometrically En-
+riched Latent Spaces,” in Proceedings of the 24th International Con-
+ference on Artificial Intelligence and Statistics (AISTATS), vol. 130 of
+Proceedings of Machine Learning Research, pp. 631–639, 2021.
+[4] A. Tosi, S. Hauberg, A. Vellido, and N. D. Lawrence, “Metrics
+for Probabilistic Geometries,” in Uncertainty in Artificial Intelligence
+(UAI), vol. 30, pp. 800–808, AUAI Press, 2014.
+[5] D.
+Ha
+and
+J.
+Schmidhuber,
+“World
+Models,”
+arXiv
+preprint
+arXiv:1803.10122, 2018.
+[6] S. Mishra, A. Moradipari, and N. Ammar, “Network-efficient world
+model token streaming,” arXiv preprint arXiv:2605.09886, 2026.
+[7] D. Hafner, T. Lillicrap, I. Fischer, R. Villegas, D. Ha, H. Lee, and
+J. Davidson, “Learning Latent Dynamics for Planning from Pixels,”
+arXiv preprint arXiv:1811.04551, 2018.
+[8] D. Hafner, T. Lillicrap, J. Ba, and M. Norouzi, “Dream to Con-
+trol: Learning Behaviors by Latent Imagination,” arXiv preprint
+arXiv:1912.01603, 2019.
+[9] D. Ha and J. Schmidhuber, “Recurrent World Models Facilitate Policy
+Evolution,” arXiv preprint arXiv:1809.01999, 2018.
+[10] D. Hafner, J. Pasukonis, J. Ba, and T. Lillicrap, “Mastering Diverse
+Domains through World Models,” arXiv preprint arXiv:2301.04104,
+2023.
+[11] N. Hansen, H. Su, and X. Wang, “TD-MPC2: Scalable, Robust World
+Models for Continuous Control,” arXiv preprint arXiv:2310.16828,
+2023.
+[12] S. Fazliani, Z. Frangella, and M. Udell, “Enhancing physics-
+informed neural networks through feature engineering,” arXiv preprint
+arXiv:2502.07209, 2025.
+[13] T. Feng, W. Wang, and Y. Yang, “A Survey of World Models for
+Autonomous Driving,” arXiv preprint arXiv:2501.11260, 2025.
+[14] Z. Zhang, A. Liniger, D. Dai, F. Yu, and L. Van Gool, “TrafficBots:
+Towards World Models for Autonomous Driving Simulation and
+Motion Prediction,” arXiv preprint arXiv:2303.04116, 2023.
+[15] P. Rathore, Z. Frangella, S. Garg, S. Fazliani, M. Derezi´nski, and
+M. Udell, “Turbocharging gaussian process inference with approxi-
+mate sketch-and-project,” arXiv preprint arXiv:2505.13723, 2025.
+[16] A. Hu, L. Russell, H. Yeo, Z. Murez, G. Fedoseev, A. Kendall, J.
+Shotton, and G. Corrado, “GAIA-1: A Generative World Model for
+Autonomous Driving,” arXiv preprint arXiv:2309.17080, 2023.
+[17] L. Russell, A. Hu, L. Bertoni, G. Fedoseev, J. Shotton, E. Arani, and
+G. Corrado, “GAIA-2: A Controllable Multi-View Generative World
+Model for Autonomous Driving,” arXiv preprint arXiv:2503.20523,
+2025.
+[18] L. Zhang, Y. Xiong, Z. Yang, S. Casas, R. Hu, and R. Urtasun,
+“Copilot4D: Learning Unsupervised World Models for Autonomous
+Driving via Discrete Diffusion,” arXiv preprint arXiv:2311.01017,
+2023.
+[19] Y. Zhang, S. Gong, K. Xiong, X. Ye, X. Tan, F. Wang, J. Huang,
+H. Wu, and H. Wang, “BEVWorld: A Multimodal World Model for
+Autonomous Driving via Unified BEV Latent Space,” arXiv preprint
+arXiv:2407.05679, 2024.
+[20] Y. Yang, J. Mei, Y. Ma, S. Du, W. Chen, Y. Qian, Y. Feng, and Y.
+Liu, “Driving in the Occupancy World: Vision-Centric 4D Occupancy
+Forecasting and Planning via World Models for Autonomous Driving,”
+arXiv preprint arXiv:2408.14197, 2024.
+[21] Z. Yang, X. Guo, C. Ding, C. Wang, and W. Wu, “Physical Informed
+Driving World Model,” arXiv preprint arXiv:2412.08410, 2024.
+[22] Z. Mao and I. Ruchkin, “Towards Physically Interpretable World
+Models: Meaningful Weakly Supervised Representations for Visual
+Trajectory Prediction,” arXiv preprint arXiv:2412.12870, 2024.
+[23] J. Li, L. Cao, Q. Liu, and X. Xiong, “Kinematics-Aware Latent
+World Models for Data-Efficient Autonomous Driving,” arXiv preprint
+arXiv:2603.07264, 2026.
+[24] S. Fazliani, K. Chawla, J. Guo, Y. Shen, M. Ihme, and M. Udell,
+“ShapeBench: A scalable benchmark and diagnostic suite for standard-
+ized evaluation in aerodynamic shape optimization,” arXiv preprint
+arXiv:2605.20763, 2026.
+[25] NVIDIA,
+“NVIDIA
+PhysicalAI-Autonomous-Vehicles
+Dataset,”
+Hugging
+Face
+Dataset
+Repository,
+2025.
+[Online].
+Available:
+https://huggingface.co/datasets/nvidia/
+PhysicalAI-Autonomous-Vehicles
+[Accessed:
+Mar.
+31,
+2026].

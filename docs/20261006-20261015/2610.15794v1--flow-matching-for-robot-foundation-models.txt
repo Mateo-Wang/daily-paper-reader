@@ -1,0 +1,2154 @@
+∆Flow Matching for Robot Foundation Models
+Kuangji Zuo1,∗, Tuo An1,∗, Xinying Guo1, Gen Li1, Mengfei Zhao1, Jiaqi Bai1, Bofan Lyu1, Zhuoyuan Yu1,
+Jinghan Yang1, Jiayi Li1, Jindou Jia1,†,‡, Jianfei Yang1,†
+1MARS Lab, Nanyang Technological University
+∗Equal contribution, ‡Project Lead, †Corresponding authors
+Flow matching has emerged as a common generative recipe for current robot foundation models.
+Vision-language-action models (VLAs) generate action chunks, while world-action models (WAMs)
+additionally generate future visual states. Yet both start generation from a fixed Gaussian prior,
+despite the strong temporal continuity between past and future states and actions. This process is
+costly to train and requires iterative sampling at deployment, especially for WAMs with an additional
+visual branch. Exploiting this temporal continuity, we introduce ∆-flow, which constructs the source
+from recent history with mild noise rather than from a fixed Gaussian prior. This moves the source
+closer to the target, reducing the transport to a small residual ∆that can be learned efficiently and
+enables single-step inference. We integrate ∆-flow into the VLA policy π0.5 and the WAM policy
+including ImageWAM and Fast-WAM. On LIBERO, ImageWAM reaches 90% success in one epoch
+rather than six, and Fast-WAM reaches 95% in two epochs rather than eight. With LoRA fine-tuning,
+π0.5 exceeds its baseline’s five-epoch performance after one epoch. Single-step inference gives 1.54×,
+2.49×, and 4.45× speedups on π0.5, ImageWAM, and Fast-WAM, respectively. It also preserves
+action smoothness, achieving a 4.5× reduction in action jerk compared with one-step Gaussian
+sampling. ∆-flow reaches state-of-the-art generalization performance on LIBERO-Plus. Remarkably,
+action-history sources can also be applied to pretrained WAM policies without retraining. Replacing
+the Gaussian action source at inference largely preserves task success with a single sampling step and
+can slightly improve it. We further study how action representation and the use of visual information
+in action learning affect history-to-future prediction in ∆-flow. Together, these results show that
+∆-flow is simple yet effective, substantially improving the efficiency and generalization of current robot
+foundation models.
+Correspondence: jindou.jia@ntu.edu.sg, jianfei.yang@ntu.edu.sg.
+Project page: https://zuo-kuangji.github.io/delta-flow/
+1
+Introduction
+Flow matching has become a standard recipe for continuous action generation in robot policies (Lipman et al.,
+2023). In vision-language-action models (VLAs), an action chunk is produced by transporting a sample from
+a Gaussian prior to the action distribution, conditioned on the current observation (Black et al., 2025b,a).
+More recently, world-action models (WAMs) extend this generative formulation beyond actions to future
+visual representations, jointly modeling how the scene evolves and how the robot acts (Ye et al., 2026; Yuan
+et al., 2026; Zhang et al., 2026a; Hou et al., 2026). In both families, generation begins from Gaussian noise.
+However, this Gaussian-source formulation is expensive, both to train and to deploy (Hou et al., 2026; Dong
+et al., 2026). Even for action-only VLAs, flow-based action generation converges slowly during training (Black
+et al., 2025a), and at deployment it requires a large number of function evaluations (NFE) (i.e., inference
+steps), which directly increases control latency. WAMs inherit both costs and amplify them. During training,
+WAMs learn transports from pure Gaussian noise to both future actions and high-dimensional future visual
+states. At deployment, WAMs that jointly sample visual states and actions require computation for both
+modalities at each sampling step. Together, these training and inference costs pose challenges for deploying
+flow-based policies on real robots.
+Most existing work targets the latter, reducing inference cost along three lines. Efficient samplers shorten the
+sampling trajectory or distill iterative generation into a single prediction (Lu et al., 2022; Song et al., 2023;
+1
+arXiv:2610.15794v1  [cs.RO]  11 Oct 2026
+
+
+
+
+	
+
+
+
+	
+
+
+
+! 
+
+
+	
+
+
+
+ 
+" 
+	! 
+	
+
+
+ 
+
+#
+
+! 
+
+"
+ 
+
+
+
+
+#
+
+	
+
+
+
+#
+
+
+
+	
+
+#
+
+
+
+ 
+%!$
+
+Smoother actions
+48% --67% 
+matching learn the change from history, not fixed Gaussian noise
+Vision
+Action
+Conventional flow matching
+NFE ≥ 10 steps
+Gaussian
+Future frames
+Future actions
+matching
+History + noise
+History + noise
+Lower latency
+1.54–4.45X
+Faster convergence
+3–6 X
+Gaussian
+NFE = 1 step
+Future frames
+Future actions
+Vision
+Action
+One recipe, three flow policies
+π0.5
+VLA
+Vision Cond.
+Action Δ
+ImageWAM
+WAM · image
+Vision Δ
+Action Δ
+Fast-WAM
+WAM · video
+Vision Δ
+Action Δ
+history + noise  →  1 step, on every policy
+apply
+Fewer training epochs
+4–6×
+Lower latency
+1.54–4.45×
+Smoother actions
+48%–67%
+2
+6
+10
+Training epochs
+0
+50
+100
+SR (%)
+90%
+ImageWAM
+6× fewer epochs
+2
+6
+10
+Training epochs
+95%
+Fast-WAM
+Gaussian
+Δ-flow (ours)
+4× fewer epochs
+1
+3
+5
+Fine-tuning epochs
+91.30%
+π0.5
+5× fewer epochs
+Figure 1 ∆-flow matching learns past-to-future changes for efficient robot foundation models. Unlike Gaussian-source
+flow matching, which reconstructs future visual states and actions from noise through iterative sampling, ∆-flow
+constructs each source from its corresponding recent history with mild Gaussian perturbation and learns only the
+residual change ∆. This shorter transport substantially improves training efficiency, enables fast single-step inference,
+strengthens generalization under distribution shift, and preserves smooth action generation across chunk boundaries.
+Prasad et al., 2024; Zhang et al., 2025), yet they are developed primarily for action generation, and whether
+they remain effective on the visual branch of WAMs is still an open question. Some warm-start methods
+instead use separately trained predictors to provide informative initializations, followed by a few sampling
+steps for refinement (Li et al., 2026a; Scholz and Turner, 2025). Other models like Fast-WAM (Yuan et al.,
+2026) and ImageWAM (Zhang et al., 2026a) retain future prediction as a training objective but skip it at
+inference, so that its knowledge reaches the action branch only implicitly through the shared representation.
+These models thus trade explicit future conditioning for inference speed. Our experiments show that removing
+explicit future prediction at inference degrades performance under distribution shift. More fundamentally,
+these methods shorten, approximate, or partially bypass the generative transport to reduce inference cost,
+rather than reducing the cost of learning the transport itself.
+Flow matching, in essence, learns a transport between two distributions (Lipman et al., 2023; Jia et al., 2026a;
+Bai et al., 2026). Since both actions and visual signals are naturally continuous, and their executed histories
+are directly available from feedback measurements, why not take these histories as the source of the flow? Using
+history as the source can simplify the mapping learned during training and shorten the transport path at
+inference. Several works in image and video generation indeed construct their sources from existing images or
+adjacent frames and learn transports to target images or future frames (Liu et al., 2023b; Davtyan et al., 2023;
+Liu and Ritschel, 2025). In robot control, action-to-action (A2A) flow matching uses histories of executed
+actions as the source distribution and learns a transport to future action chunks (Jia et al., 2026b). Each
+line, however, treats a single modality in isolation. Under the WAM paradigm, and especially at the scale of
+growing video and robot data, jointly training these two mechanisms, and identifying the design choices that
+make them work together, remains an open question.
+In this work, we propose ∆-flow matching for robot foundation models, termed ∆-flow, where the symbol ∆
+denotes the difference between the history and the future of a visual state or action. Rather than generating the
+future from fixed Gaussian noise, ∆-flow directly learns how the recent visual and action history evolves into
+its future, leaving the flow networks responsible only for residuals. In VLAs, this replaces the Gaussian source
+of the action branch; in WAMs, it replaces the source of both branches. The future visual representations and
+actions of WAMs are modeled jointly, with action generation conditioned on the predicted visual future, and
+both produced in a single flow step at inference. This design preserves both action continuity and state–action
+coupling, which are identified as important factors for successful trajectories (Yang et al., 2026). Because
+∆-flow alters only the source of the flow, it integrates naturally into existing policies, including WAMs such as
+2
+
+
+ImageWAM (Zhang et al., 2026a) and Fast-WAM (Yuan et al., 2026) and flow-based VLAs such as π0.5 (Black
+et al., 2025a), without network architectural modification or extra data.
+Figure 1 summarizes the formulation and its training and inference benefits. Experiments show that ∆-flow
+is simple yet effective. We evaluate ∆-flow across robot foundation policies on LIBERO (Liu et al., 2023a)
+and LIBERO-Plus (Fei et al., 2026). During training on LIBERO, ImageWAM reaches 90% success in
+one rather than six epochs, while Fast-WAM reaches 95% in two rather than eight. On π0.5 with LoRA
+fine-tuning, one epoch exceeds the baseline’s five-epoch success, giving a 5× reduction in training epochs to
+that performance level. At inference, ∆-flow accelerates all three backbones through single-step generation. On
+Fast-WAM, it jointly predicts future visual representations and actions 4.45× faster than ten-step Gaussian
+sparse-joint inference while improving LIBERO-Plus success. ∆-flow also maintains smooth actions at
+one step: on ImageWAM, it achieves a 4.5× reduction in action jerk compared with one-step Gaussian
+sampling, with smoothness comparable to ten-step Gaussian sampling. On LIBERO-Plus, it further achieves
+state-of-the-art performance without large robot training data, reaching 88.55% success across the seven
+perturbation categories. Most strikingly, replacing the Gaussian action source with recent executed actions
+enables single-step sampling in pretrained ImageWAM and Fast-WAM without retraining. This adaptation
+largely preserves task success and can slightly improve it.
+Beyond the main results, we systematically examine how ∆-based flows interact with existing policy and
+WAM designs, and several findings are counterintuitive. First, action-space parameterization barely changes
+standard LIBERO success but shifts LIBERO-Plus success by over 14 points, so parameterizations that appear
+equivalent in distribution can differ sharply under perturbation (Figure 10). Second, predicting fewer future
+frames over the same horizon improves control, gaining 5.19 points on LIBERO-Plus over a denser schedule
+(Figure 7). Third, as shown in Figure 8, stop-gradient improves future-image PSNR and LIBERO-Plus success.
+The action branch still reads visual features, but its gradients do not update the world model. These results
+indicate that feature sharing and gradient coupling should be treated as separate design decisions. Finally,
+once the source is past-informed and visual supervision is retained, supervising only the one-step endpoint of
+the action branch nearly matches the full flow-matching objective, albeit with slower convergence (Figure 9).
+We believe these findings are useful beyond the specific setting studied here.
+2
+Related Work
+2.1
+Robot foundation models
+2.1.1
+Vision-language-action model
+VLAs map visual observations and language instructions to robot actions (Zitkovich et al., 2023; Kim et al.,
+2025). π0 (Black et al., 2025b) introduces a flow-matching action expert for continuous action generation,
+while π0.5 (Black et al., 2025a) further improves open-world generalization through heterogeneous co-training.
+FAST (Pertsch et al., 2025) compresses action sequences to reduce autoregressive decoding steps, while
+FLOWER (Reuss et al., 2025) reduces action-expert parameters by sharing adaptive normalization across
+transformer layers. In flow-based VLA policies, generation starts from Gaussian noise and iteratively transports
+it into a future action chunk conditioned on the observation (Black et al., 2025b). Such policies can be costly
+to train, and repeated action-expert evaluations increase inference latency (Pertsch et al., 2025; Black et al.,
+2025b). Our work instead constructs the source from recently executed actions and learns their transformation
+into future action chunks.
+2.1.2
+World-action models
+WAMs couple predictive world modeling with robot action generation. Joint WAMs generate future visual
+representations and actions together (Ye et al., 2026; An et al., 2026), while causal WAMs condition action
+prediction on predicted future visual states (Li et al., 2026b). To reduce inference costs, Fast-WAM (Yuan
+et al., 2026) retains video prediction during training but generates actions from current visual representations
+at test time. ImageWAM (Zhang et al., 2026a) replaces video generation with image editing and conditions
+action generation on current-image representations. These methods mainly change how visual information
+supports action generation. However, both visual and action generation still start from Gaussian noise. Our
+3
+
+
+work instead introduces a unified history-based source formulation for visual and action generation, learning
+past-to-future changes in both modalities.
+2.2
+Past-to-future generative modeling
+A few early efforts have begun to start generation from the past. In visual generation, several methods
+construct more informative sources from existing images. For example, I2SB (Liu et al., 2023b) learns a
+Schrödinger bridge from a source image distribution to a target image distribution, grounding image translation
+directly in the input image. Related video generation methods (Davtyan et al., 2023; Liu and Ritschel, 2025)
+exploit relationships between adjacent frames to learn the generation of future frames from observed ones.
+In robot control, action-to-action (A2A) flow matching (Jia et al., 2026b) uses executed action histories as
+the source distribution and learns their transport to future action chunks. Warm-start methods (Chen et al.,
+2024; Li et al., 2026a) instead use auxiliary policies or predictors to provide action initializations, followed by
+a small number of refinement steps. These studies explore informed sources separately for visual and action
+generation, but do not examine how both can be coordinated within the WAMs. Our work unifies past visual
+states and actions as generative sources, providing a common past-to-future formulation for future world and
+action generation.
+Relation to our prior A2A policy. ∆-flow builds on our earlier A2A flow matching (Jia et al., 2026b), which
+transports executed action histories to future action chunks, and extends it in four respects. (1) A2A defines
+the transport in a learned latent space, whereas ∆-flow operates directly in the action space, so it can be
+dropped into an existing policy without an additional encoder or decoder. (2) A2A establishes the idea for
+actions only; here we show that the same difference-based source is equally effective for visual generation, and
+that the two branches can be coupled within a single WAM. (3) A2A was evaluated on task-specific visuomotor
+policies, whereas we test the formulation at the scale of robot foundation models, covering both flow-based
+VLAs and WAMs. (4) We report a set of empirical studies absent from A2A, on action representation,
+world-action coupling, and knowledge insulation.
+3
+Preliminaries
+Flow matching. Flow matching generates a target y conditioned on context c by integrating a velocity field fθ
+with learnable parameters θ (Lipman et al., 2023). For target-context pairs (y, c) drawn from the training
+distribution D, we sample Gaussian noise ϵ ∼N(0, I) with the same dimensions as y and a flow time
+τ ∼U(0, 1), and construct the interpolated state yτ = (1 −τ)y + τϵ. The field is trained to predict the path
+velocity ϵ −y by minimizing
+LFM = E(y,c)∼D, ϵ∼N (0,I), τ∼U(0,1)
+h
+∥fθ(yτ, τ, c) −(ϵ −y)∥2
+2
+i
+.
+(1)
+At inference, generation starts from Gaussian noise at τ = 1 and integrates the learned field toward τ = 0.
+Flow-based vision-language-action models. At control step t, a flow-based VLA predicts a chunk of H future
+actions, At = [at, . . . , at+H−1], from the available task context ct. This context ct = (o≤t, ℓ, qt) comprises
+visual observations o≤t, the language instruction ℓ, and any proprioceptive input qt.
+Each action has
+dimension da, giving the chunk a flattened dimensionality of Da = Hda. Flow-based VLAs use an action
+expert conditioned on a pretrained vision-language backbone to generate At (Black et al., 2025b,a). During
+training, the demonstrated action chunk is interpolated with Gaussian noise ϵa ∼N(0Da, IDa) to obtain
+Aτ
+t = (1 −τ)At + τϵa, where τ denotes flow time rather than control time t. Following Eq. (1), the action
+expert fθa, with learnable parameters θa, predicts the velocity ϵa −At from (Aτ
+t , τ, ct). At inference, a chunk
+is initialized with Gaussian noise and iteratively updated using the learned velocity field:
+Aτ−δ
+t
+= Aτ
+t −δfθa(Aτ
+t , τ, ct),
+δ = 1/N.
+(2)
+Here, δ = 1/N is the flow-time step size, and N is the number of Euler steps, or equivalently the number
+of function evaluations (NFE) for the action field. Each update refines the entire action chunk as flow time
+decreases from 1 to 0.
+4
+
+
+VAE Encoder
+Action Encoder
+𝑜!"#
+𝑜!"$
+𝑜!
+"""
+Language Model
+“Put the items in 
+the basket.”
+noise
+𝑜!%$
+𝑜!%&
+𝑜!%#
+"""
+noise
+Past
+Future
+𝑎!"'%$
+𝑎!"&
+𝑎!"$
+"""
+𝑎!
+𝑎!%$
+𝑎!%#
+"""
+Visual Context
+stop gradient
+queries
+values
+unmasked
+masked
+Vision Backbone
+Action Expert
+V
+V
+A
+A
+Action Expert
+Vision Language Model
+“Put the items 
+in the basket.”
+VAE Decoder
+"""
+Action Encoder
+noise
+𝑎!"'%$
+𝑎!"&
+𝑎!"$
+"""
+"""
+"""
+"""
+"""
+"""
+Vision Encoder
+"""
+Tokenizer
+"""
+𝑎!
+𝑎!%$
+𝑎!%#
+"""
+for world-action model
+for vision-language-action model
+"""
+Figure 2 ∆-flow for robot foundation policies. History-based sources combine past representations with Gaussian noise, so
+the model learns past-to-future changes. Left: ∆-flow for world-action models. The model learns both visual and action
+changes from history to future targets. The action expert uses intermediate visual representations, with stop-gradient
+blocking action-loss gradients from updating the visual branch during training. Right: ∆-flow for vision-language-action
+models. The model learns action changes from executed history to future actions, using the original vision-language
+conditioning. At inference, a single Euler update transforms each history-based source into its future prediction.
+Flow-based world-action models. WAMs augment action prediction with future visual modeling. A visual
+encoder Ev maps the future image or video frames to a latent target Zt. The target Zt has a flattened
+dimensionality of Dv. We take latent-space prediction as the example throughout; models that generate pixels
+directly are recovered by letting Ev be the identity. The flow-matching objective is applied to both targets, with
+y = At for the action branch and y = Zt for the visual branch. For the visual branch, Zτ
+t = (1 −τ)Zt + τϵv,
+where ϵv ∼N(0Dv, IDv). The visual field fθv, with learnable parameters θv, predicts ϵv −Zt from (Zτ
+t , τ, ct),
+while the action field fθa follows the formulation above. The training objective is LWAM = λvLv
+FM + λaLa
+FM,
+where Lv
+FM and La
+FM apply Eq. (1) to the visual and action branches respectively, and λv, λa ≥0 balance
+the two terms. Visual and action tokens can interact during joint generation (Ye et al., 2026), or the action
+expert can condition on intermediate visual features without requiring a decoded future image (Zhang et al.,
+2026a). At inference, the generated variables are updated using their predicted velocities, as in Eq. (2), with
+architecture-specific sampling budgets.
+4
+Methods
+∆-flow matching learns past-to-future changes for robot foundation policies. Figure 1 illustrates its key idea:
+the source is built from historical representations with Gaussian perturbations, so that the flow only has to
+carry the change from historical actions and visual representations to their corresponding future targets.
+Let m ∈{a, v} denote the action or visual modality. We sample paired historical and future representations
+(hm, ym, ct) ∼D with hm, ym ∈RDm. The action target is ya = At and the visual target is yv = Zt.
+For actions, ha = Ahist
+t
+= [at−H, . . . , at−1] collects the H most recently executed actions.
+For vision,
+hv = Pv(Ev(o≤t)) represents the observed visual context, where the backbone-specific operator Pv arranges
+the encoded observations in the latent layout of the future image or video target.
+Instead of a fixed Gaussian prior, we define the source of modality m as its perturbed history
+sm = αmhm + σmbm ⊙ϵm,
+ϵm ∼N(0Dm, IDm),
+(3)
+where αm and σm control the history and noise scales, bm masks noise across dimensions, and ⊙denotes
+elementwise multiplication. Unlike A2A flow matching (Jia et al., 2026b), which transports the clean history
+itself, we perturb it with a certain degree of noise. A deterministic source would map each history to a single
+target, sacrificing the multimodality of the target distribution and robustness (Jia et al., 2026a).
+5
+
+
+Interpolating the target with this source, yτ
+m = (1 −τ)ym + τsm, the vector field is trained to predict the
+velocity along the path:
+Lm
+FM = E
+h
+∥fθm(yτ
+m, τ, cm
+t ) −(sm −ym)∥2
+2
+i
+,
+(4)
+where cm
+t
+denotes the conditioning available to modality m, and the expectation is over paired training
+samples, source noise, flow time τ ∼U(0, 1), and any sampled visual conditioning described below.
+To supervise single-step generation directly, we apply one Euler update from the source at τ = 1 to τ = 0 and
+penalize its discrepancy from the target:
+bym = sm −fθm(sm, 1, cm
+t ),
+Lm
+EC = E [∥bym −ym∥1] .
+(5)
+This expectation covers training samples, source noise, and any sampled visual conditioning, but not flow
+time: the one-step prediction is always evaluated at τ = 1. Flow matching thus supervises the vector field at
+sampled flow times, whereas endpoint consistency supervises one-step generation. Action losses are evaluated
+in the policy’s normalized action space and visual losses in the WAM’s latent space.
+Figure 2 illustrates how ∆-flow is instantiated in VLAs and WAMs, which we describe in turn below.
+4.1
+∆-Flow for Vision-Language-Action Models
+A VLA generates only the action chunk, so ∆-flow applies to the action modality alone. We set ha = Ahist
+t
+,
+ya = At and ca
+t = ct, while retaining the vision-language conditioning and the action-expert architecture. The
+training objective combines the two terms of Eqs. (4) and (5) at m = a,
+LVLA = La
+FM + λa
+ECLa
+EC,
+(6)
+with λa
+EC ≥0 weighting action endpoint consistency. At inference, a single Euler update produces the action
+chunk:
+bAt = sa −fθa(sa, 1, ct).
+(7)
+The source is constructed from executed actions, without an auxiliary history predictor.
+4.2
+∆-Flow for World-Action Models
+A WAM learns both visual and action changes, with paired targets drawn from the same interaction window.
+The visual branch supplies intermediate representations of current and future visual tokens to condition action
+generation, and we stop gradients at this connection so that the action loss does not update the visual branch
+through it:
+Rτv
+t
+= Rθv(yτv
+v , τv, ct),
+ca
+t = (ct, sg(Rτv
+t )) ,
+(8)
+where sg denotes stop-gradient and τv is the visual flow time specified by the backbone and training objective.
+The visual conditioning used by each objective is detailed in the architecture instantiations below. The two
+modalities are then trained jointly,
+LWAM = λv (Lv
+FM + λv
+ECLv
+EC) + λa (La
+FM + λa
+ECLa
+EC) ,
+(9)
+where each term follows Eqs. (4) and (5) at m = v and m = a, conditioned on ct and ca
+t respectively. The
+nonnegative weights λv, λa balance visual and action supervision, while λv
+EC, λa
+EC control endpoint consistency
+within each branch.
+At inference, the visual network is evaluated at its source to obtain the features used for action conditioning,
+R1
+t = Rθv(sv, 1, ct),
+(10)
+and the visual endpoint bZt and action chunk bAt each take one Euler update as in Eq. (5), the latter conditioned
+on (ct, sg(R1
+t)). The future visual endpoint therefore never needs to be decoded.
+6
+
+
+4.3
+Architecture Instantiations
+Across all three policies, we construct the action source from the most recent executed actions, using a history
+window equal in length to the predicted action chunk. The actions are normalized using each policy’s action
+statistics. We set αa = 1 and σa = 0.5 in Eq. (3), with the noise mask excluding the gripper and any padded
+dimensions.
+ImageWAM Instantiation. We instantiate ∆-flow matching in ImageWAM, which combines the FLUX.2-klein-
+base-4B image-editing backbone with an action DiT (Zhang et al., 2026a). The visual history hv is the
+encoded current image, arranged in the target latent layout, and the target yv is the encoded image 16 frames
+into the future. We construct the visual source as sv = (hv + ϵv)/
+√
+2, corresponding to a 50% image-latent
+prior. The action history contains the previous 16 executed actions. The action history ha = Ahist
+t
+and target
+ya = At are represented in the same normalized action space. The action expert reads layer-wise key–value
+features produced by the visual forward pass at the history-based source. These features contain intermediate
+representations of current and future visual tokens and are detached before conditioning the action expert.
+Thus, visual generation learns the current-to-future image change, while action generation learns the change
+from executed to future actions, with both branches accounting for the injected source noise. We set λa = 1,
+λv = 0.5, and λa
+EC = λv
+EC = 0.5. ImageWAM training and evaluation settings are detailed in Appendix A.1.
+Fast-WAM Instantiation. We instantiate ∆-flow matching in the joint-attention variant of Fast-WAM, which
+combines the Wan2.2-TI2V-5B video backbone with an action DiT (Yuan et al., 2026). We use the sparse joint
+configuration (Fast-WAM-Joint-Sparse, also denoted Sparse8), which predicts four future frames at temporal
+stride r = 8 over a 32-step horizon; its dense counterpart predicts eight frames at r = 4 over the same horizon.
+We encode the observed frames at {t −32, t −24, t −16, t −8, t} and use Pv to arrange their latents in the
+temporal layout of the future-video target yv = Zt, forming hv. The visual source is sv = (hv + ϵv)/
+√
+2, and
+the action history contains the previous 32 executed actions. The action branch uses the executed action
+history ha = Ahist
+t
+to predict ya = At. Action tokens attend to intermediate representations of both current
+and future video tokens, with action-loss gradients stopped at this connection. Action flow matching uses
+visual features at sampled flow times, whereas action endpoint consistency uses features computed from the
+visual source. This instantiation uses future visual tokens and is distinct from the original Fast-WAM inference
+configuration that removes those tokens. We set λa = λv = 1 and λa
+EC = λv
+EC = 0.5. Fast-WAM training and
+evaluation settings are detailed in Appendix A.2.
+π0.5 Instantiation. For π0.5 (Black et al., 2025a), we retain the PaliGemma vision-language backbone and the
+Gemma-based action expert, and apply ∆-flow matching to action generation. The history ha = Ahist
+t
+and
+target ya = At are represented in the checkpoint’s quantile-normalized action space. We train with the action
+flow-matching and endpoint-consistency losses and use one Euler update at inference. No visual generation
+branch is introduced, as illustrated in Figure 2 (right). We use λa
+EC = 0.5. The π0.5 training and evaluation
+settings are detailed in Appendix A.3.
+5
+Evaluation
+We evaluate how learning past-to-future changes affects training efficiency, generalization, and inference in
+robot foundation policies. We also test whether action-history sources can benefit pretrained WAM policies
+without updating their weights. Our evaluation addresses four questions: (1) Does ∆-flow converge faster
+than its Gaussian-source counterpart? (2) How does ∆-flow affect generalization under distribution shift?
+(3) Can ∆-flow reduce inference latency while maintaining action continuity? (4) Can action-history source
+initialization benefit a trained policy without retraining?
+5.1
+Training and Evaluation Setup
+We evaluate ∆-flow on three prevalent robot foundation models, ImageWAM (Zhang et al., 2026a), Fast-
+WAM (Yuan et al., 2026), and π0.5 (Black et al., 2025a), comparing each with its original Gaussian-source
+counterpart. In ImageWAM and Fast-WAM, ∆-flow applies to both visual and action generation; in π0.5,
+it applies only to action generation, with the vision-language conditioning unchanged. For Fast-WAM,
+7
+
+
+we additionally include a Gaussian sparse-joint baseline with the same Sparse8 future-frame layout, joint-
+attention architecture, and sampling budgets to assess the source design. Training-free experiments use frozen
+ImageWAM and Fast-WAM policies and change only the action-source initialization.
+We evaluate task performance on the Spatial, Object, Goal, and Long suites of LIBERO (Liu et al., 2023a),
+and assess generalization on LIBERO-Plus (Fei et al., 2026) without additional fine-tuning. The latter
+covers seven perturbation categories: camera viewpoint, robot initialization, language instructions, lighting,
+background textures, sensor noise, and object layout. For our results, LIBERO Overall pools successful
+evaluations across the four suites. Training progress is indexed by epochs or cumulative sample exposure to
+account for differences in batch size. Detailed training and evaluation settings for ImageWAM, Fast-WAM,
+and π0.5 are provided in Appendices A.1, A.2, and A.3, respectively.
+1
+2
+4
+6
+8
+10
+Training epochs
+0
+20
+40
+60
+80
+100
+Success rate (%)
+ImageWAM · LIBERO
++66.7pp
++35.0pp
+95
+100
+97.8
+1
+2
+4
+6
+8
+10
+Training epochs
+0
+20
+40
+60
+80
+100
+Success rate (%)
+ImageWAM · LIBERO-Plus
++58.2pp
++37.8pp
+Original ImageWAM
+Δ-flow, action only
+Δ-flow, action + visual
+88.55
+
+	
+
+
+
+
+
+
+	
+
+
+
+
+
+
+	
+
+
+
+
+
+
+
+	
+
+
+
+
+	
+
+
+
+
+
+
+
+	
+
+
+
+
+	
+	
+
++12.1pp
++7.9pp
+1
+2
+4
+6
+8
+10
+Training epochs
+0
+20
+40
+60
+80
+100
+Success rate (%)
+Fast-WAM · LIBERO
++30.1pp
++20.4pp
+94
+100
+98.0
+1
+2
+4
+6
+8
+10
+Training epochs
+0
+20
+40
+60
+80
+100
+Success rate (%)
+Fast-WAM · LIBERO-Plus
++17.7pp
++20.7pp
+Gaussian baseline
+Δ-flow, action only
+Δ-flow, action + visual
+Figure 3 Training progress on LIBERO and LIBERO-Plus. Success rates are shown over training epochs for ImageWAM,
+Fast-WAM, and π0.5. The top panels show LIBERO and the bottom panels show LIBERO-Plus, evaluated without
+additional fine-tuning. White bars denote the original models, gray bars denote the Gaussian sparse-joint Fast-WAM
+baseline, light-blue bars denote action-only ∆-flow, and blue bars denote complete ∆-flow. The π0.5 panels compare
+one-step and ten-step Gaussian sampling with one-step action ∆-flow. Dashed lines track ∆-flow, and annotations
+report percentage-point differences. Insets show later training epochs, and stars mark the highest evaluated success
+rate. Error bars show one standard deviation across the 40 base tasks.
+5.2
+Training Efficiency
+We first compare LIBERO success throughout training with the corresponding Gaussian-source references.
+As shown in the top panels of Figure 3, complete ∆-flow on ImageWAM reaches 91.30% after one epoch,
+compared with 24.60% for the original model, a gain of 66.70 percentage points. It first exceeds 90% at
+epoch one, whereas the original first exceeds this threshold at the evaluated epoch-six checkpoint, giving a 6×
+reduction in training epochs to this level. Action-only ∆-flow reaches 90% by epoch four. On Fast-WAM,
+∆-flow reaches 72.60% after one epoch, compared with 42.55% for the Gaussian sparse-joint baseline. It
+reaches 95.65% by epoch two, a level the baseline first exceeds at epoch eight, giving a 4× reduction in training
+epochs. Moreover, applying ∆-flow to actions alone already recovers most of this gain, and adding the visual
+source further accelerates learning. With the demonstration set held fixed, training progress is measured in
+epochs or cumulative samples processed.
+As shown in the top-right panel of Figure 3, action ∆-flow on π0.5 with full-parameter fine-tuning reaches at
+least 95% LIBERO success by epoch two and peaks at 99.30%. All ∆-flow models use a single Euler update
+at inference. The left panel of Figure 4 shows that, with LoRA fine-tuning (Hu et al., 2022), action ∆-flow
+reaches 92.20% after one epoch, 95.50% after two, and 98.00% after five. Its first-epoch result already exceeds
+the ten-step baseline’s 91.30% after five epochs, giving a 5× reduction in training epochs to exceed that
+performance level.
+8
+
+
+1
+2
+3
+4
+5
+Training epochs
+0
+20
+40
+60
+80
+100
+Success rate (%)
+Training progress on LIBERO
++50.3
++20.0
++9.6
++6.8
++6.7
+92.20
+95.50
+96.90
+97.90
+98.00
+Spatial
+Object
+Goal
+Long
+Overall
+Task suites
+84
+88
+92
+96
+100
+Per-suite success at epoch 5
++4.4
++11.6
++10.4
++0.4
++6.7
+98.80
+99.60
+100.00
+93.60
+98.00
+π0.5 (LoRA) · 10 steps
+π0.5 (LoRA) Δ-flow · 1 step
+Figure 4 Training efficiency on π0.5 with LoRA fine-tuning. The left panel shows LIBERO success over five training epochs.
+The right panel shows success across the four LIBERO suites at epoch five. The curves and bars compare the ten-step
+Gaussian-source baseline with one-step action ∆-flow. Annotations give percentage-point differences.
+Across the WAM and VLA policies, ∆-flow reaches high LIBERO success earlier in training. This advantage
+persists under LoRA fine-tuning on π0.5, where one epoch of action ∆-flow already exceeds the baseline’s
+five-epoch performance. The reason is visible in what the network must fit. A Gaussian source pairs each
+target with an unrelated noise sample, so two nearby sources can map to entirely different futures, forcing the
+velocity field to be steep, i.e., to have a large Lipschitz constant (Jia et al., 2026a). A past-informed source
+instead pairs each target with its own history, leaving a small and smooth offset to be fit.
+5.3
+Generalization under Distribution Shift
+We next evaluate generalization on both WAM and VLA policies using LIBERO-Plus without additional
+fine-tuning. Table 1 summarizes their performance on LIBERO and LIBERO-Plus. On ImageWAM, ∆-flow
+with a 50% image-latent prior increases LIBERO-Plus success from 82.49% to 88.55%, while maintaining
+similar LIBERO performance (97.80% versus 98.00%). ImageWAM with ∆-flow achieves state-of-the-art
+performance on LIBERO-Plus, despite using no additional embodied-data pretraining. Fast-WAM-joint with
+∆-flow reaches 80.58% on LIBERO-Plus, compared with 77.51% for the Gaussian sparse-joint reference
+with the same architecture and one-step sampling budget. On the VLA policy π0.5, action ∆-flow increases
+LIBERO-Plus success from 80.70% to 84.53% and LIBERO success from 97.10% to 99.00%.
+As shown in the bottom panels of Figure 3, these generalization gains are already visible early in training. On
+ImageWAM, ∆-flow reaches 75.36% LIBERO-Plus success after one epoch, compared with 17.12% for the
+original model. On Fast-WAM, it reaches 68.55% after two epochs, compared with 47.81% for the Gaussian
+sparse-joint baseline. By epoch four, its success reaches 77.81%, already exceeding the baseline’s final 77.51%.
+The perturbation-wise results further show where these improvements are most pronounced. On ImageWAM,
+the largest gains occur under changes in robot initialization and object layout, where success increases from
+52.90% to 73.94% and from 81.31% to 88.39%, respectively. Gains also extend to language instructions and
+visual appearance, including background textures and lighting. Improvements under sensor noise are smaller,
+while camera-viewpoint performance remains largely unchanged. Taken together, these results show that the
+benefits of ∆-flow extend beyond faster learning on LIBERO to stronger generalization under distribution
+shift across both WAM and VLA policies. We attribute this generalization to two factors: the residual is
+easier to fit than a full transport, and the executed history now enters as the flow source rather than as a state
+token concatenated with the visual input, which removes the shortcut that such concatenation often invites.
+5.4
+Efficient and Smooth Inference
+We measure complete local inference latency on an A100-80GB GPU, with the detailed timing protocol
+provided in Appendix B. As shown in Figure 5, one-step ∆-flow reduces inference latency across all three
+policies. On ImageWAM, mean latency decreases from 296.31 to 118.87 ms relative to ten-step Gaussian
+9
+
+
+Table 1 Success rates on LIBERO and LIBERO-Plus. Success rates are reported in %. Emb.PT indicates additional
+embodied-data pretraining, excluding general-purpose vision, language, or video backbone pretraining. Bold marks the
+highest value in each column within the VLA and WAM groups separately. Literature results retain their original
+reporting protocols. For models evaluated by us, each ∆-flow variant and its original counterpart use the same
+hardware and matched evaluation settings. Both Fast-WAM-joint rows use the sparse joint configuration with one-step
+sampling.
+(a) LIBERO
+Model
+Emb.PT
+Spatial
+Object
+Goal
+Long
+Overall
+VLA
+OpenVLA (Kim et al., 2025)
+✓
+84.7
+88.4
+79.2
+53.7
+76.5
+UniVLA (Bu et al., 2025)
+✓
+96.5
+96.8
+95.6
+92.0
+95.2
+π0.5 (Black et al., 2025a)
+✓
+98.80
+96.80
+98.80
+94.00
+97.10
+π0.5 (∆-flow)
+✓
+99.60
+100.00
+99.60
+96.80
+99.00
+WAM
+LingBot-VA (Li et al., 2026b)
+✓
+98.5
+99.6
+97.2
+98.5
+98.5
+Motus (Bi et al., 2025)
+✓
+96.8
+99.8
+96.6
+97.6
+97.7
+ABot-M0.5 (Chen et al., 2026)
+✓
+100.0
+99.8
+99.4
+98.4
+99.4
+Cosmos Policy (Kim et al., 2026)
+×
+98.1
+100.0
+98.2
+97.6
+98.5
+ImageWAM (Zhang et al., 2026a)
+×
+98.80
+99.20
+98.80
+95.20
+98.00
+ImageWAM (∆-flow)
+×
+99.20
+99.60
+98.40
+94.00
+97.80
+Fast-WAM (Yuan et al., 2026)
+×
+97.60
+100.00
+95.80
+93.00
+96.60
+Fast-WAM-joint (Gaussian)
+×
+98.40
+99.40
+98.60
+93.40
+97.45
+Fast-WAM-joint (∆-flow)
+×
+98.00
+100.00
+98.60
+95.40
+98.00
+(b) LIBERO-Plus
+Model
+Emb.PT Camera Robot Language Light Background Noise Layout Overall
+VLA
+OpenVLA (Fei et al., 2026)
+✓
+0.8
+3.5
+23.0
+8.1
+34.8
+15.2
+28.5
+15.6
+UniVLA (Zhang et al., 2026a)
+✓
+1.8
+46.2
+69.6
+69.0
+81.0
+21.2
+31.9
+42.9
+π0.5 (Black et al., 2025a)
+✓
+66.04
+73.61
+81.39
+97.37
+91.36
+76.70
+86.75
+80.70
+π0.5 (∆-flow)
+✓
+73.36
+79.35
+83.80
+96.94
+97.30
+81.26
+87.34
+84.53
+WAM
+LingBot-VA (Li et al., 2026b)
+✓
+40.9
+83.0
+86.4
+82.3
+53.1
+64.4
+76.2
+69.5
+Motus (Bi et al., 2025)
+✓
+48.0
+88.0
+89.0
+83.0
+78.0
+57.0
+89.0
+76.0
+ABot-M0.5 (Chen et al., 2026)
+✓
+70.5
+87.4
+88.6
+94.0
+89.7
+75.5
+85.2
+83.4
+Cosmos Policy (Zhang et al., 2026b)
+×
+75.8
+63.3
+81.7
+96.5
+88.9
+92.7
+82.2
+82.2
+ImageWAM (Zhang et al., 2026a)
+×
+82.55
+52.90
+86.99
+97.37
+90.24
+92.07
+81.31
+82.49
+ImageWAM (∆-flow)
+×
+82.24
+73.94
+93.62
+98.69
+93.77
+93.57
+88.39
+88.55
+Fast-WAM (Yuan et al., 2026)
+×
+44.8
+64.2
+70.2
+89.0
+57.3
+75.0
+73.4
+67.24
+Fast-WAM-joint (Gaussian)
+×
+58.22
+76.71
+95.77
+92.38
+64.68
+74.58
+81.11
+77.51
+Fast-WAM-joint (∆-flow)
+×
+70.04
+78.77
+85.43
+91.77
+68.12
+88.38
+80.79
+80.58
+sampling, giving a 2.49× speedup. The original one-step model takes 106.46 ms but does not predict future
+visual representations. On Fast-WAM, complete one-step generation takes 192.62 ms. Compared with ten-step
+Gaussian sparse-joint inference at 857.54 ms, this gives a 4.45× speedup. Its one-step Gaussian sparse-joint
+reference takes 133.71 ms. On π0.5, one-step action ∆-flow takes 53.99 ms, compared with 82.91 ms for
+ten-step and 55.34 ms for one-step Gaussian sampling. This gives a 1.54× speedup over ten-step inference.
+Thus, ∆-flow reduces the latency of the complete inference pipeline across WAM and VLA policies through
+single-step generation.
+We next examine action continuity during replanning. On ImageWAM, we compare ten-step and one-step
+Gaussian sampling, one-step action-only ∆-flow, and one-step complete ∆-flow. All methods are evaluated
+on the same LIBERO-Long tasks with identical initial states. Each policy predicts a 16-action chunk and
+10
+
+
+10-step 1-step
+1-step
+0
+80
+160
+240
+320
+400
+Latency (ms)
+296 ms
+106 ms
+119 ms
+ImageWAM
+10-step 10-step 1-step
+1-step
+1-step
+0
+250
+500
+750
+1000
+1250
+858 ms
+506 ms
+134 ms
+134 ms
+193 ms
+Fast-WAM
+10-step 1-step
+1-step
+0
+50
+100
+150
+200
+250
+83 ms
+55 ms
+54 ms
+π0.5
+50
+60
+70
+80
+90
+100
+Success rate (%)
+Original
+Gaussian sparse-joint
+Δ-flow
+LIBERO
+LIBERO-Plus
+Figure 5 Inference latency and task success on ImageWAM, Fast-WAM, and π0.5. Bars show mean complete local policy-call
+latency on an A100 GPU, including online text encoding and visual source construction, with values read from the left
+axes. White, gray, and blue bars denote the original models, Gaussian sparse-joint Fast-WAM, and ∆-flow, respectively.
+Dashed lines with square markers show LIBERO success, and solid lines with circle markers show LIBERO-Plus
+success, with values read from the right axis.
+executes the first 12 actions before replanning. We measure consecutive action change, action jerk computed
+from second finite differences, and jumps at action-chunk boundaries. Reducing Gaussian sampling from ten
+steps to one increases these measures to 2.19, 4.60, and 1.77 times their ten-step values, respectively. Reducing
+Gaussian sampling steps alone therefore comes at a clear cost to action continuity during replanning.
+In contrast, the left and right panels of Figure 6 show that complete ∆-flow reduces boundary peaks in action
+change and jerk by 48% and 67%, respectively, relative to one-step Gaussian sampling. Both ∆-flow variants
+remain close to the ten-step Gaussian reference. Across the matched trajectories, complete ∆-flow reduces
+mean action jerk from 0.19399 to 0.04335 relative to one-step Gaussian sampling, a 4.5× reduction (Table 9
+in Appendix B). The history-based source provides a temporal reference from recent motion, while endpoint
+consistency directly supervises the future action chunk predicted in one update. Together, these designs align
+training with single-step generation, rather than merely reducing the sampling budget at inference. These
+−5
+−4
+−3
+−2
+−1
+0
+1
+2
+3
+4
+5
+Relative control step  (0 = first action of new chunk)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+Mean ‖at −at −1‖2
+Previous chunk
+New chunk
+Action change
+−48%
+−5
+−4
+−3
+−2
+−1
+0
+1
+2
+3
+4
+5
+Relative control step  (0 = first action of new chunk)
+0.00
+0.10
+0.20
+0.30
+0.40
+Mean ‖at −2at −1 + at −2‖2
+Previous chunk
+New chunk
+Action jerk
+−67%
+Gaussian · 10 steps
+Gaussian · 1 step
+Δ-flow, action only · 1 step
+Δ-flow · 1 step
+Figure 6 Action continuity at chunk boundaries on ImageWAM. The panels show mean action change (left) and action jerk
+(right) around transitions between consecutive action chunks. The four curves compare Gaussian sampling with ten or
+one step, one-step action-only ∆-flow, and one-step complete ∆-flow. All four methods are evaluated on the same
+LIBERO-Long tasks with identical initial states. Each policy predicts a 16-action chunk and executes the first 12
+actions before replanning. Step 0 is the first action of the new chunk. Background shading indicates the new chunk,
+and bands around the curves show paired-bootstrap 95% confidence intervals. Arrows annotate relative differences in
+boundary peaks.
+11
+
+
+results suggest that ∆-flow preserves action continuity by combining a history-based starting point with direct
+one-step supervision, without relying on repeated sampling updates.
+Table 2 Training-free action-source adaptation on LIBERO and LIBERO-Plus. Only the inference-time source of a
+frozen policy is changed, without updating model parameters. Success rates are in %. Steps denotes the number of
+inference sampling steps.
+Policy
+Source
+Steps
+LIBERO
+LIBERO-Plus
+ImageWAM
+Gaussian
+10
+98.00
+82.49
+ImageWAM
+Gaussian
+1
+97.50
+81.65
+ImageWAM
+Past action
+1
+98.10
+82.82
+Fast-WAM
+Gaussian
+10
+96.60
+67.24
+Fast-WAM
+Gaussian
+1
+95.55
+68.28
+Fast-WAM
+Past action
+1
+96.15
+67.58
+5.5
+Training-Free Source Adaptation
+Lastly, we test action-history initialization on the original ImageWAM and Fast-WAM policies trained with
+Gaussian sources. Both policies are frozen, and only their Gaussian action source is replaced at inference.
+The adaptation is a special case of Eq. (3). We set αa = 1 and σa = 0.5, with ba restricting the noise to the
+pose dimensions.
+As shown in Table 2, replacing the action source at a single sampling step raises ImageWAM’s LIBERO
+success from 97.50% to 98.10%. Fast-WAM improves from 95.55% to 96.15% under the same one-step budget.
+On LIBERO-Plus, ImageWAM improves from 81.65% to 82.82%, while Fast-WAM decreases from 68.28% to
+67.58%. The adaptation is also free at a fixed solver budget, since it adds no network evaluation. Latency
+follows the complete local policy-call protocol on an A100-80GB GPU, consistent with Section 5.4 and
+Appendix B. These results show that an action-history source transfers to a frozen WAM policy without
+post-training, supporting one-step inference while largely preserving task success. It further indicates that
+∆-flow can be combined with an already well-trained policy at little cost, yielding immediate inference gains.
+6
+Ablation Studies
+Building on the performance and efficiency results above, we examine two main design choices in ∆-flow
+differently from the conventional flow policy: learning benefits in the action and visual branches and supervising
+one-step predictions with endpoint consistency. The component and objective ablations use one-step inference.
+All ablations in this section are conducted on ImageWAM.
+6.1
+How Much Does Each Flow Contribute?
+Table 3 Contributions of the action and visual ∆-flows on ImageWAM. Change (pp) is the signed LIBERO-Plus
+difference from the original Gaussian-source model.
+Configuration
+LIBERO
+LIBERO-Plus
+Change (pp)
+Original ImageWAM
+98.00
+82.49
+–
+∆-flow, action only
+98.40
+85.82
++3.33
+∆-flow, action + visual
+97.80
+88.55
++6.06
+Training efficiency. We compare the original ImageWAM, action-only ∆-flow, and complete ∆-flow to examine
+how the action and visual components contribute to learning efficiency. As shown in the ImageWAM LIBERO
+panel of Figure 3, action-only ∆-flow first reaches 90% success at epoch four, compared with epoch six for
+the original model. Applying ∆-flow to both actions and visual representations achieves over 90% LIBERO
+success after the first epoch. Thus, action-side ∆-flow accelerates learning on its own, while extending the
+formulation to the visual branch further reduces the training required to achieve high task success.
+12
+
+
+Generalization. We next compare the selected models on LIBERO-Plus to examine the contributions of the
+action and visual components under distribution shift. As shown in Table 3, action-only ∆-flow increases
+LIBERO-Plus success from 82.49% to 85.82%. Adding visual ∆-flow further raises success to 88.55%, an
+additional gain of 2.73 percentage points.
+Action-side ∆-flow already improves learning efficiency and
+generalization.
+Applying ∆-flow to both action and visual generation further accelerates learning and
+strengthens generalization under distribution shift.
+6.2
+Where Does Endpoint Consistency Help?
+Table 4 Endpoint consistency on ImageWAM. Success rates (%) are reported for the final trained models. The
+action-only model provides a reference. The visual endpoint-consistency ablation uses the 80% image-latent prior.
+Configuration
+LIBERO
+LIBERO-Plus
+∆-flow, action only
+98.10
+85.75
+∆-flow, action + visual (80% image-latent prior)
+97.70
+87.37
+w/o Lv
+EC
+98.60
+84.96
+Flow matching (Eq. (4)) supervises velocity along the interpolation path, whereas endpoint consistency
+(Eq. (5)) directly constrains the prediction obtained after one update from the source. We remove the visual
+endpoint loss to assess its contribution. Table 4 summarizes the experimental results.
+Removing the visual endpoint loss Lv
+EC from the 80% image-latent prior configuration lowers LIBERO-Plus
+success from 87.37% to 84.96%. The corresponding change on standard LIBERO is +0.90 percentage points.
+The visual comparison shows that endpoint consistency improves success under distribution shift, even though
+standard LIBERO success changes little.
+7
+Empirical Studies on Policy Design
+Beyond the components of ∆-flow itself, four further design choices must be settled before a history-based
+formulation can be deployed, and together they define the configuration used in our final models: (1) how
+much future visual prediction control actually needs; (2) whether gradients should be isolated between the
+world model and the action head; (3) whether the action branch still requires flow-matching supervision
+once its source is past-informed; and (4) how the action representation affects generalization. Although we
+settle them here for ∆-flow, the same questions arise in any policy that couples world modeling with action
+generation, and we expect the comparisons below to be informative beyond this work.
+Spatial
+Object
+Goal
+Long
+Overall
+90
+92
+94
+96
+98
+100
+Success rate (%)
+LIBERO (in distribution)
++0.6
+−0.4
++3.0
++3.0
++1.6
+98.15
+Spatial
+Object
+Goal
+Long
+Overall
+40
+50
+60
+70
+80
+90
+LIBERO-Plus (distribution shift)
++13.4
++2.8
++14.7
++12.5
++10.9
+78.09
+Fast-WAM
+Fast-WAM-Joint (dense, r=4)
+Fast-WAM-Joint (Sparse8, r=8)
+Figure 7 Success rates (%) of Fast-WAM variants on LIBERO and LIBERO-Plus. All models are jointly trained on the
+four LIBERO suites.
+13
+
+
+7.1
+How Much Future Does Control Need?
+Future visual context.
+Fast-WAM omits future video generation at inference, whereas Fast-WAM-Joint
+jointly predicts future visual representations and actions. As shown in Figure 7, the dense joint variant
+improves success from 96.60% to 97.95% on LIBERO and from 67.24% to 72.90% on LIBERO-Plus. The
+5.66-percentage-point increase on LIBERO-Plus, compared with 1.35 points on LIBERO, shows that future
+visual prediction benefits control particularly under distribution shift.
+Sparse future prediction. Over the same 32-step horizon, Fast-WAM-Joint-Sparse (Sparse8, r = 8) predicts four
+future frames instead of the eight used by the dense joint variant (r = 4), yet increases success from 97.95%
+to 98.15% on LIBERO and from 72.90% to 78.09% on LIBERO-Plus (Figure 7). These results favor sparse
+temporal coverage over dense frame prediction. Additional intermediate frames can introduce redundancy
+without providing more useful information for control. Our ImageWAM-based model predicts only a single
+future image and also achieves strong task performance (Table 1). Moreover, sparse future prediction can
+further reduce inference latency.
+Spatial
+Object
+Goal
+Long
+Overall
+90
+92
+94
+96
+98
+100
+Success rate (%)
+LIBERO (in distribution)
+0.0
+98.40
++0.4
+100.00
++1.6
+99.60
+−0.4
+96.40
++0.4
+98.60
+5
+10
+15
+20
+25
+30
+PSNR (dB)
+Future Frame
+Prediction
+15.04
+20.86
+Camera
+Robot init.
+Language
+Light
+Background
+Noise
+Layout
+Overall
+50
+60
+70
+80
+90
+100
+Success rate (%)
+LIBERO-Plus (distribution shift)
+−3.9
+72.67
++21.4
+78.65
+0.0
+87.64
+−5.7
+92.56
+−5.8
+89.31
+−2.9
+92.07
++5.0
+85.31
++1.7
+84.96
+Full gradient
+Stop-gradient
+Figure 8 Action-gradient transfer into the visual branch. Comparison across LIBERO suites, future-image prediction
+PSNR, and LIBERO-Plus perturbations. Black numbers in the success-rate panels report stop-gradient success rates.
+Blue annotations show differences from full gradient in percentage points.
+7.2
+Should the Action Loss Gradient Reach the World Model?
+Having examined how future visual prediction supports action generation, we next investigate whether
+action-loss gradients should update the visual branch. We compare full gradient with stop-gradient without
+visual endpoint consistency in our ImageWAM-based model. Full gradient allows action-loss gradients through
+the visual-to-action connection, whereas stop-gradient blocks them while preserving visual conditioning.
+Future-image prediction is evaluated on five tasks each from LIBERO-Goal and LIBERO-Object, using 250
+rollouts per configuration. One-step predictions are compared with ground-truth images 16 control steps
+ahead.
+As shown in Figure 8, stop-gradient achieves higher future-image PSNR and higher overall LIBERO-Plus
+success. With stop-gradient, the WAM visual branch learns future visual changes more accurately under
+visual supervision. Action generation conditioned on its intermediate representations also achieves higher
+overall success. These results suggest that allowing the visual branch to learn independently of action-loss
+gradients can benefit both future visual prediction and action generation in WAMs.
+14
+
+
+Spatial
+Object
+Goal
+Long
+Overall
+Camera
+Robot
+Language
+Light
+Background
+Noise
+Layout
+Overall
+70
+75
+80
+85
+90
+95
+100
+Success rate (%)
+LIBERO
+LIBERO-Plus
++0.4
+97.20
++0.4
+99.60
++1.2
+97.60
+−0.8
+96.40
++0.3
+97.70
+−3.3
+75.42
++1.1
+75.74
++1.3
+94.93
++3.1
+98.25
++0.5
+93.31
++0.9
+93.25
+−2.1
+85.57
++0.1
+87.37
+1 epoch
+2 epochs
+70
+75
+80
+85
+90
+95
+100
+Early LIBERO
++11.8
+89.90
++0.1
+94.00
+EC only
+FM+EC
+Figure 9 Action objectives in ImageWAM (success rate, %). Both models use the 80% image-latent prior. The action
+FM/EC weights are 1.0/0.5 for FM+EC and 0/1.0 for EC only; the visual objectives are unchanged. EC is L1 endpoint
+consistency.
+7.3
+Is Action Flow Matching Still Necessary?
+We next examine whether endpoint consistency alone can supervise the action branch in ImageWAM with
+the 80% image-latent prior. We remove action flow matching and increase the action endpoint-consistency
+weight from 0.5 to 1.0, while keeping the visual objectives unchanged. Detailed training settings are provided
+in Appendix D. As shown in the left and middle panels of Figure 9, endpoint-only training closely matches
+the combined objective. It achieves 97.40% success on LIBERO and 87.30% on LIBERO-Plus, compared
+with 97.70% and 87.37%, respectively. Endpoint consistency alone thus supports accurate one-step action
+prediction without supervising velocities along the interpolation path.
+Flow matching nevertheless improves early learning, as shown in the right panel of Figure 9. After one epoch,
+the combined objective achieves 89.90% LIBERO success, compared with 78.10% for endpoint consistency
+alone. By the second epoch, the two configurations achieve nearly identical success rates. Flow matching
+therefore helps the action branch learn faster early on, while endpoint consistency alone nearly matches its
+final one-step performance. We retain both objectives to combine faster early learning with accurate one-step
+prediction.
+7.4
+How to Choose Action Representation?
+The action representation defines the space in which ∆-flow learns history-to-future changes. Figure 10
+compares three representations: 7D local delta with axis-angle rotations, 7D absolute with axis-angle rotations,
+and 10D absolute with rotation-6D. The three control spaces are defined in Appendix E.
+With axis-angle rotations, the local-delta representation achieves 98.40% success on LIBERO and 85.82% on
+LIBERO-Plus, compared with 94.40% and 61.07% for the absolute representation. The difference is particularly
+pronounced under camera-viewpoint, background-texture, and sensor-noise perturbations. Absolute actions,
+however, perform better under robot-initial-state perturbations, indicating that the relative performance also
+depends on the type of distribution shift.
+Within the absolute-action configurations, rotation-6D increases success from 94.40% to 98.00% on LIBERO
+and from 61.07% to 71.67% on LIBERO-Plus. It performs better in six of the seven perturbation categories,
+with robot initial states as the exception. Although the 10D absolute representation approaches local-delta
+performance on standard LIBERO, its LIBERO-Plus success remains lower, at 71.67% versus 85.82%. Overall,
+local-delta actions achieve the highest aggregate success on both benchmarks, while rotation-6D performs
+better than axis-angle within the absolute-action configurations. These results show that action representation
+deserves consideration alongside source construction when learning history-to-future changes.
+15
+
+
+Spatial
+Object
+Goal
+Long
+Overall
+80
+85
+90
+95
+100
+Success rate (%)
+LIBERO (in distribution)
++0.8
+98.00
++0.4
+100.00
++8.0
+97.60
++6.8
+98.00
++4.0
+98.40
+Camera
+Robot
+Language
+Light
+Background
+Noise
+Layout
+Overall
+0
+20
+40
+60
+80
+100
+LIBERO-Plus (distribution shift)
++50.3
+82.86
+−8.3
+61.61
++28.2
+92.06
++8.8
+95.62
++50.2
+95.07
++36.4
+95.63
++9.8
+83.08
++24.8
+85.82
+7D absolute, axis-angle
+10D absolute, rotation 6D
+7D local delta, axis-angle
+Figure 10 Action representations on LIBERO and LIBERO-Plus. We compare 7D local delta actions with axis-angle rotations,
+7D absolute actions with axis-angle rotations, and 10D absolute actions with 6D rotations. The left panel shows success
+rates across LIBERO suites, and the right panel shows success rates across LIBERO-Plus perturbation categories.
+Black numbers report local-delta success. Blue annotations show local delta minus 7D absolute in percentage points.
+8
+Conclusion
+We revisited a design choice that flow-based robot policies take for granted: where generation begins. Visual
+states and actions both change continuously, so the recent past is already close to the future a policy must
+produce. Taking it as the flow source leaves only a small residual ∆to learn. ∆-flow builds such a source by
+perturbing the history with mild noise. The change touches mainly the source, so it integrates into existing
+backbones without new modules or extra data. ImageWAM reaches 90% LIBERO success in one epoch rather
+than six, while Fast-WAM reaches 95% in two epochs rather than eight. Complete one-step inference gives
+2.49× and 4.45× speedups over their ten-step Gaussian references. LIBERO-Plus success improves by 6.06
+points on ImageWAM and 3.07 points over the Gaussian sparse-joint Fast-WAM reference. On π0.5, the
+construction applies to actions alone. With LoRA fine-tuning, its first-epoch result exceeds the baseline’s
+five-epoch result, and it reaches 98.00% on LIBERO after five epochs. The approach also preserves action
+continuity at one step, and action-source replacement can improve a frozen Gaussian-trained WAM policy
+without retraining. These results support history-based sources as a practical design choice across robot
+foundation backbones.
+9
+Future Work
+The noise scale σm is a hyperparameter, although in practice it requires no tuning: all three backbones use
+the same action-source noise scale. Still, the history is not equally reliable throughout a trajectory (Jia et al.,
+2026a). Adapting σm per sample or per timestep, from the observation, from how fast the scene is changing,
+or learned together with the vector field, is a promising extension. Validating ∆-flow on more VLA backbones
+and on physical robots also remains future work.
+References
+Tuo An, Jindou Jia, Gen Li, et al. Feedback world model enables precise guidance of diffusion policy. In Advances in
+Neural Information Processing Systems, Sydney, Australia, 2026.
+Jiaqi Bai, Jindou Jia, Yuxuan Hu, et al. Flash: Efficient visuomotor policy via sparse sampling. In Advances in Neural
+Information Processing Systems, Sydney, Australia, 2026.
+Hongzhe Bi, Hengkai Tan, Shenghao Xie, et al.
+Motus: A unified latent action world model.
+arXiv preprint
+arXiv:2512.13030, 2025. https://arxiv.org/abs/2512.13030.
+Kevin Black, Noah Brown, James Darpinian, et al. π0.5: a vision-language-action model with open-world generalization.
+16
+
+
+In Proceedings of The 9th Conference on Robot Learning, volume 305 of Proceedings of Machine Learning Research,
+pages 17–40. PMLR, 2025a.
+Kevin Black, Noah Brown, Danny Driess, et al. π0: A vision-language-action flow model for general robot control. In
+Proceedings of Robotics: Science and Systems, 2025b.
+Qingwen Bu, Yanting Yang, Jisong Cai, et al. UniVLA: Learning to act anywhere with task-centric latent actions. In
+Proceedings of Robotics: Science and Systems, 2025. doi: 10.48550/arXiv.2505.06111. https://arxiv.org/abs/2505.
+06111.
+Kaiqi Chen, Eugene Lim, Kelvin Lin, et al. Don’t start from scratch: Behavioral refinement via interpolant-based
+policy diffusion. In Proceedings of Robotics: Science and Systems, Delft, Netherlands, July 2024.
+Ronghan Chen, Yandan Yang, Zuojin Tang, et al. ABot-M0.5: Unified mobility-and-manipulation world action model.
+arXiv preprint arXiv:2607.00678, 2026. https://arxiv.org/abs/2607.00678.
+Aram Davtyan, Sepehr Sameni, and Paolo Favaro. Efficient video prediction via sparsely conditioned flow matching.
+In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 23263–23274, October 2023.
+Jiahua Dong, Qi Lyu, Baichen Liu, et al. Learning to model the world: A survey of world models in artificial intelligence.
+TechRxiv, 2026.
+Senyu Fei, Siyin Wang, Junhao Shi, et al. LIBERO-Plus: A progressive robustness benchmark for visual-language-action
+models. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages
+38574–38583, 2026.
+Bohan Hou, Gen Li, Jindou Jia, et al. World model for robot learning: A comprehensive survey. The International
+Journal of Robotics Research, 2026.
+Edward J Hu, Yelong Shen, Phillip Wallis, et al. LoRA: Low-rank adaptation of large language models. In Proceedings
+of International Conference on Learning Representations, 2022.
+Jindou Jia, Tuo An, Yuxuan Hu, et al.
+MARS policy: multimodality only when it matters.
+arXiv preprint
+arXiv:2605.29766, 2026a.
+Jindou Jia, Gen Li, Xiangyu Chen, et al. Action-to-Action Flow Matching. In Proceedings of Robotics: Science and
+Systems, July 2026b.
+Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, et al. OpenVLA: An open-source vision-language-action model. In
+Proceedings of The 8th Conference on Robot Learning, volume 270 of Proceedings of Machine Learning Research,
+pages 2679–2713. PMLR, 2025.
+Moo Jin Kim, Yihuai Gao, Tsung-Yi Lin, et al. Cosmos policy: Fine-tuning video models for visuomotor control and
+planning. arXiv preprint arXiv:2601.16163, 2026. https://arxiv.org/abs/2601.16163.
+Jinhao Li, Yuxuan Cong, Yingqiao Wang, et al. STEP: Warm-started visuomotor policies with spatiotemporal
+consistency prediction. In Proceedings of the 43rd International Conference on Machine Learning, volume 306 of
+Proceedings of Machine Learning Research, pages 66501–66525. PMLR, 2026a.
+Lin Li, Qihang Zhang, Yiming Luo, et al. Causal world modeling for robot control. CoRR, abs/2601.21998, January
+2026b.
+Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, et al. Flow matching for generative modeling. In The Eleventh
+International Conference on Learning Representations, 2023.
+Bo Liu, Yifeng Zhu, Chongkai Gao, et al. LIBERO: Benchmarking knowledge transfer for lifelong robot learning. In
+Proceedings of Advances in Neural Information Processing Systems, volume 36, pages 44776–44791, 2023a.
+Chen Liu and Tobias Ritschel. Generative video bi-flow. In Proceedings of the IEEE/CVF International Conference on
+Computer Vision, pages 19363–19372, October 2025.
+Guan-Horng Liu, Arash Vahdat, De-An Huang, et al. I2SB: Image-to-Image Schrödinger Bridge. In Proceedings of
+the 40th International Conference on Machine Learning, volume 202 of Proceedings of Machine Learning Research,
+pages 22042–22062. PMLR, 2023b.
+Cheng Lu, Yuhao Zhou, Fan Bao, et al. DPM-Solver: A fast ODE solver for diffusion probabilistic model sampling in
+around 10 steps. In Advances in Neural Information Processing Systems, volume 35, 2022.
+17
+
+
+Karl Pertsch, Kyle Stachowicz, Brian Ichter, et al. FAST: Efficient action tokenization for vision-language-action
+models. In Proceedings of Robotics: Science and Systems, 2025.
+Aaditya Prasad, Kevin Lin, Jimmy Wu, et al. Consistency policy: Accelerated visuomotor policies via consistency
+distillation. In Proceedings of Robotics: Science and Systems, 2024.
+Moritz Reuss, Hongyi Zhou, Marcel Rühle, et al. FLOWER: Democratizing generalist robot policies with efficient
+vision-language-flow models. In Proceedings of The 9th Conference on Robot Learning, volume 305 of Proceedings of
+Machine Learning Research, pages 3736–3761. PMLR, 2025.
+Jonas Scholz and Richard E Turner. Warm starts accelerate conditional diffusion. arXiv preprint arXiv:2507.09212,
+2025.
+Yang Song, Prafulla Dhariwal, Mark Chen, et al. Consistency models. In Proceedings of the 40th International
+Conference on Machine Learning, volume 202 of Proceedings of Machine Learning Research, pages 32211–32252.
+PMLR, 2023.
+Jinghan Yang, Yunchao Zhang, Wang Yuan, et al. Tri-info: Generalizable, interpretable failure prediction for vla
+models via information theory. arXiv preprint arXiv:2606.19998, 2026.
+Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, et al. World action models are zero-shot policies. CoRR, abs/2602.15922,
+February 2026.
+Tianyuan Yuan, Zibin Dong, Yicheng Liu, et al. Fast-WAM: Do world action models need test-time future imagination?
+In Advances in Neural Information Processing Systems, 2026.
+Qinglun Zhang, Zhen Liu, Haoqiang Fan, et al. FlowPolicy: Enabling fast and robust 3d flow-based policy via
+consistency flow matching for robot manipulation. Proceedings of the AAAI Conference on Artificial Intelligence, 39
+(14):14754–14762, 2025.
+Yuyang Zhang, Wenyao Zhang, Zekun Qi, et al. ImageWAM: Do world action models really need video generation, or
+just image editing? In Proceedings of the 10th Conference on Robot Learning, 2026a.
+Zhanguang Zhang, Zhiyuan Li, Behnam Rahmati, et al. Do world action models generalize better than VLAs? a
+robustness study. arXiv preprint arXiv:2603.22078, 2026b. https://arxiv.org/abs/2603.22078.
+Yi Zhou, Connelly Barnes, Jingwan Lu, et al. On the continuity of rotation representations in neural networks. In
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 5745–5753, 2019.
+Brianna Zitkovich, Tianhe Yu, Sichun Xu, et al. RT-2: Vision-language-action models transfer web knowledge to
+robotic control. In Proceedings of The 7th Conference on Robot Learning, volume 229 of Proceedings of Machine
+Learning Research, pages 2165–2183. PMLR, 2023.
+18
+
+
+A
+Training and Implementation Details
+Table 5 summarizes the training hyperparameters. Model-specific inputs, sources, and objectives are described
+below.
+Table 5 Training hyperparameters for ImageWAM, Fast-WAM-joint, and π0.5. Full and LoRA denote full-parameter
+and LoRA fine-tuning, respectively. Batch size is global.
+Setting
+ImageWAM
+Fast-WAM-joint
+π0.5 (Full)
+π0.5 (LoRA)
+Training hardware
+8× A100
+8× A100
+8× A100
+8× A100
+Batch size
+80
+128
+384
+384
+Training epochs
+10
+10
+10
+5
+Optimizer
+AdamW
+AdamW
+AdamW
+AdamW
+Peak learning rate
+10−4
+10−4
+5 × 10−5
+5 × 10−5
+Warmup
+5% of steps
+5% of steps
+100 steps
+100 steps
+Learning-rate decay
+Cosine
+Cosine
+Cosine
+Cosine
+Final learning rate
+10−6
+10−6
+5 × 10−6
+5 × 10−6
+ImageWAM and Fast-WAM-joint use AdamW with (β1, β2) = (0.9, 0.95) and weight decay 0.01. Both use one
+gradient-accumulation step; their per-device batch sizes are 10 and 16, respectively. Full-parameter and LoRA
+fine-tuning of π0.5 use JAX FSDP without exponential moving average.
+A.1
+ImageWAM Setup
+Backbone, data, and inputs.
+We implement ImageWAM in PyTorch with the FLUX.2-klein-base-4B image-
+editing backbone and an action DiT (Zhang et al., 2026a). We update both DiTs and the proprioception
+encoder while freezing the VAE and text encoder. The action DiT starts from the ImageWAM action-backbone
+initialization checkpoint, with its initial output-head weights multiplied by 0.1. Training uses the four LIBERO
+suites in no-no-op LeRobot format. External-camera and wrist-camera images are resized to 224 × 224 and
+concatenated horizontally into a 224 × 448 input. Each example pairs a language instruction and the current
+image at time t with the future image at t + 16 and a 16-action target chunk. Future images are training
+targets, not observations supplied at deployment. The action expert uses layer-wise visual key–value features,
+detached at the visual-to-action connection, as illustrated in Figure 2 (left). Table 6 summarizes the temporal
+layout and inference settings.
+Table 6 Temporal layout and inference settings of ImageWAM with ∆-flow. Future-frame offsets are measured in
+environment steps relative to decision time t.
+Setting
+ImageWAM (∆-flow)
+Prediction horizon
+16 steps
+Action chunk length
+16 commands
+Action history length
+16 commands
+Executed actions before replanning
+12 commands
+Future frame offset
+16
+Number of future frames
+1
+Visual sampling steps
+1
+Action sampling steps
+1
+Sources and objectives.
+The action history contains the previous 16 executed commands, normalized using
+the run’s min/max statistics. We use αa = 1 and σa = 0.5 in Eq. (3); ba excludes the gripper from source
+noise. The principal visual source is (hv + ϵv)/
+√
+2, a 50% image-latent prior. The percentage is the relative
+squared coefficient α2
+v/(α2
+v + σ2
+v), not a fraction of latent tokens. The 80% variant uses hv + 0.5ϵv. With
+λa = 1, λv = 0.5, and λa
+EC = λv
+EC = 0.5, Eq. (9) becomes
+LWAM = La
+FM + 0.5La
+EC + 0.5Lv
+FM + 0.25Lv
+EC.
+(11)
+19
+
+
+Removing an endpoint-consistency loss sets its coefficient to zero. In the endpoint-only action comparison,
+action FM and EC weights change from (1, 0.5) to (0, 1); both runs use the 80% image-latent prior and the
+same visual objectives.
+Inference and evaluation.
+The complete model uses one visual and one action Euler update. It predicts
+a 16-action chunk and executes 12 actions before replanning from a new observation and updated history.
+Aggregation and timing procedures are specified in Appendix B; frozen-policy source replacement is described
+in Appendix C.
+A.2
+Fast-WAM Setup
+Backbone, data, and inputs.
+We implement the joint-attention variant of Fast-WAM in PyTorch with the
+Wan2.2-TI2V-5B video backbone and an action DiT (Yuan et al., 2026). Training uses the four LIBERO
+suites in no-no-op LeRobot format. External-camera and wrist-camera images are resized to 224 × 224 and
+concatenated into a 224×448 input. Visual and action tokens interact through joint attention, with action-loss
+gradients blocked at the visual-to-action connection (Figure 2, left).
+Dense and sparse joint configurations.
+Fast-WAM-Joint-Dense and Fast-WAM-Joint-Sparse retain joint
+video–action attention and a 32-action prediction horizon. They differ in the temporal sampling of the visual
+clip. At decision time t, the dense configuration samples the current frame and eight future frames at stride
+r = 4, whereas the sparse configuration (Sparse8) samples the current frame and four future frames at stride
+r = 8. Thus, both reach t + 32, with nine versus five sampled frames including the current conditioning frame.
+The action chunk still contains 32 consecutive commands in both configurations. Table 7 specifies the two
+layouts. Sparse8 refers to the temporal frame stride; the joint-attention architecture is retained.
+Table 7 Temporal layouts of the dense and sparse Fast-WAM-Joint configurations. Offsets are measured in environment
+steps relative to decision time t. Future-frame counts exclude the current conditioning frame.
+Setting
+Joint-Dense
+Joint-Sparse (Sparse8)
+Prediction horizon
+32 steps
+32 steps
+Action chunk length
+32 commands
+32 commands
+Visual sampling stride r
+4
+8
+Future frame offsets
+{4, 8, 12, 16, 20, 24, 28, 32}
+{8, 16, 24, 32}
+Number of future frames
+8
+4
+Clip frames including the current frame
+9
+5
+Future latent temporal slices
+2
+1
+Future visual tokens
+196
+98
+The sampled clips are encoded with the Wan VAE’s causal fourfold temporal compression, yielding two
+future latent temporal slices for the dense layout and one for Sparse8. With the 224 × 448 two-camera input
+and the configured tokenization, these correspond to 196 and 98 future visual tokens, respectively; these
+counts exclude current-frame conditioning and action tokens. The Gaussian sparse-joint baseline and our
+complete ∆-flow model use the same Sparse8 layout. History-based sources, endpoint-consistency objectives,
+and action-to-video gradient isolation are specified separately below. The dense-versus-sparse comparison is
+reported in Section 7.1, and measured inference latency is reported in Figure 5.
+Sources and objectives.
+The action source uses the previous 32 executed commands in the run’s min/max-
+normalized space, with αa = 1 and σa = 0.5. Source noise is applied to continuous motion dimensions
+but not the gripper. The observed visual source clip samples frames at {t −32, t −24, t −16, t −8, t}, all
+available at decision time t. These frames are encoded and arranged by Pv in the future-video latent layout
+to construct hv, and the visual source is (hv + ϵv)/
+√
+2, a 50% visual-latent prior with αv = σv = 1/
+√
+2 in
+Eq. (3). Action FM uses visual features at sampled flow times; action EC uses features from the visual source.
+We set λa = λv = 1 and λa
+EC = λv
+EC = 0.5, giving
+LWAM = La
+FM + 0.5La
+EC + Lv
+FM + 0.5Lv
+EC.
+(12)
+20
+
+
+The Gaussian sparse-joint baseline uses the same joint-attention architecture and future-token layout. Compar-
+isons specify matched visual and action sampling budgets; the complete model additionally uses history-based
+sources, endpoint consistency, and gradient isolation.
+Inference and evaluation.
+The complete model uses one visual and one action Euler update, producing a
+future visual-latent prediction and an action chunk without decoding the visual endpoint. LIBERO-trained
+checkpoints are evaluated directly on LIBERO and LIBERO-Plus without additional fine-tuning. Shared
+aggregation and latency procedures are given in Appendix B; training-free source replacement is described in
+Appendix C.
+A.3
+π0.5 Setup
+Backbone and fine-tuning.
+We initialize π0.5 from the official pi05_base checkpoint and implement action
+∆-flow in JAX (Black et al., 2025a). Fine-tuning uses physical-intelligence/libero. The main results in
+Figure 3 use full-parameter fine-tuning. In the additional LoRA experiments, the vision-language Transformer
+uses rank-16 LoRA with scaling parameter 16, and the action-expert Transformer uses rank-32 LoRA with
+scaling parameter 32. Non-LoRA parameters in these Transformers are frozen; the visual encoder and
+action/time projection layers remain trainable. We use continuous state input and supervise seven action
+dimensions. No visual generation branch is added (Figure 2, right). Table 8 summarizes the action-chunk and
+inference settings.
+Table 8 Action-chunk and inference settings of π0.5 with action ∆-flow.
+Setting
+π0.5 (∆-flow)
+Prediction horizon
+10 steps
+Action chunk length
+10 commands
+Action history length
+10 commands
+Executed actions before replanning
+5 commands
+Action dimensions
+7
+Action sampling steps
+1
+Source and objective.
+The action source contains the previous ten executed actions in the checkpoint’s
+quantile-normalized action space. We set αa = 1 and σa = 0.5; ba excludes gripper and padded dimensions
+from source noise. The future target is the next ten-action chunk. We set λa
+EC = 0.5 in Eq. (6), so the
+objective is
+LVLA = La
+FM + 0.5La
+EC.
+(13)
+Action EC uses the L1 discrepancy between the one-step endpoint and target, as defined in Eq. (5).
+Inference and evaluation.
+Action ∆-flow uses one Euler update and replans after five executed actions.
+We evaluate the model on LIBERO at the end of each epoch. Full-parameter models are evaluated on
+LIBERO-Plus. LIBERO-Plus aggregation follows Appendix B.
+The Gaussian-source π0.5 baseline is evaluated with ten-step and one-step Euler sampling.
+B
+Evaluation Protocols
+B.1
+Task Success and Aggregation
+Standard LIBERO contains Spatial, Object, Goal, and Long suites.
+The four suites organize tasks by their original LIBERO grouping. The seven perturbation categories organize
+LIBERO-Plus instances by camera viewpoints, robot initial states, language instructions, light conditions,
+background textures, sensor noise, and object layouts.
+For LIBERO, Overall is pooled success, P
+s Ss/ P
+s Ns, where Ss and Ns are successes and evaluations in suite
+s. LIBERO-Plus results are reported by perturbation category and task suite, together with Overall success.
+21
+
+
+All breakdowns are obtained from the same evaluation records. Categories follow the official task-index
+mapping. Published results retain the aggregation used in their original reports.
+B.2
+Inference Protocol
+We evaluate the Gaussian-source baselines with ten-step and one-step sampling to compare task success and
+latency at different inference budgets. The complete WAM variants use one visual and one action Euler
+update. The π0.5 ∆-flow policy uses one action Euler update. Original ImageWAM and Fast-WAM omit
+future visual prediction at inference, whereas the joint Fast-WAM variants retain future visual tokens. The
+complete ∆-flow models condition action generation on intermediate visual features without decoding future
+RGB images. Policies execute part of each predicted action chunk before replanning from a new observation.
+Model-specific chunk lengths and execution horizons follow Appendices A.1, A.2, and A.3.
+B.3
+Latency
+The latest measurements use one NVIDIA A100-SXM4-80GB GPU, batch size one, and online text encoding.
+Timing covers the complete local policy-call pipeline: text encoding, image preprocessing, visual source
+construction, model prediction, and action postprocessing. This includes ImageWAM image encoding and the
+historical-video VAE encoding used by complete Fast-WAM. Model loading, compilation, warmup, simulator
+stepping, rendering, communication, and decoding future RGB images are excluded.
+The WAM implementations use BF16, and the π0.5 measurements use JAX LoRA models. Solver budgets are
+compared within each model. The same complete local policy-call timing boundary applies to training-free
+source comparisons in Appendix C. Speedup is computed by dividing the reference mean latency by the
+candidate mean latency.
+B.4
+Action Continuity
+The four-way ImageWAM comparison uses Original ImageWAM with ten or one Gaussian action updates,
+action-only ∆-flow with one update, and the complete model with one update. Trajectories are matched by
+task and initial state across the four methods.
+Action change and action jerk are defined as
+D1 = meant ∥at −at−1∥2,
+D2 = meant ∥at −2at−1 + at−2∥2.
+(14)
+Boundary jump uses the same first difference only at recorded chunk switches. Metrics are computed per
+trajectory and then averaged across trajectories. Boundary-aligned plots define step zero as the first executed
+action of the new chunk.
+Table 9 Trajectory-averaged action jerk on ImageWAM. Results are averaged over 20 matched successful trajectories
+from all ten LIBERO-Long tasks, using the first six action-command dimensions and excluding the gripper. Lower is
+better.
+Method
+Steps
+Mean action jerk ↓
+Gaussian
+10
+0.04221
+Gaussian
+1
+0.19399
+∆-flow, action only
+1
+0.04185
+∆-flow, action + visual
+1
+0.04335
+Trajectory weighting and boundary alignment.
+The trajectory-level metrics give each matched trajectory
+equal weight, regardless of episode length. For boundary-aligned curves, we first extract windows from
+five control steps before to five steps after each chunk switch. Only boundaries with a complete window
+are included. We average the windows within each trajectory and then average the resulting curves across
+trajectories. A longer trajectory with more chunk switches therefore does not automatically receive greater
+weight in the plotted mean.
+22
+
+
+C
+Training-Free Source Adaptation
+Source construction.
+We keep the pretrained policy frozen and modify its inference-time source without
+updating model parameters. Action-source adaptation uses the executed action history with αa = 1 and
+σa = 0.5, with noise restricted to continuous pose dimensions.
+Evaluation and timing.
+Comparisons use the same frozen weights, inputs, hardware, and solver budget
+within each policy. Latency follows the complete local policy-call timing protocol in Appendix B, including
+source construction.
+D
+Action-Objective Training Details
+Both configurations use ImageWAM with the 80% image-latent source and retain visual flow matching and
+visual endpoint consistency. The combined action objective assigns weights of 1.0 to flow matching and 0.5 to
+endpoint consistency. Endpoint-only action training sets these weights to 0.0 and 1.0, respectively. Action
+endpoint consistency uses the L1 discrepancy between the one-step prediction and the future action target.
+The remaining ImageWAM training settings are given in Appendix A.1.
+E
+Action Representation and Control
+7D local delta actions.
+The action contains three position increments, three axis–angle rotation increments,
+and one gripper command. The position and rotation increments describe how the end effector should move
+from its current pose.
+7D absolute actions.
+The action contains three target-position values, three axis–angle values for the target
+orientation, and one gripper command. Instead of predicting a pose change, the policy directly specifies the
+end-effector pose to reach.
+10D absolute actions with rotation-6D.
+This action specifies the same type of target pose, but uses six values
+to represent orientation. It contains three target-position values, six rotation values, and one gripper command.
+The six rotation values encode the first two columns of the target rotation matrix. Before execution, they are
+converted into a valid rotation matrix by orthonormalization (Zhou et al., 2019), then into the absolute pose
+command accepted by the controller.
+23

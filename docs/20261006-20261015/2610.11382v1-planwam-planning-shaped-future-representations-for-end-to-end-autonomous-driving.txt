@@ -1,0 +1,1856 @@
+Preprint
+PLANWAM: PLANNING-SHAPED FUTURE REPRESEN-
+TATIONS FOR END-TO-END AUTONOMOUS DRIVING
+Jinchang Xu1,†, Hongda Yu2,†, Fengwei Dong1, Wenhui Huang3, Xi Wei2,‡, Yongzhi Liu1,
+Sunan Zhang1, Jirao Wang4, Chen Lv3, Bingbing Li1, Guodong Yin1, Weichao Zhuang1,*
+1 Southeast University, 2 NIO, 3 Nanyang Technological University, 4 Tongji University
+Project Page: https://jinchan9.github.io/PlanWAM_project_page
+ABSTRACT
+World models in end-to-end autonomous driving predict future scene evolution to
+provide foresight for trajectory planning. Existing methods mainly study how to
+predict the future and how to use it, but less often ask which future representa-
+tion is actually most useful for planning. To this end, we propose PlanWAM, a
+Planning-Shaped World Action Model. The key idea is to let the planning task
+shape the future-state representation, so that it retains the information most useful
+for planning. A latent world model then predicts this planning-shaped future la-
+tent representation from historical observations and uses it for planning, enabling
+foresighted planning. Specifically, we first use a Temporal Register Pyramid to
+compress multi-frame historical information in a recency-aware manner, learning
+a compact history representation oriented toward future reasoning and planning.
+We then introduce a privileged future posterior branch that observes ground-truth
+future frames, and shape its future latent representation with trajectory-planning
+objectives to obtain a planning-shaped future latent representation. Hindsight-to-
+Foresight Distillation trains a prior branch that depends only on history to predict
+this future latent representation. The predicted future latent representation serves
+as planning context and guides trajectory generation and selection. PlanWAM
+achieves 93.8 PDMS / 90.9 EPDMS on NAVSIM-v1/v2 navtest and reaches 38.7
+HD-Score on closed-loop HUGSIM in a zero-shot setting, demonstrating leading
+planning performance across both open-loop and closed-loop evaluations. Exten-
+sive experiments further demonstrate that planning-shaped future representations
+provide an effective and deployable form of foresight for world-action models.
+1
+INTRODUCTION
+End-to-end autonomous driving uses a unified model to plan future trajectories directly from raw
+sensor observations, so that scene representations can be learned for the final planning objec-
+tive Codevilla et al. (2018); Hu et al. (2023); Jiang et al. (2023); Liao et al. (2025). Reliable driving,
+however, depends on more than the current observation. A planner must also use history to iden-
+tify motion trends and interactions among traffic participants, and to infer possible future scene
+evolution. World models have therefore become an important research direction for end-to-end au-
+tonomous driving Wang et al. (2024a); Zheng et al. (2024); Zhou et al. (2025a). By modeling how
+the scene evolves over time and with vehicle behavior, they supply future information to the planner,
+shifting trajectory planning from reacting to the current scene toward foresighted planning.
+Existing driving world models have gradually evolved in how they represent and use future informa-
+tion, moving from pixel reconstruction to latent prediction and then to future-conditioned planning
+(Fig. 1). Early methods, such as Epona Zhang et al. (2025) and PWM Zhao et al. (2025), learn
+environment dynamics by generating future images, videos, or dense scene states, but they often
+have to model substantial visual detail that is only weakly related to planning, at a high generation
+cost. Later methods, such as LAW Li et al. (2025a) and Latent-WAM Wang et al. (2026b), turn to
+†These authors contributed equally to this work. Work done during an internship at NIO.
+‡Project leader.
+∗Corresponding author: wezhuang@seu.edu.cn
+1
+arXiv:2610.11382v1  [cs.RO]  8 Oct 2026
+
+
+Preprint
+latent world modeling and predict future states in a compact feature space. Their future representa-
+tions mainly serve as prediction targets or auxiliary supervision, so the effect on planning remains
+indirect. Recent methods, such as DriveFuture Hong et al. (2026) and WorldDrive Gui et al. (2026),
+further introduce the predicted future latent explicitly into the trajectory planner, so that future infor-
+mation can participate in planning directly. Even so, most existing methods focus on how to predict
+the future and how to use it, and less often study a more basic question: which future representation
+is most useful for planning? Existing future representations are usually defined through pixel-level
+reconstruction or image latent prediction, such as DINO, JEPA, or BEV feature, and may therefore
+be mismatched with the downstream planning objective: a future representation that can reconstruct
+the scene does not necessarily retain the key information that affects trajectory decisions.
+Figure 1: Four future-modeling paradigms in driving World Action Models (WAMs). (a) Pixel
+reconstruction. (b) Latent prediction. (c) Future-conditioned planning. (d) PlanWAM (ours).
+We reformulate future modeling in end-to-end driving as a planning-oriented predictive represen-
+tation learning problem: a world model must not only predict the future, but also learn which fu-
+ture information is worth predicting. For autonomous driving, an effective representation need not
+fully retain historical observations or reconstruct the future scene, but should focus on informa-
+tion relevant to trajectory planning. The history representation should capture dynamic cues from
+multi-frame, multi-view observations that are essential for future reasoning and planning, while
+the future representation should be shaped directly by trajectory planning objectives to prioritize
+decision-relevant future information. Furthermore, a future representation intended for planning
+should be predictable from historical observations and serve as foresight for trajectory planning.
+From this perspective, we unify historical modeling, future prediction, and trajectory planning into
+a planning-shaped predictive representation learning framework, where planning defines what fu-
+ture information matters, future prediction guides which historical information is retained, and the
+resulting future representation in turn improves planning.
+Building on this perspective, we propose PlanWAM, a Planning-Shaped World Action Model, as
+illustrated in Fig. 1(d). First, we compress multi-frame, multi-view historical observations in a
+recency-aware manner and learn a compact history representation under joint future-prediction and
+planning supervision, preserving key dynamic cues for future reasoning.
+We then introduce a
+training-only privileged future posterior branch that leverages ground-truth future observations to
+construct a future latent representation, whose representation space is shaped by trajectory planning
+objectives to obtain a planning-shaped future latent representation. Since future observations are un-
+available at deployment, Hindsight-to-Foresight Distillation trains a prior branch conditioned only
+on history to predict this representation, thereby converting privileged hindsight during training into
+deployable foresight at inference time. The predicted future representation is fused with the history
+representation as a foresight planning context to guide trajectory generation and selection, enabling
+Foresight-Conditioned Planning. Our main contributions are as follows:
+• We reformulate future modeling in end-to-end driving as a planning-oriented predictive
+representation learning problem, where the future representation is shaped directly by tra-
+jectory planning objectives rather than predefined reconstruction or generic prediction ob-
+jectives, so that it preferentially encodes decision-relevant future information.
+• We propose PlanWAM, which extracts a compact history representation for future reason-
+ing, learns planning-shaped future latents from ground-truth future observations and plan-
+2
+
+
+Preprint
+ning objectives, and uses Hindsight-to-Foresight Distillation to predict this representation
+from history as foresight for trajectory generation and selection.
+• PlanWAM achieves 93.8 PDMS / 90.9 EPDMS on NAVSIM-v1/v2 navtest and 38.7
+HD-Score in zero-shot closed-loop evaluation on HUGSIM. Further analyses show that
+planning-shaped future representations improve trajectory generation and selection while
+reducing safety-critical failures, including collisions and low-TTC events.
+2
+RELATED WORK
+2.1
+END-TO-END AUTONOMOUS DRIVING
+End-to-end autonomous driving uses a unified model to plan future trajectories directly from raw
+sensor observations, thereby reducing information loss and cascading errors in traditional modular
+systems. Early methods, such as UniAD Hu et al. (2023), VAD Jiang et al. (2023), SparseDrive Sun
+et al. (2025), and TransFuser Chitta et al. (2023), used structured scene representations and multi-
+task learning to jointly model perception, prediction, and planning. Subsequent methods, such
+as iPad Guo et al. (2026), DrivoR Kirby et al. (2026), DiffusionDrive Liao et al. (2025), and
+GoalFlow Xing et al. (2025), adopt multimodal and generative trajectory planning to capture di-
+verse and uncertain driving behaviors. More recent methods, such as ReCogDrive Li et al. (2026c),
+AutoVLA Zhou et al. (2025b), Orion Fu et al. (2025), and Qwen-Drive-1.0 Zhou et al. (2026b),
+introduce vision-language and vision-language-action models to strengthen semantic understanding
+and reasoning. Although these methods keep improving scene representation and trajectory plan-
+ning, they still decide mainly from current or historical observations and make limited use of future
+scene evolution. In contrast, PlanWAM uses a world model to predict a future representation useful
+for planning, and guides trajectory generation and evaluation with that foresight.
+2.2
+WORLD MODELS FOR AUTONOMOUS DRIVING
+World models provide foresight for end-to-end driving by modeling how the scene evolves over
+time and under vehicle behavior. Existing driving world models fall into two lines. One line, such
+as DriveDreamer Wang et al. (2024a), Drive-WM Wang et al. (2024b), Vista Gao et al. (2024),
+Epona Zhang et al. (2025), and PWM Zhao et al. (2025), focuses on generating and simulating
+the future real world. These methods learn traffic evolution by predicting images, videos, or struc-
+tured scene states such as BEV, and mainly study generation quality, temporal consistency, action
+controllability, and long-horizon prediction. The other line, such as LAW Li et al. (2025a), Latent-
+WAM Wang et al. (2026b), World4Drive Zheng et al. (2025), DriveFuture Hong et al. (2026), and
+WorldDrive Gui et al. (2026), focuses on the role of world modeling in the driving task itself, learn-
+ing dynamic scene representations by predicting future features or latent states and further assisting
+or directly participating in trajectory planning. These studies show that future modeling can provide
+a useful dynamic prior for end-to-end driving. Existing work, however, mainly studies how to pre-
+dict future features more effectively and how future information is used, and less often asks, from
+the planning objective itself, what the future representation should encode. In contrast, PlanWAM
+studies which future representation is most useful for planning and shapes the future latent repre-
+sentation directly with planning objectives, so that the latent preferentially extracts the key future
+information relevant to planning decisions.
+3
+METHOD
+3.1
+PROBLEM FORMULATION AND FRAMEWORK OVERVIEW
+Let vt−n:t denote the historical multi-view camera observations, ct−n:t the corresponding ego states
+and navigation information, and τ1:T the future ego trajectory to be planned. A conventional end-
+to-end planner directly models:
+p(τ1:T | vt−n:t, ct−n:t).
+To use future scene evolution explicitly, future-conditioned WAMs (Fig. 1(c)) introduce a future-
+state representation z+
+t between historical observations and trajectory planning, and factorize the
+3
+
+
+Preprint
+process as:
+p(τ1:T , z+
+t | vt−n:t, ct−n:t) = p(z+
+t | vt−n:t, ct−n:t) p(τ1:T | vt−n:t, ct−n:t, z+
+t ).
+(1)
+This factorization lets future information participate in planning, but it also raises a key question:
+how should z+
+t be defined and constructed so that it is more beneficial for trajectory planning?
+Existing methods typically define the future representation by pixel reconstruction or image latent
+prediction, such as DINO, JEPA, or BEV feature, but such a representation is not necessarily the
+most useful for planning. To this end, we propose PlanWAM, as illustrated in Fig. 2.
+Figure 2: Overview of PlanWAM. Historical multi-view observations are compressed into a com-
+pact representation for future reasoning. The privileged posterior branch uses ground-truth future
+observations and planning objectives to learn planning-shaped future latents, which are distilled into
+a prior branch conditioned only on history. The predicted future latents then serve as foresight for
+trajectory generation and selection. The posterior is training-only; inference uses only the prior.
+We first use a history compression module Eη to compress multi-frame, multi-view historical ob-
+servations in a recency-aware manner, yielding a compact history representation:
+ht = Eη(vt−n:t, ct−n:t).
+(2)
+During training, we further introduce a privileged posterior branch Pϕ, hereafter referred to as the
+posterior, which accesses ground-truth future observations and constructs a future latent representa-
+tion:
+z+
+t = Pϕ
+ ht, vt+1:t+T , ct+1:t+T
+
+.
+(3)
+Rather than supervising z+
+t with pixel-level reconstruction or image-latent prediction objectives, we
+directly condition trajectory generation and selection on z+
+t :
+τ1:T ∼πϕ(ht, z+
+t ).
+(4)
+The future latent space is therefore shaped jointly by the trajectory generation and trajectory se-
+lection, so that z+
+t preferentially encodes future information that affects planning. We refer to this
+representation as a planning-shaped future representation.
+However, the future observations vt+1:t+T and ct+1:t+T are unavailable at deployment. PlanWAM
+therefore learns a prior branch Pθ, hereafter referred to as the prior, which depends only on the
+history representation and is trained by Hindsight-to-Foresight Distillation to predict z+
+t :
+ˆz+
+t = Pθ(ht),
+ˆz+
+t ≈z+
+t .
+(5)
+The predicted planning-shaped future representation ˆz+
+t is fused with the compact history represen-
+tation ht as a foresight planning context to guide trajectory generation and selection:
+τ1:T ∼πθ(ht, ˆz+
+t ).
+(6)
+At inference, the planning process of PlanWAM can be expressed as:
+p(τ1:T , ˆz+
+t | vt−n:t, ct−n:t) = pθ(ˆz+
+t | ht) pθ(τ1:T | ht, ˆz+
+t ).
+(7)
+4
+
+
+Preprint
+3.2
+RECENCY-AWARE HISTORY REPRESENTATION
+Multi-frame, multi-view historical observations contain substantial temporal redundancy, and infor-
+mation from different temporal ranges has different value for planning. To this end, we propose a
+Temporal Register Pyramid that compresses historical scene registers level by level in a recency-
+aware manner, retaining, under a limited token budget, the dynamic information relevant to future
+reasoning and trajectory planning, as illustrated in Fig. 3.
+Given the historical observations vt−n:t and ego context ct−n:t, a shared visual encoder maps the
+k-th camera observation vk
+i at time i to visual tokens and further extracts scene registers rk
+i ; the ego
+state and navigation information ci are encoded by an MLP into an ego feature ei:
+xk
+i = Fvis(vk
+i ),
+rk
+i = Freg(xk
+i ),
+ei = Fego(ci).
+(8)
+We partition the history into L temporal levels {Gl}L
+l=1 according to temporal distance, and assign
+different query budgets: recent levels use more learnable queries, whereas more distant history is
+compressed more strongly. For the l-th level, the queries Q(l) are fused with the ego feature as
+well as time, camera, and compression-level embeddings; the scene registers at the current time are
+aggregated into a shared current-scene context ¯rt:
+˜Q(l) = Q(l) + E(l)
+time + E(l)
+cam + E(l)
+level + E(l)
+ego + ¯rt.
+(9)
+We then apply a Q-Former (Li et al., 2023) to perform compression of the historical information,
+using ˜Q(l) as Q and the scene registers R(l) of the corresponding level as K and V :
+h(l)
+t
+= QFormer
+ Q = ˜Q(l), K = R(l), V = R(l)
+,
+R(l) = Concati∈Gl, k rk
+i .
+(10)
+The compressed tokens from all levels constitute the compact history representation ht. We do not
+use an additional historical reconstruction objective; instead, ht is jointly optimized by the subse-
+quent future-latent distillation objective Llatent and the trajectory-planning objective Ltask, so that
+it focuses on the information required for future prediction and trajectory planning.
+Figure 3: Temporal Register Pyramid for Recency-Aware History Representation.
+3.3
+PLANNING-SHAPED FUTURE REPRESENTATION
+Given the compact history representation ht from Sec. 3.2, we construct a privileged posterior during
+training using future observations. For the future observations vt+1:t+T , a shared visual encoder
+extracts scene registers rk
+i for each time and camera in the same way as for historical observations,
+and adds the corresponding future-time embedding Efut
+time to form future queries:
+f +
+t = Concati,k
+
+rk
+i + Efut
+time(i −t)
+
+,
+i ∈{t + 1, . . . , t + T}.
+(11)
+Rather than using randomly initialized learnable queries, the privileged posterior Pϕ takes f +
+t
+formed from ground-truth future scene registers directly as queries, and uses the history repre-
+sentation ht as context. The posterior world model WMpost
+ϕ
+aggregates historical evidence and
+ground-truth future information to obtain the posterior future latent z+
+t :
+z+
+t = Pϕ(ht, f +
+t ) = WMpost
+ϕ
+ Q = f +
+t , K = ht, V = ht
+
+.
+(12)
+We do not apply an additional generic reconstruction objective to the future latent z+
+t . Instead, we
+concatenate z+
+t with the history representation ht to form a posterior planning context m+
+t , adding
+5
+
+
+Preprint
+type embeddings before concatenation to distinguish historical evidence from future context. The
+resulting m+
+t is used for both trajectory planner and trajectory scorer:
+m+
+t = Concat
+ ht + Ehist
+type, z+
+t + Efut
+type
+
+,
+τ +
+1:T = Gplan(m+
+t ),
+s+ = Gscore(τ +
+1:T , m+
+t ). (13)
+The posterior is supervised by the trajectory generation and trajectory selection objectives:
+Lpost = Lplan + Lscore.
+(14)
+The planning losses can therefore back-propagate through the planner and the scorer to shape z+
+t
+directly. The limited future latent capacity thus preferentially retains future scene information that
+affects trajectory generation and selection. We refer to this z+
+t as a planning-shaped future repre-
+sentation. The next section uses it as a privileged target to train a history-only prior.
+3.4
+HINDSIGHT-TO-FORESIGHT PREDICTION AND PLANNING
+The planning-shaped future representation z+
+t in Sec. 3.3 relies on future observations and is there-
+fore unavailable at deployment. We thus construct a prior Pθ conditioned solely on the history
+representation ht to predict it. Unlike the posterior, which directly uses ground-truth future scene
+registers as queries, the prior uses learnable future queries Qprior. To establish a consistent token-
+wise correspondence between the prior and posterior latents, we arrange the prior queries in the same
+order over future times, camera views, and register slots, and augment them with the corresponding
+structured embeddings:
+Qprior
+i,k,j = Qprior
+0,i,k,j + Efut
+time(i −t) + Ecam(k) + Eslot(j),
+i ∈{t + 1, . . . , t + T}.
+(15)
+where i, k, and j index the future time, camera view, and scene-register slot, respectively. The prior
+world model WMprior
+θ
+then predicts the planning-shaped future representation ˆz+
+t from ht alone:
+ˆz+
+t = Pθ(ht) = WMprior
+θ
+ Q = Qprior, K = ht, V = ht
+
+.
+(16)
+To transfer the future information captured by the privileged posterior to the prior, we propose
+Hindsight-to-Foresight Distillation, which directly aligns the prior prediction ˆz+
+t with the posterior
+target z+
+t . Through this alignment, the prior learns to infer from historical dynamics the planning-
+shaped representation that the posterior derives from ground-truth future observations, thereby dis-
+tilling privileged hindsight into foresight:
+Llatent =
+1
+Nzd
+ˆz+
+t −sg(z+
+t )
+2
+F .
+(17)
+where sg(·) denotes stop-gradient, ∥· ∥F denotes the Frobenius norm, and Nz and d denote the
+number of tokens in the future latent and the feature dimension of each token, respectively. After
+adding the corresponding type embeddings, we concatenate the predicted ˆz+
+t with the history repre-
+sentation ht to form a prior planning context. This context is provided to both the trajectory planner
+and scorer, yielding the following Foresight-Conditioned Planning formulation:
+m−
+t = Concat
+ ht + Ehist
+type, ˆz+
+t + Efut
+type
+
+,
+τ1:T = Gplan(m−
+t ),
+s = Gscore(τ1:T , m−
+t ). (18)
+3.5
+TRAINING AND INFERENCE
+Training. PlanWAM is trained in two stages. The first stage optimizes only the privileged posterior,
+which learns the planning-shaped future representation from ground-truth future observations under
+trajectory generation, trajectory selection, and lightweight regularization objectives:
+Ltask = Lplan + Lscore + λregLreg.
+(19)
+where Lreg includes diversity regularization to mitigate latent anti-collapse. In the second stage,
+we freeze the posterior and use its checkpoint to initialize structurally compatible parameters in the
+prior. We then fine-tune the prior with a lower learning rate using the objective:
+Ltrain = Ltask + λlatentLlatent.
+(20)
+Inference. At inference, we remove the privileged posterior and retain only the prior. Historical
+observations are first encoded into ht, after which the prior predicts the planning-shaped future
+representation ˆz+
+t . This representation serves as foresight and is combined with ht for trajectory
+planner and scorer. Consequently, the entire inference process relies solely on observable history.
+6
+
+
+Preprint
+4
+EXPERIMENTS
+4.1
+EXPERIMENTAL SETUP
+Datasets and benchmarks.
+We evaluate PlanWAM on NAVSIM-v1 Dauner et al. (2024),
+NAVSIM-v2 Cao et al. (2025), and HUGSIM Zhou et al. (2026a) to assess both planning per-
+formance and closed-loop generalization. Models are trained on NAVSIM navtrain and eval-
+uated on navtest. NAVSIM-v1 follows the official evaluation protocol and uses PDM Score
+(PDMS) as the primary metric; NAVSIM-v2 uses the Extended PDM Score (EPDMS). We fur-
+ther perform zero-shot closed-loop evaluation on the high-fidelity closed-loop simulator HUGSIM,
+deploying the trained model directly without HUGSIM-specific fine-tuning, and report HUGSIM
+Driving Score (HD-Score) and Route Completion (RC) to assess closed-loop driving performance
+and cross-environment generalization.
+Implementation details.
+PlanWAM takes T=4 historical frames from four cameras (front, left,
+right, and rear), while the training-only posterior observes future multi-view frames at 1-s inter-
+vals over a 4-s horizon. We use a DINOv2 ViT-S backbone with frozen base weights and rank-32
+LoRA Hu et al. (2022), extracting 16 scene registers per camera-frame. The Temporal Register Pyra-
+mid assigns [4, 4, 8, 16] queries per camera across four temporal levels, producing a 128-token his-
+tory representation ht. Four future times, four cameras, and 16 registers per camera yield Nz=256
+posterior future-latent tokens. Over the same horizon, the trajectory planner generates K=64 can-
+didate trajectories of 8 waypoints, and the trajectory scorer ranks them for final selection. Both
+stages use AdamW Loshchilov & Hutter (2019) and are trained on 16 NVIDIA A800 GPUs with a
+per-GPU batch size of 8. The learning rates for Stages 1 and 2 are 1 × 10−4 and 1 × 10−5, respec-
+tively, and the latent-alignment weight is set to λlatent=0.05. For more details, please refer to the
+supplementary materials.
+4.2
+MAIN RESULTS
+Open-loop Planning on NAVSIM.
+Tables 1 and 2 report the planning performance on the
+NAVSIM-v1/v2 navtest benchmarks. PlanWAM achieves 93.8 PDMS on NAVSIM-v1, outper-
+forming all learned methods compared and improving the DrivoR baseline by 0.7 points; compared
+with the strongest prior world-model-based planner, DriveFuture, the gain reaches 3.1 points. On
+the more challenging NAVSIM-v2 benchmark, PlanWAM further achieves 90.9 EPDMS, exceed-
+ing the previous strongest learned result by 1.0 point and the reported Human Agent baseline by
+0.6 points. PlanWAM also obtains the best learned NC of 99.0 and TTC of 98.5, with stable gains
+on safety-related planning metrics. These results show that planning-shaped future representations
+provide effective foresight for trajectory planning on both NAVSIM benchmarks.
+Table 1: Performance on the NAVSIM-v2 navtest benchmark. The best learned result in each
+column is shown in bold.
+Method
+Reference
+NC↑
+DAC↑
+DDC↑
+TLC↑
+EP↑
+TTC↑
+LK↑
+HC↑
+EC↑
+EPDMS↑
+Human Agent
+-
+100.0
+100.0
+99.8
+100.0
+87.4
+100.0
+100.0
+98.1
+90.1
+90.3
+E2E-based planners
+TransFuser Chitta et al. (2023)
+TPAMI’23
+96.9
+89.9
+97.8
+99.7
+87.1
+95.4
+92.7
+98.3
+87.2
+76.7
+DiffusionDrive Liao et al. (2025)
+CVPR’25
+98.2
+95.9
+99.4
+99.8
+87.5
+97.3
+96.8
+98.3
+87.7
+84.5
+MeanFuser Wang et al. (2026a)
+CVPR’26
+98.3
+97.2
+99.6
+99.8
+87.6
+97.4
+97.3
+98.3
+88.2
+89.5
+VLM-based planners
+ReCogDrive Li et al. (2026c)
+ICLR’26
+98.3
+95.2
+99.5
+99.8
+87.1
+97.5
+96.6
+98.3
+86.5
+83.6
+SGDrive Li et al. (2026a)
+CVPR’26
+98.6
+94.3
+99.5
+99.9
+86.0
+97.9
+96.1
+98.3
+85.9
+86.2
+ExploreVLA Sheng et al. (2026)
+ECCV’26
+98.8
+96.2
+99.6
+99.8
+87.1
+98.2
+97.8
+98.3
+86.8
+88.8
+World-model-based planners
+DriveVLA-W0 Li et al. (2026b)
+ICLR’26
+98.5
+99.1
+98.0
+99.7
+86.4
+98.1
+93.2
+97.9
+58.9
+86.1
+DriveLaW Xia et al. (2026)
+CVPR’26
+98.7
+96.9
+99.6
+99.8
+87.5
+98.3
+97.6
+98.4
+77.4
+88.6
+DreamerAD Yang et al. (2026)
+ECCV’26
+98.0
+97.2
+99.5
+99.8
+87.8
+97.4
+97.5
+98.3
+72.4
+87.7
+Latent-WAM Wang et al. (2026b)
+arXiv’26
+98.1
+97.3
+99.6
+99.8
+87.7
+97.3
+97.6
+98.1
+87.3
+89.3
+DriveFuture Hong et al. (2026)
+arXiv’26
+98.8
+99.1
+99.6
+99.9
+86.6
+98.4
+96.4
+98.3
+74.8
+89.9
+PlanWAM (ours)
+-
+99.0
+99.2
+99.8
+99.6
+90.8
+98.5
+96.5
+98.1
+70.5
+90.9
+Zero-shot Closed-loop Generalization on HUGSIM.
+Table 3 reports zero-shot closed-loop re-
+sults on HUGSIM without simulator-specific fine-tuning. PlanWAM achieves 53.7 average RC and
+38.7 HD-Score, outperforming the strongest baselines by 7.8 and 9.8 points, respectively. The gains
+remain pronounced on the Hard / Extreme subsets, where PlanWAM reaches 51.9 / 37.2 RC and
+7
+
+
+Preprint
+35.6 / 22.0 HD-Score, respectively. These results demonstrate strong zero-shot closed-loop general-
+ization across varying scenario difficulty.
+Table
+2:
+Performance
+on
+the
+NAVSIM-v1
+navtest benchmark.
+Method
+NC↑DAC↑TTC↑C↑EP↑PDMS↑
+Human Agent
+100
+100
+100 99.9 87.5
+94.8
+E2E-based planners
+DiffusionDrive Liao et al. (2025)
+98.2 96.2
+94.7 100 82.2
+88.1
+MeanFuser Wang et al. (2026a)
+98.6 97.0
+95.0 100 82.8
+89.0
+iPad Guo et al. (2026)
+98.6 98.3
+94.9 100 88.0
+91.7
+DrivoR Kirby et al. (2026)
+98.9 98.3
+96.2 100 89.1
+93.1
+VLM-based planners
+AutoVLA Zhou et al. (2025b)
+98.4 95.6
+98.0 99.9 81.9
+89.1
+ReCogDrive Li et al. (2026c)
+97.9 97.3
+94.9 100 87.3
+90.8
+ExploreVLA Sheng et al. (2026)
+98.8 98.4
+96.5 99.9 83.5
+90.4
+SGDrive Li et al. (2026a)
+98.6 97.8
+96.2 100 85.8
+91.1
+World-model-based planners
+WoTE Li et al. (2025b)
+98.5 96.8
+94.9 99.9 81.9
+88.3
+Epona Zhang et al. (2025)
+97.9 95.1
+93.8 99.9 80.4
+86.2
+DreamerAD Yang et al. (2026)
+98.0 97.2
+94.3 100 83.1
+88.7
+DriveLaW Xia et al. (2026)
+99.0 97.1
+96.7 100 81.3
+89.1
+DriveVLA-W0 Li et al. (2026b)
+98.7 99.1
+95.3 99.3 83.3
+90.2
+DriveFuture Hong et al. (2026)
+98.8 99.1
+95.4 100 84.2
+90.7
+PlanWAM (ours)
+98.9 98.8
+96.3 100 91.0
+93.8
+Table 3:
+Closed-loop comparison on
+HUGSIM. E, M, H, and X denote Easy,
+Medium, Hard, and Extreme.
+Method
+E
+M
+H
+X
+Avg.
+UniAD Hu et al. (2023)
+58.6 41.2 40.4 26.0 40.6
+VAD Jiang et al. (2023)
+38.7 27.0 25.5 23.0 27.9
+LTF Chitta et al. (2023)
+68.4 40.7 36.9 25.5 41.4
+GTRS-Dense Li et al. (2025c)
+64.2 50.0 20.7 22.3 38.0
+Latent-WAM Wang et al. (2026b) 84.2 42.5 30.6 35.5 45.9
+PlanWAM (ours)
+87.6 48.3 51.9 37.2 53.7
+(a) Route Completion
+Method
+E
+M
+H
+X
+Avg.
+UniAD Hu et al. (2023)
+48.7 29.5 27.3 14.3 28.9
+VAD Jiang et al. (2023)
+24.3 9.9 10.4 8.2 12.3
+LTF Chitta et al. (2023)
+52.8 24.6 19.8 8.1 24.8
+GTRS-Dense Li et al. (2025c)
+55.5 39.0 11.7 14.3 28.6
+Latent-WAM Wang et al. (2026b) 72.5 24.0 12.2 18.1 28.9
+PlanWAM (ours)
+75.3 32.9 35.6 22.0 38.7
+(b) HD-Score
+Qualitative Planning Results.
+Fig. 4 presents representative qualitative results on NAVSIM and
+HUGSIM. On NAVSIM, compared with DrivoR, PlanWAM produces trajectories that better ac-
+count for surrounding vehicles and avoid unsafe interactions in challenging traffic scenarios. On
+HUGSIM, the model transfers zero-shot across KITTI-360, PandaSet, nuScenes, and Waymo, while
+maintaining stable closed-loop planning in diverse traffic conditions. These examples qualitatively
+support the consistent gains observed in the quantitative evaluation.
+Figure 4: Qualitative planning results. (a) Comparison with DrivoR on representative NAVSIM
+scenarios. (b) Zero-shot closed-loop rollouts on HUGSIM across different driving domains.
+4.3
+ABLATION STUDIES
+We conduct systematic ablations on NAVSIM-v1 navtest to analyze the role of each PlanWAM
+component. Every run follows the full training procedure and changes only the module under study.
+Overall Component Evaluation.
+We add the three core components in sequence, the Tempo-
+ral Register Pyramid (TRP), Hindsight-to-Foresight Distillation (H2F), and Foresight-Conditioned
+Planning (FCP), as reported in Table 4. From the base model, TRP raises PDMS from 93.1 to 93.4,
+showing that a recency-aware history representation extracts more useful dynamics from multi-
+frame observations. Adding H2F further reaches 93.5, so learning a future latent from privileged
+future information supplies additional foresight. FCP then uses the predicted future latent as plan-
+ning context for trajectory generation and selection, and the model reaches 93.8 PDMS.
+8
+
+
+Preprint
+Table 4: Overall component ablation of PlanWAM.
+ID
+TRP
+H2F
+FCP
+NC↑
+DAC↑
+TTC↑
+C↑
+EP↑
+PDMS↑
+0
+×
+×
+×
+98.3
+98.9
+94.6
+100
+90.5
+93.1
+1
+✓
+×
+×
+98.8
+98.8
+95.3
+100
+90.9
+93.4
+2
+✓
+✓
+×
+98.6
+98.6
+95.5
+100
+91.5
+93.5
+3
+✓
+✓
+✓
+98.9
+98.8
+96.3
+100
+91.0
+93.8
+Future Representation Learning and Utilization.
+Table 5 shows that generic future-feature su-
+pervision reaches only 93.5 PDMS, so a generic prediction target does not by itself yield planning-
+relevant information. Shaping the future latent directly with the trajectory planning objectives raises
+performance to 93.8 PDMS. Table 6 then varies where the predicted latent is used. Auxiliary su-
+pervision or conditioning only trajectory generation brings little gain, whereas using it for trajectory
+selection reaches 93.7 PDMS. Conditioning both generation and selection attains 93.8 PDMS.
+Table 5: Ablation of Future Representation.
+Future representation
+Supervision
+PDMS↑
+Null future
+–
+93.4
+Generic future latent
+Lfeature
+93.5
+Planning-shaped latent (ours)
+Lplan + Lscore
+93.8
+Lfeature: reconstruction of future scene registers.
+Table 6: Ablation of Future Latent Usage.
+Future latent usage
+Generation
+Selection
+PDMS↑
+Auxiliary supervision only
+×
+×
+93.5
+Generation only
+✓
+×
+93.5
+Selection only
+×
+✓
+93.7
+Generation + Selection
+✓
+✓
+93.8
+History Representation Compression and Future Distillation.
+Table 7 shows that, under the
+same 128-token budget, the recency-aware allocation [4, 4, 8, 16] reaches 93.8 PDMS, above both
+the uniform allocation and the reversed allocation. Raising the token count to 256 yields only 93.6
+PDMS, so how the queries are allocated matters more than enlarging the representation. Table 8
+shows that a prior alone has a latent similarity of 0.22. Adding latent distillation raises it to 0.92 and
+PDMS to 93.7. With posterior initialization, similarity reaches 0.93 and PDMS 93.8.
+Table 7: Ablation of Temporal Allocation.
+Query allocation
+Tokens
+Latency (ms)↓
+PDMS↑
+[16, 16, 16, 16]
+256
+380
+93.6
+[8, 8, 8, 8]
+128
+343
+93.4
+[16, 8, 4, 4]
+128
+346
+92.9
+[4, 4, 8, 16]
+128
+342
+93.8
+[2, 4, 8, 16]
+120
+335
+93.6
+Inference latency on one NVIDIA A800, batch size 1, fp32.
+Table 8: Ablation of future latent distillation.
+Setting
+Posterior init. Llatent Latent sim.↑PDMS↑
+Prior-only
+×
+×
+0.22
+93.4
++ Posterior init.
+✓
+×
+0.46
+93.5
++ H2F distillation
+×
+✓
+0.92
+93.7
+Init. + H2F (ours)
+✓
+✓
+0.93
+93.8
+Privileged posterior (oracle)
+–
+–
+–
+95.0
+Latent sim.: mean cosine similarity between ˆz+
+t and z+
+t .
+4.4
+ANALYSIS OF FAILURE REDUCTION
+To further understand how planning-shaped foresight improves planning performance, we analyze
+the PDMS= 0 failure cases on NAVSIM-v1 navtest. As shown in Fig. 5(a), safety-related failures
+decrease markedly after introducing PlanWAM (ID 0 to ID 3). In particular, No at-fault Collision
+(NC) and Time-to-Collision (TTC) failures drop by 62.3% and 52.4%, indicating that the planning-
+shaped future representation helps the model capture the motion trends of future traffic participants
+and thereby lowers potential collision risk. Driving Direction Compliance (DDC) failures also drop
+by 66.7%, further showing that future information improves the modeling of dynamic driving con-
+straints. In contrast, Drivable Area Compliance (DAC) failures show a slight deterioration, indicat-
+ing that the gains of PlanWAM concentrate on dynamic scene understanding and decision making.
+As shown in Fig. 5(b), the number of failures falls from 314 to 237, mainly from fewer trajectory
+select errors (−87). The predicted future latent thus provides effective foresight and improves the
+reliability of candidate-trajectory evaluation and selection. Proposal quality also improves to some
+extent, while proposal-collapse issues remain. This analysis indicates that, by learning a planning-
+shaped future representation, PlanWAM provides effective foresight for trajectory evaluation and
+selection, thereby reducing planning failures caused by insufficient modeling of future evolution.
+9
+
+
+Preprint
+Figure 5: Analysis of failure reduction enabled by planning-shaped foresight. (a) Failure Type
+Distribution. (b) Attribution of Failure Reduction.
+5
+CONCLUSION
+We presented PlanWAM, a planning-shaped world action model that reformulates future modeling in
+end-to-end autonomous driving as planning-oriented predictive representation learning. By shaping
+future latent representations with trajectory planning objectives and distilling them from privileged
+future observations to a history-only prior, PlanWAM learns deployable foresight for trajectory gen-
+eration and selection. PlanWAM achieves 93.8 PDMS / 90.9 EPDMS on NAVSIM-v1/v2 navtest
+and 38.7 HD-Score in zero-shot closed-loop HUGSIM evaluation, demonstrating the effectiveness
+of planning-shaped future representations for end-to-end autonomous driving.
+REPRODUCIBILITY STATEMENT
+The method of PlanWAM is specified in Sec. 3, including the Temporal Register Pyramid, the
+planning-shaped future posterior, Hindsight-to-Foresight Distillation, and the two-stage training
+and history-only inference procedure. Dataset splits, evaluation protocols, and the main imple-
+mentation settings are given in Sec. 4.1. Appendix A records the architecture and data flow; Ap-
+pendix B the training objectives, loss weights, and optimization schedule; Appendix C the PDMS,
+EPDMS, and HUGSIM scoring protocols used for the reported numbers; Appendix D the addi-
+tional controlled ablations; and Appendix E further qualitative results. All experiments use the
+public NAVSIM-v1, NAVSIM-v2, and HUGSIM benchmarks. An anonymized repository contain-
+ing a project overview, visualization videos, supplementary material, and source code is available at
+https://jinchan9.github.io/PlanWAM_project_page.
+AI USE STATEMENT
+In this work, we used generative AI tools to aid and polish the writing. This included translation
+from Chinese notes into English, edits for clarity, grammar, and readability, and formatting of tables
+and LATEX. Additionally, we used generative AI tools for retrieval and discovery of related work:
+they searched for and suggested potentially relevant literature, and the authors verified each item
+before deciding which works to cite. We have not used generative AI tools to draft sections of
+the manuscript, to design or execute the research, to generate synthetic datasets, or to formulate or
+prove mathematical claims, and these uses are not applicable to this work. We have reviewed all
+AI-assisted text. We take responsibility for the final content of this work, including text and claims
+produced with the aid of generative AI.
+REFERENCES
+Holger Caesar, Juraj Kabzan, Kok Seang Tan, Whye Kit Fong, Eric M. Wolff, Alex H. Lang,
+Luke Fletcher, Oscar Beijbom, and Sammy Omari.
+nuplan: A closed-loop ml-based plan-
+ning benchmark for autonomous vehicles.
+volume abs/2106.11810, 2021.
+URL https:
+//arxiv.org/abs/2106.11810.
+10
+
+
+Preprint
+Wei Cao, Marcel Hallgarten, Tianyu Li, Daniel Dauner, Xunjiang Gu, Caojun Wang, Yakov Miron,
+Marco Aiello, Hongyang Li, Igor Gilitschenski, Boris Ivanovic, Marco Pavone, Andreas Geiger,
+and Kashyap Chitta.
+Pseudo-simulation for autonomous driving.
+In Proceedings of the 9th
+Conference on Robot Learning (CoRL), volume 305 of Proceedings of Machine Learning Re-
+search, pp. 4709–4722. PMLR, 2025. URL https://proceedings.mlr.press/v305/
+cao25a.html.
+Kashyap Chitta, Aditya Prakash, Bernhard Jaeger, Zehao Yu, Katrin Renz, and Andreas Geiger.
+TransFuser: Imitation with transformer-based sensor fusion for autonomous driving.
+IEEE
+Transactions on Pattern Analysis and Machine Intelligence, 45(11):12878–12895, 2023. doi:
+10.1109/TPAMI.2022.3200245.
+Felipe Codevilla, Matthias M¨uller, Antonio L´opez, Vladlen Koltun, and Alexey Dosovitskiy. End-
+to-end driving via conditional imitation learning. In IEEE International Conference on Robotics
+and Automation (ICRA), 2018.
+Daniel Dauner, Marcel Hallgarten, Tianyu Li, Xinshuo Weng, Zhiyu Huang, Zetong Yang,
+Hongyang Li, Igor Gilitschenski, Boris Ivanovic, Marco Pavone, Andreas Geiger, and Kashyap
+Chitta. NAVSIM: Data-driven non-reactive autonomous vehicle simulation and benchmarking.
+In Advances in Neural Information Processing Systems (NeurIPS), 2024.
+Haoyu Fu, Diankun Zhang, Zongchuang Zhao, Jianfeng Cui, Dingkang Liang, Chong Zhang,
+Dingyuan Zhang, Hongwei Xie, Bing Wang, and Xiang Bai. Orion: A holistic end-to-end au-
+tonomous driving framework by vision-language instructed action generation. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision (ICCV), 2025.
+Shenyuan Gao, Jiazhi Yang, Li Chen, Kashyap Chitta, Yihang Qiu, Andreas Geiger, Jun Zhang,
+and Hongyang Li. Vista: A generalizable driving world model with high fidelity and versatile
+controllability. In Advances in Neural Information Processing Systems (NeurIPS), pp. 91560–
+91596, 2024.
+Xingtai Gui, Meijie Zhang, Tianyi Yan, Wencheng Han, Jiahao Gong, Feiyang Tan, Cheng-zhong
+Xu, and Jianbing Shen. Bridging scene generation and planning: Driving with world model via
+unifying vision and motion representation. arXiv preprint arXiv:2603.14948, 2026.
+Ke Guo, Haochen Liu, Xiaojun Wu, Jia Pan, and Chen Lv. iPad: Iterative proposal-centric end-
+to-end autonomous driving. IEEE Robotics and Automation Letters, 11(10):11142–11149, 2026.
+doi: 10.1109/LRA.2026.3723334.
+Yufeng Hong, Xiaotian Zhou, Yingyan Li, Xiangpo Zhou, Lin Liu, Yadan Luo, Shaoqing Xu, Lei
+Yang, and Ziying Song. DriveFuture: Future-aware latent world models for autonomous driving.
+arXiv preprint arXiv:2605.09701, 2026.
+Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang,
+and Weizhu Chen. Lora: Low-rank adaptation of large language models. In International Con-
+ference on Learning Representations (ICLR), 2022.
+Yihan Hu, Jiazhi Yang, Li Chen, Keyu Li, Chonghao Sima, Xizhou Zhu, Siqi Chai, Senyao Du,
+Tianwei Lin, Wenhai Wang, et al. Planning-oriented autonomous driving. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), 2023.
+Bo Jiang, Shaoyu Chen, Qing Xu, Bencheng Liao, Jiajie Chen, Helong Zhou, Qian Zhang, Wenyu
+Liu, Chang Huang, and Xinggang Wang. Vad: Vectorized scene representation for efficient au-
+tonomous driving. In Proceedings of the IEEE/CVF International Conference on Computer Vision
+(ICCV), 2023.
+Ellington Kirby, Alexandre Boulch, Yihong Xu, Yuan Yin, Gilles Puy, ´Eloi Zablocki, Andrei Bursuc,
+Spyros Gidaris, Renaud Marlet, Florent Bartoccioni, Anh-Quan Cao, Nermin Samet, Tuan-Hung
+Vu, and Matthieu Cord. Driving on registers. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2026.
+11
+
+
+Preprint
+Jingyu Li, Junjie Wu, Dongnan Hu, Xiangkai Huang, Bin Sun, Zhihui Hao, Xianpeng Lang, Xiatian
+Zhu, and Li Zhang. Sgdrive: Scene-to-goal hierarchical world cognition for autonomous driv-
+ing. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), 2026a.
+Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi. BLIP-2: Bootstrapping language-image
+pre-training with frozen image encoders and large language models. In Proceedings of the 40th
+International Conference on Machine Learning, volume 202 of Proceedings of Machine Learning
+Research, pp. 19730–19742. PMLR, 2023. URL https://proceedings.mlr.press/
+v202/li23q.html.
+Yingyan Li, Lue Fan, Jiawei He, Yuqi Wang, Yuntao Chen, Zhaoxiang Zhang, and Tieniu Tan.
+Enhancing end-to-end autonomous driving with latent world model. In International Conference
+on Learning Representations (ICLR), 2025a.
+Yingyan Li, Yuqi Wang, Yang Liu, Jiawei He, Lue Fan, and Zhaoxiang Zhang. End-to-end driving
+with online trajectory evaluation via bev world model. In Proceedings of the IEEE/CVF Interna-
+tional Conference on Computer Vision (ICCV), 2025b.
+Yingyan Li, Shuyao Shang, Weisong Liu, Bing Zhan, Haochen Wang, Yuqi Wang, Yuntao Chen,
+Xiaoman Wang, Yasong An, Chufeng Tang, et al. Drivevla-w0: World models amplify data
+scaling law in autonomous driving. In International Conference on Learning Representations
+(ICLR), 2026b.
+Yongkang Li, Kaixin Xiong, Xiangyu Guo, Fang Li, Sixu Yan, Gangwei Xu, Lijun Zhou, Long
+Chen, Haiyang Sun, Bing Wang, et al. Recogdrive: A reinforced cognitive framework for end-
+to-end autonomous driving. In International Conference on Learning Representations (ICLR),
+2026c.
+Zhenxin Li, Wenhao Yao, Zi Wang, Xinglong Sun, Joshua Chen, Nadine Chang, Maying Shen,
+Zuxuan Wu, Shiyi Lan, and Jose M Alvarez. Generalized trajectory scoring for end-to-end mul-
+timodal planning. arXiv preprint arXiv:2506.06664, 2025c.
+Bencheng Liao, Shaoyu Chen, Haoran Yin, Bo Jiang, Cheng Wang, Sixu Yan, Xinbang Zhang,
+Xiangyu Li, Ying Zhang, Qian Zhang, et al. Diffusiondrive: Truncated diffusion model for end-
+to-end autonomous driving. In Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), 2025.
+Ilya Loshchilov and Frank Hutter. Decoupled weight decay regularization. In International Confer-
+ence on Learning Representations (ICLR), 2019.
+Zihao Sheng, Xin Ye, Jingru Luo, Sikai Chen, and Liu Ren. Explorevla: Dense world modeling and
+exploration for end-to-end autonomous driving. In European Conference on Computer Vision
+(ECCV), pp. 266–284, 2026.
+Wenchao Sun, Xuewu Lin, Yining Shi, Chuang Zhang, Haoran Wu, and Sifa Zheng. SparseDrive:
+End-to-end autonomous driving via sparse scene representation. In IEEE International Confer-
+ence on Robotics and Automation (ICRA), pp. 8795–8801, 2025. doi: 10.1109/ICRA55743.2025.
+11128800.
+Junli Wang, Yinan Zheng, Xueyi Liu, Zebin Xing, Pengfei Li, Kun Ma, Hangjun Ye, Guang Chen,
+Guang Li, Long Chen, Zhongpu Xia, and Qichao Zhang. Meanfuser: Fast one-step multi-modal
+trajectory generation and adaptive reconstruction via meanflow for end-to-end autonomous driv-
+ing. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition
+(CVPR), pp. 17884–17893, June 2026a.
+Linbo Wang, Yupeng Zheng, Qiang Chen, Shiwei Li, Yichen Zhang, Zebin Xing, Qichao Zhang,
+Xiang Li, Deheng Qian, Pengxuan Yang, Yihang Dong, Ce Hao, Xiaoqing Ye, Junyu Han, Yifeng
+Pan, and Dongbin Zhao. Latent-WAM: Latent world action modeling for end-to-end autonomous
+driving. arXiv preprint arXiv:2603.24581, 2026b.
+Xiaofeng Wang, Zheng Zhu, Guan Huang, Xinze Chen, Jiagang Zhu, and Jiwen Lu. Drivedreamer:
+Towards real-world-drive world models for autonomous driving. In European Conference on
+Computer Vision (ECCV), 2024a.
+12
+
+
+Preprint
+Yuqi Wang, Jiawei He, Lue Fan, Hongxin Li, Yuntao Chen, and Zhaoxiang Zhang. Driving into the
+future: Multiview visual forecasting and planning with world model for autonomous driving. In
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+pp. 14749–14759, 2024b.
+Tianze Xia, Yongkang Li, Lijun Zhou, Jingfeng Yao, Kaixin Xiong, Haiyang Sun, Bing Wang,
+Kun Ma, Guang Chen, Hangjun Ye, et al. Drivelaw: Unifying planning and video generation
+in a latent driving world. In Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), 2026.
+Zebin Xing, Xingyu Zhang, Yang Hu, Bo Jiang, Tong He, Qian Zhang, Xiaoxiao Long, and Wei
+Yin. GoalFlow: Goal-driven flow matching for multimodal trajectories generation in end-to-
+end autonomous driving. In Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), pp. 1602–1611, 2025.
+Pengxuan Yang, Yupeng Zheng, Deheng Qian, Zebin Xing, Qichao Zhang, Linbo Wang, Yichen
+Zhang, Shaoyu Guo, Zhongpu Xia, Qiang Chen, Junyu Han, Lingyun Xu, Yifeng Pan, and Dong-
+bin Zhao. DreamerAD: Efficient reinforcement learning via latent world model for autonomous
+driving. In European Conference on Computer Vision (ECCV), 2026.
+Kaiwen Zhang, Zhenyu Tang, Xiaotao Hu, Xingang Pan, Xiaoyang Guo, Yuan Liu, Jingwei Huang,
+Li Yuan, Qian Zhang, Xiao-Xiao Long, et al. Epona: Autoregressive diffusion world model for
+autonomous driving. In Proceedings of the IEEE/CVF International Conference on Computer
+Vision (ICCV), 2025.
+Zhida Zhao, Talas Fu, Yifan Wang, Lijun Wang, and Huchuan Lu. From forecasting to planning:
+Policy world model for collaborative state-action prediction. In Advances in Neural Information
+Processing Systems (NeurIPS), 2025.
+Wenzhao Zheng, Weiliang Chen, Yuanhui Huang, Borui Zhang, Yueqi Duan, and Jiwen Lu. Occ-
+world: Learning a 3d occupancy world model for autonomous driving. In European Conference
+on Computer Vision (ECCV), 2024.
+Yupeng Zheng, Pengxuan Yang, Zebin Xing, Qichao Zhang, Yuhang Zheng, Yinfeng Gao, Pengfei
+Li, Teng Zhang, Zhongpu Xia, Peng Jia, Xianpeng Lang, and Dongbin Zhao. World4Drive: End-
+to-end autonomous driving via intention-aware physical latent world model. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision (ICCV), pp. 28632–28642, 2025.
+Hongyu Zhou, Longzhong Lin, Jiabao Wang, Yichong Lu, Dongfeng Bai, Bingbing Liu, Yue Wang,
+Andreas Geiger, and Yiyi Liao. HUGSIM: A real-time, photo-realistic and closed-loop simulator
+for autonomous driving. IEEE Transactions on Pattern Analysis and Machine Intelligence, 48(4):
+4673–4691, 2026a. doi: 10.1109/TPAMI.2025.3647952.
+Xin Zhou, Dingkang Liang, Sifan Tu, Xiwu Chen, Yikang Ding, Dingyuan Zhang, Feiyang Tan,
+Hengshuang Zhao, and Xiang Bai. Hermes: A unified self-driving world model for simultaneous
+3d scene understanding and generation. In Proceedings of the IEEE/CVF International Confer-
+ence on Computer Vision (ICCV), 2025a.
+Xin Zhou, Zongchuang Zhao, Zhibo Yang, Mingsheng Li, Humen Zhong, Shuai Bai, Du Chu,
+Ruizhe Chen, Zhaohai Li, Jun Tang, Qiuyue Wang, Mingkun Yang, Jiazhao Zhang, Dayiheng
+Liu, Dingkang Liang, and Xiang Bai. Qwen-Drive-1.0: An initial step towards a vision-language
+foundation model for autonomous driving. arXiv preprint arXiv:2609.00111, 2026b.
+Zewei Zhou, Tianhui Cai, Seth Zhao, Yun Zhang, Zhiyu Huang, Bolei Zhou, and Jiaqi Ma. Autovla:
+A vision-language-action model for end-to-end autonomous driving with adaptive reasoning and
+reinforcement fine-tuning. In Advances in Neural Information Processing Systems (NeurIPS),
+2025b.
+13
+
+
+Preprint
+The contents of this appendix are as follows:
+• Appendix A gives the data flow and tensor shapes of the three transformers, for checking
+the implementation.
+• Appendix B gives the two-stage optimization and the full set of losses.
+• Appendix C gives the metric definitions for NAVSIM-v1/v2 and HUGSIM, including how
+HD-Score and the HUGSIM average are computed.
+• Appendix D gives four additional ablations: posterior registers, future duration, the distil-
+lation weight, and which modules are trained.
+• Appendix E gives additional visualizations of NAVSIM candidate trajectories and
+HUGSIM closed-loop rollouts.
+A
+DETAILED ARCHITECTURE AND DATA FLOW
+Fig. 6 shows the three transformers used at inference: the world model predicts the future latent from
+prior queries and the history context; the planner decodes candidate trajectories from that latent; the
+scorer selects one trajectory. The posterior queries that can replace the prior queries are used only
+while constructing the training target.
+Figure 6: Detailed transformer architecture and data flow. The world-model transformer takes
+either posterior queries or prior queries as Q, and uses the history context as K and V , to produce
+the future latent. The planner transformer uses planner queries as Q and the combined history–latent
+memory as K and V ; an MLP decodes its outputs into candidate trajectories. The scorer transformer
+embeds those candidates as Q, cross-attends to the same memory, adds the ego status, and maps the
+result through six subscore heads to select one trajectory. Posterior queries are used only during
+training.
+A.1
+TOKEN BOOKKEEPING AND END-TO-END FLOW
+The visual backbone extracts 16 scene registers from each camera frame. With four historical frames
+and four cameras, the uncompressed historical stream contains 4 × 4 × 16 = 256 registers. The
+Temporal Register Pyramid allocates [4, 4, 8, 16] queries per camera from the oldest to the current
+temporal level, producing 4 × (4 + 4 + 8 + 16) = 128 history tokens. The posterior observes four
+future times, {1, 2, 3, 4} seconds, and retains all 4 × 4 × 16 = 256 future slots. The prior uses
+the same slot layout, so every predicted token has a fixed time–camera–register counterpart in the
+posterior target. Concatenating history and future tokens gives a 384-token planning memory.
+Table 9: Tensor bookkeeping for the reported model. B is batch size, d=256, K=64, and J=8.
+14
+
+
+Preprint
+Quantity
+Construction
+Shape
+Raw history registers
+4 times × 4 cameras × 16 registers
+B × 256 × d
+Compressed history ht
+temporal allocation [4, 4, 8, 16] per camera
+B × 128 × d
+Posterior queries f +
+t
+4 future times × 4 cameras × 16 registers
+B × 256 × d
+Prior queries Qprior
+learned queries with time/camera/slot embeddings
+B × 256 × d
+Planning memory m±
+t
+history–future concatenation with type embeddings
+B × 384 × d
+Candidate trajectories
+K candidates, J poses (x, y, ψ)
+B × 64 × 8 × 3
+Candidate subscores
+NC, DAC, TTC, EP, DDC, and comfort
+B × 64 × 6
+The data flow is consequently
+(vt−3:t, ct−3:t)
+Eη
+−−−→ht
+Pθ
+−−→ˆz+
+t
+concat(ht,ˆz+
+t )
+−−−−−−−−−−→m−
+t
+Gplan,Gscore
+−−−−−−−−−→τ ∗,
+(21)
+whereas Stage 1 replaces Pθ with the privileged posterior Pϕ(ht, f +
+t ) and uses the resulting z+
+t to
+shape the latent space through planning supervision.
+A.2
+WORLD-MODEL TRANSFORMER
+As in Fig. 6, the world-model block is shared in structure by the posterior and the prior. Its Q is
+either the posterior queries, formed from ground-truth future scene registers, or the learnable prior
+queries. Its K and V are the history context. Each of the four pre-normalized blocks applies self-
+attention on the queries, cross-attention from the queries to the history memory, and a feed-forward
+network, with a residual connection around every sublayer. The hidden width is d=256, with four
+attention heads, an FFN width of 1024, and dropout 0.1. The block output is the future latent. The
+two branches differ in the query source:
+z+
+t = WMpost
+ϕ
+ Q = f +
+t , K = ht, V = ht
+
+,
+(22)
+ˆz+
+t = WMprior
+θ
+ Q = Qprior, K = ht, V = ht
+
+.
+(23)
+The prior queries follow the same future-time, camera, and register-slot order as f +
+t , so the token-
+wise loss in equation 17 compares corresponding tokens. In the reported model, compatible trans-
+former weights are initialized from the Stage 1 posterior checkpoint; the prior query slots remain
+prior-specific parameters. At inference only the prior queries are used.
+A.3
+TRAJECTORY PLANNER
+The planner transformer takes planner queries as Q. Its K and V are the planning memory formed
+from the history context and the future latent, the 384-token concatenation in Table 9. Four decoder
+blocks refine the K=64 candidate tokens. Each block has one-head self-attention among the can-
+didates, one-head cross-attention to the memory, and a width-1024 FFN, with hidden width 256,
+projection dropout 0.1, and stochastic depth 0.2. An MLP (256 →1024 →24) then maps each
+refined token to J=8 poses (x, y, ψ), giving the candidate trajectories drawn on the right of Fig. 6.
+The final refinement is passed to the scorer.
+A.4
+TRAJECTORY SCORER AND SELECTION
+The scorer follows the bottom path of Fig. 6. Candidate trajectories are embedded by an MLP
+(24 →1024 →256) and used as Q. The K and V are the same history–latent memory used by
+the planner. Four decoder blocks, again with width 256, one attention head, and FFN width 1024,
+mix the candidate tokens and cross-attend to that memory. The ego-status token is added to every
+candidate feature. Six MLP heads (256 →1024 →1) then predict NC, DAC, TTC, EP, DDC, and
+comfort. For NAVSIM-v1 selection, candidate k is ranked by
+log Sk = log pNC
+k
++ log pDAC
+k
++ log
+ 5pTTC
+k
++ 5pEP
+k
++ 2pC
+k
+
+,
+k∗= arg max
+k
+log Sk.
+(24)
+The constant denominator in PDMS does not change the argmax. DDC is supervised, and it has zero
+weight in this NAVSIM-v1 ranking. The geometry entering the scorer is detached, so the scoring
+loss updates the scorer without changing the trajectory decoder through that path.
+15
+
+
+Preprint
+A.5
+ARCHITECTURE SUMMARY
+Table 10: Transformer configurations. “Heads” refers to attention heads in each block; all FFNs
+use GELU unless the output head is explicitly described as an MLP above.
+Module
+Blocks Width Heads
+FFN
+Output
+Temporal Register Pyramid
+2
+256
+4
+1024 128 history tokens
+Posterior world model
+4
+256
+4
+1024 256 target tokens z+
+t
+Prior world model
+4
+256
+4
+1024 256 predicted tokens ˆz+
+t
+Trajectory planner
+4
+256
+1
+1024 64 × 8 × 3 proposals
+Trajectory scorer
+4
+256
+1
+1024 six scores per proposal
+B
+TRAINING OBJECTIVES AND OPTIMIZATION
+B.1
+TWO-STAGE TRAINING PROTOCOL
+Table 11 gives the complete training schedule used for the reported model. Stage 1 learns the priv-
+ileged posterior and the shared planning modules from historical and future observations. Stage 2
+loads structurally compatible parameters from Stage 1, keeps a separate posterior teacher frozen
+in evaluation mode, and optimizes the history-only prior. Future images are consumed only by
+this frozen teacher; they are neither augmented nor exposed to the student. The teacher output is
+detached before latent alignment. At test time, the teacher and all future-observation loading are
+removed.
+Table 11: Optimization and implementation settings. Learning rates are kept consistent with
+Sec. 4.1; all runs use the same camera, token, and trajectory configuration unless an ablation states
+otherwise.
+Item
+Setting
+Input images
+four historical frames; front, left, right, rear;
+1148 × 672
+Training-only future observations
+{1, 2, 3, 4} s; same four cameras
+Visual encoder
+DINOv2 ViT-S; frozen base; LoRA rank 32
+Planning horizon
+4 s, 8 waypoints at 0.5-s intervals
+Candidate / latent counts
+K=64 trajectories; Nz=256 latent tokens
+Optimizer and duration
+AdamW; 50 epochs per stage
+Learning-rate schedule
+linear warm-up for first 10% of steps, then cosine
+decay to zero
+Peak learning rate
+Stage 1: 1 × 10−4; Stage 2: 1 × 10−5
+Hardware and batch
+16× NVIDIA A800; 8 samples/GPU; global batch
+128
+Regularization weights
+λnorm = λdiv = 10−4
+Latent-alignment weight
+λlatent = 0.05
+B.2
+TRAJECTORY GENERATION OBJECTIVE
+Let τk ∈RJ×3 be candidate k, τ ∗the demonstrated ego trajectory, and J=8. The planner is trained
+with a best-of-K regression loss,
+Lplan = 1
+B
+B
+X
+b=1
+min
+1≤k≤K
+1
+J
+J
+X
+j=1
+τb,k,j −τ ∗
+b,j
+
+1 .
+(25)
+Thus, only the closest candidate receives direct trajectory-regression supervision for a sample, while
+the learned candidate tokens and self-attention preserve a multimodal proposal set.
+B.3
+TRAJECTORY SCORING OBJECTIVE
+Every candidate is evaluated by the official proposal simulator to obtain targets qb,k,m for
+M = {NC, DAC, TTC, EP, DDC, C}.
+16
+
+
+Preprint
+If ab,k,m denotes the corresponding predicted logit, the scoring loss is
+Lscore =
+X
+m∈M
+1
+BK
+B
+X
+b=1
+K
+X
+k=1
+BCEWithLogits(ab,k,m, qb,k,m).
+(26)
+Targets taking the intermediate value 0.5 for NC or DDC are mapped to the conservative negative
+class for binary training. Undefined TTC targets are masked rather than treated as negatives. This
+loss teaches proposal selection directly from planning-quality signals instead of using distance to
+the demonstrated trajectory as a proxy score.
+B.4
+LATENT REGULARIZATION AND HINDSIGHT-TO-FORESIGHT DISTILLATION
+For a latent tensor z ∈RB×Nz×d, we use two lightweight anti-collapse terms:
+Lnorm(z) =
+1
+BNz
+X
+b,i
+
+1 −∥zb,i∥2
+√
+d
+2
++
+,
+(27)
+Ldiv(z) =
+1
+BNz(Nz −1)
+X
+b
+X
+i̸=j
+ 
+z⊤
+b,izb,j
+∥zb,i∥2∥zb,j∥2
+!2
+.
+(28)
+The first term penalizes vanishing token norms; the second penalizes redundant latent slots. Written
+without the shorthand in equation 19, the task objective is
+Ltask(z) = Lplan + Lscore + 10−4Lnorm(z) + 10−4Ldiv(z).
+(29)
+Stage 1 substitutes z = z+
+t . Stage 2 substitutes z = ˆz+
+t and adds the token-aligned teacher loss
+LStage 2 = Ltask(ˆz+
+t ) + 0.05
+1
+Nzd
+ˆz+
+t −sg(z+
+t )
+2
+F
+|
+{z
+}
+Llatent
+.
+(30)
+The latent loss is computed in FP32 even under mixed-precision training. The stop-gradient op-
+eration and frozen teacher ensure that Stage 2 improves the causal prior rather than moving the
+privileged target toward the student.
+C
+BENCHMARKS AND EVALUATION METRICS
+C.1
+BENCHMARK SUMMARY
+Table 12: Evaluation benchmarks and their roles. NAVSIM results use the official navtest
+evaluator; HUGSIM receives the NAVSIM-trained model without simulator-specific adaptation.
+Benchmark
+Data and protocol
+Reported metrics
+NAVSIM-v1 Dauner et al. (2024) OpenScene/nuPlan-derived real
+driving logs; non-reactive 4-s
+proposal simulation; train on
+navtrain (103,288 scenes: 85k
+train / 18k validation), evaluate on
+navtest (12,146).
+NC, DAC, TTC, EP, C, PDMS
+NAVSIM-v2 Cao et al. (2025)
+Same split used in this paper,
+evaluated with the extended official
+proposal scorer and additional
+rule/smoothness criteria.
+NC, DAC, DDC, TLC, EP, TTC,
+LK, HC, EC, EPDMS
+HUGSIM Zhou et al. (2026a)
+Closed-loop rollouts on 436 public
+scenarios from nuScenes,
+KITTI-360, Waymo, and PandaSet;
+zero-shot transfer of the
+NAVSIM-trained model.
+RC and HD-Score on Easy,
+Medium, Hard, Extreme, and the
+scene-weighted average
+NAVSIM is derived from OpenScene, a compact distribution of nuPlan logs Caesar et al. (2021). It
+evaluates planned trajectories by rolling the ego vehicle forward while other actors follow recorded
+17
+
+
+Preprint
+trajectories, which makes large-scale evaluation deterministic and non-reactive. HUGSIM com-
+plements this protocol with closed-loop observations: the ego action changes the next rendered
+view and simulated state, and surrounding actors can interact with the rollout. The cross-domain
+HUGSIM test therefore probes compounding planning errors and distribution shift that are not
+present in a single NAVSIM proposal rollout.
+C.2
+NAVSIM-V1: PDM SCORE
+For each proposal, the official Predictive Driver Model scorer returns no-at-fault collision (NC),
+drivable-area compliance (DAC), time-to-collision (TTC), normalized ego progress (EP), and com-
+fort (C). NC and DAC are multiplicative safety gates, whereas TTC, EP, and C form a weighted
+quality term:
+PDMS = NC · DAC · 5 TTC + 5 EP + 2 C
+12
+.
+(31)
+NC penalizes at-fault collisions along the simulated ego rollout; DAC checks whether the ego
+footprint stays inside the drivable area; TTC detects imminent projected collisions; EP measures
+progress along the route centerline and is normalized within the proposal set; and C checks accel-
+eration, jerk, and yaw-related comfort bounds. Component values and PDMS are first computed
+per scene and then averaged. Consequently, the aggregate component means in Table 2 need not
+reproduce the aggregate PDMS exactly when substituted into equation 31.
+C.3
+NAVSIM-V2: EXTENDED PDM SCORE
+NAVSIM-v2 adds driving-direction compliance (DDC), traffic-light compliance (TLC), lane keep-
+ing (LK), history comfort (HC), and extended comfort (EC). DDC and TLC join NC and DAC
+as multiplicative penalties. LK measures lane-relative stability, HC applies the standard within-
+trajectory dynamics constraints, and EC measures temporal consistency between consecutive plans.
+Before aggregation, the reported evaluator applies a human-penalty filter to every subscore. Let
+Mpen = {NC, DAC, DDC, TLC} and Mavg = {EP, TTC, LK, HC, EC}, with wEP = wTTC =
+5 and wLK = wHC = wEC = 2. If the human trajectory scores 0 on a subscore, that term is set to 1;
+otherwise the agent’s score is used:
+EPDMS =
+ 
+Y
+m∈Mpen
+filterm
+!
+·
+P
+m∈Mavg wm filterm
+P
+m∈Mavg wm
+,
+filterm =
+1
+if m(human) = 0,
+m(agent)
+otherwise.
+(32)
+As for PDMS, the benchmark computes equation 32 at the scene level before averaging; all values
+in the main tables are displayed on a 0–100 scale.
+C.4
+HUGSIM: ROUTE COMPLETION AND HD-SCORE
+HUGSIM evaluates closed-loop driving on reconstructed scenes from nuScenes, KITTI-360,
+Waymo, and PandaSet Zhou et al. (2026a). The public set used here has 436 scenarios, distributed
+as in Table 13. Easy inserts no extra vehicle. Medium typically inserts one constant-velocity vehi-
+cle. Hard uses more obstructive vehicles, including some attackers. Extreme uses attack planners
+that intercept the predicted ego future, with more inserted vehicles. We deploy the NAVSIM-trained
+prior directly, without HUGSIM-specific fine-tuning.
+Table 13: HUGSIM public scenario split. Counts are the 436 released scenarios.
+Source
+Scenarios
+E
+M
+H
+X
+nuScenes
+88
+18
+34
+18
+18
+Waymo
+108
+22
+42
+22
+22
+KITTI-360
+113
+25
+36
+26
+26
+PandaSet
+127
+15
+45
+30
+37
+Total
+436
+80
+157
+96
+103
+18
+
+
+Preprint
+Route completion Rc ∈[0, 1] is the fraction of the prescribed route completed before termination.
+At each evaluated timestamp t, HUGSIM scores no collision, drivable-area compliance, TTC, and
+comfort. For an episode of Te timestamps,
+HD-Score = Rc · 1
+Te
+Te
+X
+t=1
+
+NCt DACt
+5 TTCt + 2 COMt
+7
+
+.
+(33)
+The product of NC and DAC keeps an off-road or colliding rollout from being offset by comfort,
+and Rc scales the result by how much of the route is finished. Each difficulty column in Table 3 is
+the mean of its scenarios, shown on a 0–100 scale. The Avg. column is not (E + M + H + X)/4,
+and it is not an equal average of the four source datasets. It weights the four difficulty means by
+their scenario counts,
+Avg. = 80 E + 157 M + 96 H + 103 X
+436
+,
+(34)
+which is the mean over all 436 scenarios. Medium contains the most scenarios, so it pulls Avg.
+below the unweighted mean of the four difficulties.
+D
+ADDITIONAL CONTROLLED ABLATIONS
+The ablations below are reported on NAVSIM-v1 navtest. This section first compares how the
+posterior-only model reads future-register tokens, and those scores are posterior PDMS. It then com-
+pares the length of the observed future, the weight on latent distillation, and, finally, the distillation
+loss together with which modules are updated. Each subsection changes the factor named in its title.
+The highlighted row is the reported setting.
+D.1
+FUTURE REGISTERS IN THE POSTERIOR
+Table 14 compares three ways to use the scene-register tokens from the four future frames, on the
+posterior-only branch. These scores are posterior PDMS, not the deployed prior. Taking the future
+registers directly as queries is the reported posterior and reaches 95.0. Using the same tokens as
+keys and values instead drops the score to 94.6. Compressing them with an MLP to 128 tokens and
+then using those tokens as queries drops it further, to 94.2. The uncompressed future registers are
+therefore the stronger queries for the privileged posterior.
+Table 14: How the posterior uses future-register tokens. Scores are posterior-only PDMS on
+NAVSIM-v1 navtest.
+Future-register role
+Tokens
+PDMS↑
+Keys and values
+256
+94.6
+Queries (ours)
+256
+95.0
+MLP compression, then queries
+128
+94.2
+D.2
+OBSERVED-FUTURE DURATION
+Table 15 varies how many future times the model observes. Each future time contributes one frame
+from each of the four cameras, and each camera-frame keeps 16 scene registers, so one future
+second is 64 tokens. Using only the 1 s future therefore supplies 64 tokens and reaches 93.5 PDMS.
+Extending the observation to {1, 2, 3, 4} s raises the latent to 256 tokens and the score to 93.8, which
+is the reported setting. The gain from the longer horizon shows that the additional future information
+is useful for planning.
+Table 15: Ablation of future duration. Each future second contributes 4 × 16 register tokens.
+Scores are PDMS on NAVSIM-v1 navtest.
+Future times
+Tokens
+PDMS↑
+1 s
+64
+93.5
+{1, 2, 3, 4} s (ours)
+256
+93.8
+19
+
+
+Preprint
+D.3
+LATENT-DISTILLATION WEIGHT
+Table 16 varies the weight on token-wise latent distillation. With λlatent=0, the prior is not trained
+to match the posterior target: latent similarity stays at 0.46 and PDMS is 93.5. A small weight of
+0.01 raises similarity to 0.88 and PDMS to 93.6. The reported weight, 0.05, reaches similarity 0.93
+and the highest PDMS, 93.8. Increasing the weight further to 0.10 makes the latents still closer, with
+similarity 0.95, but PDMS falls back to 93.7. Tighter alignment therefore does not by itself produce
+a better plan. The selected weight is the one at which the planning score peaks.
+Table 16: Sensitivity to the latent-distillation weight.
+λlatent
+Latent sim.↑
+PDMS↑
+0
+0.46
+93.5
+0.01
+0.88
+93.6
+0.05 (ours)
+0.93
+93.8
+0.10
+0.95
+93.7
+D.4
+DISTILLATION LOSS AND TRAINABLE MODULES
+Table 17 varies the distillation loss and the set of trainable modules. The first two rows train only
+the prior world model. The history encoder, planner, scorer, and ViT stay frozen, and the planner
+and scorer are copied from the posterior-only model. Under Llatent alone, latent similarity is 0.96
+and PDMS is 93.0. Adding Lplan and Lscore, with gradients flowing only into the world model,
+changes these values to 0.94 and 93.1. Latent alignment alone therefore leaves the planning score
+low. Whether making the latent still closer would raise PDMS is measured with the modules held
+fixed, in Table 16: increasing λlatent from 0.05 to 0.10 raises similarity from 0.93 to 0.95, while
+PDMS falls from 93.8 to 93.7. The planning and scoring losses, not a smaller latent gap, determine
+the planning score.
+The last three rows keep Llatent+Lplan+Lscore and train a larger set of modules. With the posterior
+planner and scorer held fixed, PDMS remains 93.0–93.1. Training the prior world model together
+with the scorer raises it to 93.4, and training the planner as well raises it to 93.5. Training the
+remaining modules, with the ViT base frozen and adapted by LoRA, reaches 93.8. Those copied
+planner and scorer weights were learned for the privileged posterior latent. The prior has to relearn
+the downstream weights for the latent it predicts.
+Table 17: Distillation loss and trainable modules.
+The first two rows train only the prior
+world model and freeze every other module, including LoRA. Scores are PDMS on NAVSIM-v1
+navtest.
+Trainable modules
+Loss
+Latent sim.↑
+PDMS↑
+Prior world model only
+Llatent
+0.96
+93.0
+Prior world model only
+Llatent + Lplan + Lscore
+0.94
+93.1
+Prior world model and scorer
+Llatent + Lplan + Lscore
+0.93
+93.4
+Prior world model, scorer, and planner
+Llatent + Lplan + Lscore
+0.93
+93.5
+All except the ViT base (ours)
+Llatent + Lplan + Lscore
+0.93
+93.8
+E
+ADDITIONAL QUALITATIVE RESULTS
+We provide two complementary qualitative views. The NAVSIM figures expose the complete can-
+didate set and therefore illustrate generation and selection in a single frame. The HUGSIM figures
+show consecutive closed-loop observations, revealing whether the selected plan remains stable after
+its actions alter the subsequent input. These examples are presented without cherry-picked metric
+annotations; the quantitative conclusions remain those of Sec. 4.2.
+E.1
+NAVSIM CANDIDATE GENERATION AND SELECTION
+In Figs. 7–10, each row contains the front-view image, ground-truth trajectory in the BEV scene,
+and PlanWAM output. Gray curves are all 64 candidates, the red curve is the trajectory selected
+20
+
+
+Preprint
+by PlanWAM, and the green curve is the recorded trajectory. The cases cover curved roads, turns,
+intersections, and dense multi-agent traffic.
+Figure 7: Additional NAVSIM results (set 1). Front view, ground-truth trajectory, and PlanWAM
+candidates.
+21
+
+
+Preprint
+Figure 8: Additional NAVSIM results (set 2). Curved roads and intersections.
+22
+
+
+Preprint
+Figure 9: Additional NAVSIM results (set 3). Urban scenes with parked and moving traffic.
+23
+
+
+Preprint
+Figure 10: Additional NAVSIM results (set 4). Dense multi-lane traffic. Gray curves are candi-
+dates; red is the selected plan.
+24
+
+
+Preprint
+E.2
+ZERO-SHOT CLOSED-LOOP ROLLOUTS ON HUGSIM
+Figures 11–14 show two six-step rollouts for each of the four HUGSIM source domains. The over-
+laid corridor, centerline, and waypoints visualize the current PlanWAM plan. The model is un-
+changed across domains and receives no HUGSIM-specific training.
+Figure 11: Zero-shot HUGSIM rollouts on nuScenes. Two closed-loop cases are shown over six
+consecutive planning steps.
+25
+
+
+Preprint
+Figure 12: Zero-shot HUGSIM rollouts on KITTI-360. Two closed-loop cases are shown over
+six consecutive planning steps.
+26
+
+
+Preprint
+Figure 13: Zero-shot HUGSIM rollouts on Waymo. Two closed-loop cases are shown over six
+consecutive planning steps.
+27
+
+
+Preprint
+Figure 14: Zero-shot HUGSIM rollouts on PandaSet. Two closed-loop cases are shown over six
+consecutive planning steps.
+28

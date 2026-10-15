@@ -1,0 +1,1185 @@
+RM-WAM: Reliable Memory-Augmented World Action Models
+for Long-Horizon Robot Manipulation
+Cui Miao1,2, Junhao Yu3, Ping Liu1, Ning Yang4, Xuhua Chen2,
+He Zheng2, Xiaodong Wang1, Tao Zhang2∗
+1National University of Defense Technology
+2Magic-Lab Team, Magiclab Robotics Inc.
+3Beijing Institute of Technology
+4Nanjing University
+Abstract— World Action Models (WAMs) improve robotic
+manipulation by jointly predicting future visual states and ac-
+tions, yet most existing methods make decisions primarily from
+the current observation. This limits their reliability in long-
+horizon tasks, where visually similar states may correspond to
+different interaction histories and task stages. Moreover, di-
+rectly incorporating historical observations can introduce stale,
+stage-mismatched, or error-contaminated information, leading
+to inaccurate world prediction and accumulated closed-loop
+errors. We propose RM-WAM, a reliable memory-augmented
+World Action Model that treats memory as a context-dependent
+predictive resource rather than universally useful historical
+context. RM-WAM represents history using complementary
+short-term visual state memory and latent event memory,
+which respectively capture recent interaction dynamics and
+longer-term state transitions. A counterfactual memory learning
+scheme varies the accessible history while keeping the current
+inputs and prediction targets fixed, enabling the model to
+learn a context-dependent utility estimate for historical memory.
+Based on this estimate, a utility-aware gating mechanism
+adaptively controls memory injection into the world–action
+backbone. Experiments demonstrate that RM-WAM highlights
+the importance of reliable and selective memory utilization in
+long-horizon tasks.
+I. INTRODUCTION
+By further training pretrained vision-language models
+on embodied data, Vision-Language-Action models (VLAs)
+are becoming an important foundation model paradigm for
+robotics and show strong abilities in task understanding and
+generalization [1], [2], [3], [4]. However, existing VLAs
+focus on predicting the next action from the current ob-
+servation directly. This local decision-making paradigm has
+clear limitations in long-horizon tasks, because each action
+not only determines the immediate behavior but also affects
+subsequent environment states and task progress. World Ac-
+tion Models (WAMs) are designed to bridge this gap [5], [6],
+[7], [8], [9]. By modeling action-conditioned state transitions
+and future observations, WAMs predict both what action
+the robot should take and how the world changes after the
+action is executed. However, reliable prediction of world
+evolution depends not only on the current observation, but
+also on a continuous understanding of past interactions. This
+makes historical context particularly important for WAMs in
+complex long-horizon manipulation, where visually similar
+observations may correspond to different interaction states
+and require different future evolutions.
+VLA
+Backbone
+Action
+Head
+WAM
+Backbone
+Action Head
+Video Head
+Utility Evaluation
+   Instruction
+   Observation
+  Memory
+Memory not always useful 
+No world prediction
+   Instruction
+   Observation
+  Memory
+Future 
+frame
+(a) Existing Memory-Augmented VLA
+(b) Reliable Memory-Augmented WAM
+Fig. 1.
+Motivation of RM-WAM. (a) Existing memory-augmented VLAs
+use memory for action prediction, but retrieved memory is not always useful
+and they do not model future world prediction. (b) RM-WAM evaluates
+memory utility and incorporates reliable memory into a WAM for both
+world prediction and action generation.
+Recent studies use memory mechanisms to improve policy
+performance in long-horizon manipulation tasks. For ex-
+ample, MemoryVLA [10], MEM [11], and other memory-
+augmented methods [12], [13], [14] build perceptual, se-
+mantic, or multi-scale memories to provide additional his-
+tory for long-horizon action generation. However, directly
+extending these memory mechanisms to WAMs presents
+two fundamental limitations, as illustrated in Fig. 1. First,
+existing memory-augmented VLAs are primarily designed
+to support action prediction, whereas WAMs additionally
+model action-conditioned world evolution through future
+visual-state prediction. Memory in a WAM therefore needs
+to support not only action generation but also world-state
+modeling, where inappropriate historical information can
+directly distort the predicted future. Second, retrieving task-
+relevant history does not necessarily mean that the retrieved
+memory is useful for the current world-action prediction.
+Existing memory mechanisms typically retrieve historical
+information according to relevance or similarity and then
+use the retrieved memory as additional context. However,
+even highly relevant memory may be stale, inconsistent with
+the current task stage, or contaminated by previous rollout
+errors. Therefore, WAMs require an additional mechanism
+to explicitly assess the utility of retrieved memory before
+incorporating it into the prediction process.
+This view is also consistent with cognitive science, where
+memory is not treated as a passive replay buffer but as an
+arXiv:2610.15305v1  [cs.RO]  11 Oct 2026
+
+
+active and context-dependent source of control [15]. Humans
+selectively retrieve and reorganize past experience when it
+supports the current goal, while suppressing or weakening
+memories that interfere with ongoing behavior. Similarly,
+historical information in WAMs should not be assumed to
+be beneficial simply because it is relevant to the task. Its
+usefulness depends on the current observation, task stage,
+and prediction objective. We therefore argue that the key
+challenge in memory-augmented WAMs is not only which
+memory to retrieve, but also whether the retrieved memory
+should be used. This motivates explicitly modeling memory
+utility for reliable world-action prediction.
+To address this challenge, we propose Reliable Memory-
+augmented World Action Model (RM-WAM), a utility-aware
+memory framework for long-horizon robot manipulation. We
+first model history as short-term visual memory and latent
+event memory according to their different roles in world-
+state prediction. Short-term visual memory describes local
+visual changes, providing interaction states that are difficult
+to infer from current observation. Latent event memory
+encodes historical transitions in the shared latent space
+and captures history that is relevant to future world evo-
+lution. We then introduce a counterfactual memory learning
+scheme for WAMs. By keeping the current observation and
+task instruction fixed while changing the accessible history,
+the model learns how different memory conditions affect
+future prediction and action generation, thereby obtaining
+a context-dependent utility estimate for historical memory
+under the current state. Based on the learned utility, the
+model adaptively controls memory injection before WAM
+backbone, so that it preserves history that helps the cur-
+rent prediction while suppressing stale, stage-misaligned,
+or error-contaminated memory. In this way, memory is no
+longer treated as extra context that is useful by default, but
+as a selective historical intervention in world evolution.
+Our contributions are summarized as follows:
+• We extend memory augmentation to the World Action
+Models, and show that the key challenge in memory-
+augmented WAMs is not only storing or retrieving his-
+tory, but also determining whether memory is consistent
+with the current world-evolution prediction and whether
+it has positive utility for future state estimation and
+closed-loop decision making.
+• We propose Reliable Memory-augmented WAM, a
+utility-aware
+memory
+framework
+for
+long-horizon
+robotic manipulation. The proposed method models
+history at different scales through short-term visual
+memory and latent event memory, and combines coun-
+terfactual memory learning with utility-aware mem-
+ory adapters to selectively preserve helpful history
+while suppressing stale, stage-misaligned, or error-
+contaminated memory.
+• We evaluate RM-WAM on both simulation bench-
+marks including LIBERO [16], memory-dependent RM-
+Bench [17] and challenging long-horizon real-world
+task. Compared with representative non-memory and
+memory-augmented baselines, RM-WAM consistently
+achieves strong performance, demonstrating the benefit
+of reliable memory utilization for World Action Models.
+II. RELATED WORKS
+A. Vision-Language-Action Models
+Vision-Language-Action models (VLAs) integrate visual
+observations, language instructions, and robot actions into
+end-to-end policies [18], [19], [20]. Many recent VLAs
+build on pretrained vision-language models (VLMs) and
+are further trained on large-scale robot demonstrations,
+improving generalization across tasks, environments, and
+robot embodiments [21], [22]. Early works such as RT-
+1 [23] and RT-2 [24] show the scalability of Transformer-
+based policies. Open X-Embodiment [25], Octo [2], and
+OpenVLA [1] further push multi-embodiment training and
+efficient downstream adaptation. The π family [26], [3] fur-
+ther uses diffusion or flow matching to generate continuous
+action chunks. However, existing VLA methods mainly learn
+a direct mapping from current observations and language
+instructions to action sequences, while overlooking how the
+environment evolves under robot actions.
+B. World Action Models
+World models learn environment dynamics by predicting
+future observations or latent states, providing predictive rep-
+resentations for planning and policy learning [27], [28], [29].
+The Dreamer series [30], [31] optimizes policies in a learned
+latent world and shows the value of imagined trajectories.
+UniPi [32] and Video Language Planning [33] use future
+videos for planning and convert visual predictions into robot
+actions through inverse dynamics or goal-conditioned poli-
+cies. Recent world action models jointly model future visual
+states and actions in a unified architecture [7], [8]. However,
+existing WAMs mainly rely on the current observation and
+lack effective modeling of historical state. This limits history-
+dependent prediction in long-horizon tasks with partial ob-
+servability and stage-dependent behavior.
+C. Memory-Augmented Robotic Manipulation
+Memory is important for handling long-horizon task de-
+pendencies in robotic manipulation. Early approaches mainly
+use recurrent states or temporal attention to aggregate his-
+tory [34]. Recent studies use updatable memory bank to
+extend the temporal context of robot policies [35], [11].
+However, directly applying memory-augmented mechanisms
+to WAMs does not ensure that the retrieved history remains
+consistent with the current world prediction. Although recent
+studies improve policy performance by introducing hierarchi-
+cal, persistent, or higher-capacity memory mechanisms [36],
+[37], they primarily focus on organizing and extending
+historical context, while the context-dependent utility of
+retrieved memory for current world-action prediction remains
+less explicitly modeled. Historical information may be stale,
+stage-mismatched, or corrupted by closed-loop errors. Our
+RM-WAM therefore treats visual memory as a predictive
+resource with context-dependent utility rather than uniformly
+useful historical context.
+
+
+VAE   Decoder
+⊕noise
+Video DiT
+⊕noise
+Expert DiT
+MoT 
+...
+Dual-Scale 
+Memory
+Gate
+Gate
+⊕
+AdaLN-Zero
+Memory tokens
+Action Decoder
+Action Encoder
+VAE   Encoder
+proprioception
+prompt
+Obs_Past
+Obs_Current
+Obs_Future
+State/Text
+Encoder
+cross
+attn.
+“clean the table“
+Predicted 
+Future Frames
+Action Chunk
+Predicted
+Action Chunk
+...
+Event
+Encoder
+Obs_Past/Current Latent Tokens
+T
+T-16
+T-32
+T-48
+T-64
+short-memory tokens
+event-memory tokens
+Temporal
+Encoder
+T-1
+T-2
+T
+T-3
+T-4
+Dual-Scale Memory
+event-memory tokens
+Obs_Current token
+Obs_Past token
+Obs_Future token
+Action token
+Short-memory token
+Event-memory token
+Fig. 2.
+Overview of RM-WAM. The left panel shows the overall world-action framework with selective memory injection, while the right panel details
+the construction of the dual-scale memory.
+III. METHOD
+A. Problem Formulation
+A World Action Model (WAM) jointly predicts future
+visual states and robot actions:
+pθ (ht+1:t+Hv, at:t+Ha−1 | ot, c, pt) ,
+(1)
+where ot, c, and pt denote the current visual observation,
+language instruction, and proprioceptive state, respectively.
+at:t+Ha−1 is the future action chunk with horizon Ha,
+ht+1:t+Hv denotes future visual states, and Hv is the visual
+prediction horizon. However, the current observation alone
+is often insufficient for long-horizon tasks. We therefore
+introduce history memory:
+Mt = (mt−δ1, . . . , mt−δK) ,
+0 < δ1 < · · · < δK, (2)
+where mt−δi denotes a memory item from historical timestep
+t −δi, δi is the corresponding temporal offset, and K
+is the number of memory items. The memory-conditioned
+prediction is formulated as:
+pθ(ht+1:t+Hv, at:t+Ha−1 | ot, c, pt, Mt).
+(3)
+We focus on selecting memory according to its utility under
+the current context, so as to improve future-state and action
+prediction in long-horizon tasks.
+B. Framework Overview
+The overall framework of RM-WAM is illustrated in
+Fig. 2. Given the current and historical observations, lan-
+guage instruction, and proprioceptive state, RM-WAM first
+constructs a dual-scale memory from visual latent tokens.
+A temporal encoder aggregates recent latent states to form
+short-term memory tokens, while an event encoder repre-
+sents historical state transitions as event-memory tokens.
+These memory representations are selectively injected into
+the video branch through gated adapters, where the gating
+functions are learned with counterfactual memory supervi-
+sion to estimate the utility of memory. The video branch
+adopts Wan2.2-TI2V-5B [38] as the backbone, including
+its VAE encoder-decoder and Video DiT, while the action
+branch employs an Expert DiT for action prediction. The
+two branches interact through a Mixture-of-Transformers
+(MoT) and are conditioned on language and proprioceptive
+information through the state/text encoder, enabling memory-
+enhanced joint prediction of future visual states and action
+chunks.
+C. Counterfactual Memory
+To estimate the utility of historical memory under the
+current context, we construct counterfactual memory con-
+ditions by varying only the accessible history while keeping
+the current observation, task instruction, proprioceptive state
+and prediction target unchanged. This design isolates the
+influence of memory from changes in the current inputs and
+supervision targets. Specifically, Mref
+t
+is constructed from
+the causally aligned history preceding the current timestep
+within the same episode and serves as the reference memory
+condition, Mstale
+t
+is sampled from temporally distant history,
+representing information that is valid within the episode but
+less relevant to the current state, Mstage
+t
+is constructed by
+temporally shifting the historical sampling positions within
+the same episode, producing history that is causally valid but
+misaligned with the current decision point. This condition
+simulates temporally mismatched context without requiring
+explicit stage annotations, Mcross
+t
+is drawn from another
+episode of the same task, preserving task-level semantics
+while breaking the correspondence with the current trajec-
+tory. These counterfactual conditions expose the model to
+historical contexts with different expected levels of predictive
+reliability. Each condition is associated with a soft utility
+target qv ∈[0, 1], which serves as a supervision proxy
+for the relative reliability of memory under the current
+prediction context, rather than a direct measurement of causal
+performance gain.
+D. Dual Memory Representation
+1) Short Visual Memory: Short memory provides recent
+visual for WAM and supplements local interaction states that
+
+
+are difficult to infer from a single current frame, such as
+manipulator occlusion, small object displacement, and short-
+term motion trends. Directly concatenating all historical
+tokens increases sequence length and introduces repeated
+background information. RM-WAM therefore compresses
+recent visual history before it enters the WAM backbone.
+Specifically, we select the K most recent visual frames
+from the memory set Mt as the short visual memory
+Ms
+t and encode them together with the current observa-
+tion by a shared VAE into spatial patch tokens, producing
+P ∈RB×(K+1)×N×dv, where B is the batch size, N is
+the number of visual patches, and dv is the video-token
+dimension. Instead of flattening them into a global token
+sequence of length (K + 1)N, we rearrange them as S ∈
+R(BN)×(K+1)×dv, where each spatial position forms a short
+temporal sequence. A shared temporal encoder aggregates
+recent observations at each spatial position and produces a
+history-conditioned representation for the current timestep.
+Its projected output is denoted as the short visual memory
+representation Rs
+t. A short-memory utility gate then updates
+the current visual tokens as
+eXcur = Xcur + gs
+t Rs
+t,
+gs
+t
+= σ (Gs (Xcur, Rs
+t, c)) ,
+(4)
+where Xcur and eXcur are the current visual tokens before
+and after memory injection, Gs is the short-memory utility
+adapter, σ(·) is the sigmoid function, and gs
+t ∈[0, 1] is the
+utility coefficient of recent visual history under the current
+prediction context.
+2) Latent Event Memory: Short memory mainly supple-
+ments the current interaction state, while long-horizon ma-
+nipulation also depends on state transitions that have already
+happened. To align memory with future-latent prediction in
+WAM, we construct event memory in the shared latent space
+without using image-level labels or discrete event detectors.
+We sample historical visual latent states at an interval of 16
+timesteps and construct Ke transition-level event candidates.
+Each candidate Ui concatenates the latent states before and
+after the transition, denoted as Zbefore
+i
+and Zafter
+i
+, together
+with the signed change Zafter
+i
+−Zbefore
+i
+and its absolute
+value. This keeps both state context and transition content.
+After adding temporal position embeddings, the candidates
+are encoded into latent event representations:
+[e1, . . . , eKe] ∈RB×Ke×de,
+(5)
+where B is the batch size, Ke is the number of transition-
+level event candidates, de is the event-representation dimen-
+sion, and ei denotes the encoded representation of the i-th
+latent transition. To obtain a current-state-conditioned latent
+event memory, we map the current visual to a query qt and
+each latent event ei to a key-value pair (ki, vi), then softly
+aggregate the event values:
+ri = Softmaxi
+q⊤
+t ki
+√dr
+
+,
+Me
+t = Projo
+ Ke
+X
+i=1
+rivi
+!
+,
+(6)
+where dr is the query-key dimension, ri is the normalized
+aggregation weight, Projo maps the aggregated value back
+to the WAM visual dimension, and Me
+t is the latent event
+memory conditioned on the current state. The attention
+weights ri reflect the relevance of each historical transition
+to the current state, but do not directly determine whether it
+should influence the current prediction.
+Latent event memory is used to modulate the future
+visual latent tokens that model world dynamics. Specifically,
+we adopt an AdaLN-Zero style modulation to inject the
+aggregated event representation Me
+t into the video branch.
+At the l-th modulation layer, Me
+t is projected to adaptive
+scale and shift parameters:
+[ηl, βl] = WlMe
+t,
+Dl = Adapterl
+ LN(Xfut
+l ) ⊙(1 + ηl) + βl
+
+,
+(7)
+where Xfut
+l
+denotes the future visual latent tokens at the
+l-th modulation layer, Wl is a learnable linear projection
+that maps the latent event memory to the modulation pa-
+rameters, and ηl and βl denote the adaptive scale and shift,
+respectively. LN(·) denotes layer normalization, ⊙denotes
+element-wise multiplication, and Adapterl is a lightweight
+projection module that produces the event-conditioned mod-
+ulation term Dl.
+To control the contribution of event memory under the
+current prediction context, we further introduce an event-
+memory gate:
+ge
+t = σ (Ge(Xcur, Me
+t, c)) ,
+eXfut
+l
+= Xfut
+l
++ ge
+t Dl,
+(8)
+where Xcur denotes the current visual representation, c is the
+language instruction, Ge is the event-memory gate and σ(·)
+denotes the sigmoid function. The resulting coefficient ge
+t ∈
+[0, 1] controls the strength of event-memory injection, while
+eXfut
+l
+denotes the future visual latent tokens after modulation.
+The gate is learned with counterfactual memory supervision,
+allowing the contribution of latent event memory to adapt to
+its utility under the current prediction context.
+E. Training and Inference
+RM-WAM is trained with joint world-action modeling,
+future-transition supervision for latent event memory, and
+memory-utility supervision. The overall objective is
+L = Lact + λvLvid + λeLevt + λuLutility,
+(9)
+where Lact and Lvid are the flow-matching losses for action
+generation and future visual dynamics, Levt encourages
+latent event memory to retain historical transitions related
+to future world evolution, and Lutility provides memory-
+utility supervision from counterfactual memory conditions.
+The coefficients λv, λe, and λu balance the video, event,
+and utility losses.
+For the WAM backbone, we use flow matching to jointly
+model future action chunks and future visual latents. Let y
+denote either the future action chunk at:t+Ha−1 or the future
+visual latent zt+1:t+Hv. During training, we sample noise
+
+
+ϵ ∼N(0, I) and a time step τ ∼U(0, 1), and define the
+interpolation path
+yτ = (1 −τ)y + τϵ.
+(10)
+Conditioned on the latent world representation st, the
+conditional velocity field fθ predicts the velocity along this
+path:
+LFM(y) = Ey,ϵ,τ
+h
+∥fθ(yτ, τ, st) −(ϵ −y)∥2
+2
+i
+,
+(11)
+here fθ is the conditional velocity predictor and LFM is the
+flow-matching loss for a target variable y. The action and
+future-visual losses are then:
+Lact = LFM (at:t+Ha−1) ,
+Lvid = LFM (zt+1:t+Hv) ,
+(12)
+where zt+1:t+Hv denotes the clean future visual latent se-
+quence used as the video prediction target. Video tokens and
+action tokens interact in the MoT backbone, so future visual
+latent supervision shapes the world representation used for
+action generation. We also apply a causal mask consistent
+with the prediction targets, so future visual latents are used
+only as supervision for the video branch and are not exposed
+as visible inputs to the action prediction branch.
+To encourage latent event memory to retain transitions
+that are predictive of future world evolution, we introduce
+a future-transition objective:
+byevt = hevt(Me
+t),
+Levt = SmoothL1 (byevt, sg(yevt)) ,
+(13)
+where yevt is a latent-transition target constructed from
+the current and future visual latent sequences, byevt is its
+prediction from the event head hevt, and sg(·) denotes stop-
+gradient. Future visual latents are used only to define this
+training target and do not participate in building the event
+memory itself.
+Each counterfactual memory condition provides a sample-
+level soft utility target qv ∈[0, 1]. RM-WAM uses this target
+to supervise the utility adapters of both short-term visual
+state memory and latent event memory:
+Lutility = BCE(gs
+t , qv) + BCE(ge
+t , qv),
+(14)
+where BCE denotes binary cross-entropy. In the current
+implementation, gs
+t and ge
+t share the same sample-level soft
+utility target derived from the selected counterfactual mem-
+ory condition. We use a shared target because both memory
+branches are constructed under the same counterfactual his-
+tory condition, while their branch-specific gating networks
+independently determine the injection strength from their
+respective memory representations.
+During inference, RM-WAM maintains a causal visual
+history buffer for each episode. After the robot executes an
+action chunk and receives a new observation, the observation
+is appended to the buffer in temporal order, and memory
+is sampled with the same temporal offsets as in training at
+the next decision step. When valid history is insufficient at
+the beginning of an episode, missing positions are masked
+instead of being filled by copying the current frame. Since
+causal attention masks already prevent the action branch from
+accessing future visual information during training, future
+video generation can be omitted during inference without
+affecting action prediction.
+IV. EXPERIMENTS
+A. Experimental Setup
+1) Model architecture: RM-WAM adopts a dual-branch
+architecture for joint modeling of future visual and robot
+actions. The video branch uses Wan2.2-TI2V-5B [38] as
+the backbone for world prediction, while the action branch
+employs a 30-layer Diffusion Transformer (DiT) [39] to
+generate continuous action chunks. The two branches interact
+through a Mixture-of-Transformers (MoT). In addition, a
+one-layer temporal Transformer encodes recent visual latent
+tokens to construct short-term visual memory, while another
+one-layer Transformer encodes historical latent transitions
+to form latent event memory. For the two memory types,
+lightweight two-layer MLP gating modules are employed
+to control memory injection, with their strengths learned
+through counterfactual memory supervision.
+2) Benchmarks:
+We
+evaluate
+RM-WAM
+on
+two
+simulated benchmarks, LIBERO [16] and RMBench [17].
+LIBERO
+evaluates
+language-conditioned
+manipulation
+across
+four
+suites:
+LIBERO-Spatial,
+LIBERO-Object,
+LIBERO-Goal, and LIBERO-Long, covering spatial, object-
+centric, goal-conditioned, and long-horizon tasks. RMBench
+focuses on memory-dependent manipulation under partial
+observability, where reliable execution requires the model
+to retain and utilize historical visual states and interaction
+events over extended temporal horizons. Together, the two
+benchmarks assess both the general manipulation capability
+of RM-WAM and its effectiveness in long-horizon tasks.
+3) Baselines: We compare RM-WAM with four represen-
+tative methods. Diffusion Policy (DP)[40] is included as an
+action-generation baseline without world modeling. π0.5 [3]
+represents a strong vision-language-action policy for contin-
+uous robot control. FastWAM [9] serves as a world–action
+modeling baseline that jointly learns visual and robot actions.
+HiMem-WAM [36] is the most closely related memory-
+augmented world-action model and introduces hierarchical
+memory gating for long-horizon manipulation. All methods
+are evaluated using the same data and evaluation protocol.
+4) Implementation Details: Short-term memory encodes
+the four most recent frames, while event memory samples
+visual latents every 16 timesteps to construct four transition-
+level candidates. Counterfactual supervision is implemented
+by modifying the historical sampling pools of short and
+event memory while keeping their memory lengths fixed.
+The reference, stale, stage, and cross-episode conditions are
+assigned soft utility targets of 1.0, 0.01, 0.01, and 0.01,
+respectively. These values are used as soft supervision priors
+to distinguish causally aligned history from deliberately
+perturbed memory conditions, and counterfactual memory
+samples account for 50% of the training data.
+Multi-view observations are concatenated into a single
+image before being fed into the model. Robot actions are
+represented in 7-DoF, with an action horizon of 32. Models
+
+
+are trained for 10 epochs with a batch size of 16 and gradient
+accumulation of 1, using AdamW with an initial learning
+rate of 1 × 10−4 and a weight decay of 1 × 10−2. During
+training, gradients from the action branch to the video branch
+are stopped. At inference, RM-WAM maintains a causal his-
+tory buffer that is updated with incoming observations, and
+unavailable historical states at the beginning of an episode
+are masked out. For action generation, we use classifier-free
+guidance (CFG) [41] with a guidance scale of 1.0.
+B. Simulation
+1) Task: For both LIBERO and RMBench, each task
+uses 50 expert demonstrations for training, and all models
+are trained for 10 epochs under the same configuration. On
+LIBERO, we evaluate all 40 tasks across the four suites,
+performing 50 evaluation rollouts per task with different
+environment initialization seeds, and report the average suc-
+cess rate. On RMBench, we evaluate the nine bimanual
+manipulation tasks with 100 evaluation rollouts per task
+under different environment initialization seeds and also
+report the average success rate.
+TABLE I
+COMPARISONS WITH OTHER BASELINES ON LIBERO BENCHMARK.
+SUCCESS RATES(%) ARE REPORTED, AND BOLD DENOTES THE BEST
+PERFORMANCE AMONG ALL METHODS.
+Method
+Spatial
+Object
+Goal
+Long
+Avg.
+DP
+78.3%
+92.5%
+68.3%
+50.5%
+72.4%
+π0.5
+98.8%
+98.2%
+98.0%
+92.4%
+96.9%
+HiMem-WAM
+98.2%
+99.8%
+98.4%
+94.5%
+97.7%
+FastWAM
+98.2%
+100.0%
+97.0%
+95.2%
+97.6%
+RM-WAM (Ours)
+98.8%
+100.0%
+98.2%
+97.0%
+98.5%
+2) Evaluation Results: As shown in Tables I and II,
+RM-WAM achieves the best overall performance on both
+LIBERO and RMBench. On LIBERO, RM-WAM reaches
+an average success rate of 98.5%, with the most notable
+improvement on LIBERO-Long, indicating that short-term
+interaction cues and historical state transitions provide richer
+contextual support for long-horizon decision making than
+relying solely on the current observation. On RMBench,
+RM-WAM achieves an average success rate of 55.8% and
+substantially outperforms HiMem-WAM. This indicates that
+for strongly history-dependent tasks, the key is to identify
+which past states and interaction events are useful for the
+current decision. By combining dual-scale memory with
+counterfactual supervision for selective memory utilization,
+RM-WAM achieves more gains on RMBench.
+C. Real World
+1) Task: We further evaluate RM-WAM on a real-world
+dual-arm robotic platform consisting of two AGILEX PIPER
+manipulators, an Intel RealSense D435i RGB-D camera.
+We design a long-horizon Organize Table task that requires
+the robot to complete a sequence of object manipulation
+steps within a single episode. As shown in Fig. 3, the
+task consists of multiple temporally dependent stages and
+TABLE II
+COMPARISONS WITH BASELINES ON RMBENCH. SUCCESS RATES (%)
+ARE REPORTED, AND BOLD DENOTES THE BEST PERFORMANCE.
+Task
+DP
+π0.5
+FastWAM
+HiMem-WAM
+RM-WAM
+Observe Pick Up
+1%
+9%
+0%
+28%
+27%
+Rearrange Blocks
+0%
+13%
+0%
+33%
+65%
+Put Back Block
+0%
+11%
+0%
+32%
+70%
+Swap Blocks
+11%
+24%
+0%
+38%
+62%
+Swap T
+2%
+15%
+7%
+27%
+58%
+Battery Try
+10%
+16%
+20%
+28%
+30%
+Blocks Ranking
+10%
+6%
+26%
+24%
+75%
+Cover Blocks
+0%
+0%
+0%
+19%
+64%
+Press Button
+0%
+0%
+0%
+8%
+51%
+Avg.
+3.8%
+10.4%
+5.9%
+26.3%
+55.8%
+therefore requires the policy to maintain and utilize historical
+information throughout execution. We collect 500 expert
+demonstrations for training, each covering the complete
+task trajectory from the initial scene to the final organized
+state. During evaluation, the initial object configurations are
+randomized, and the robot is required to complete the entire
+multi-stage task. For real-world inference, the policy predicts
+an action chunk of 32 and replans every 8 control steps at
+a control frequency of 30 Hz. To further evaluate robust-
+ness and generalization in real-world settings, we consider
+three testing settings: Standard evaluates the complete task
+under normal initial configurations. Disturbance introduces
+external interventions during execution, such as manually
+removing an object that has already been placed at its target
+location. Unseen introduces objects that are absent from the
+training data. We conduct 30 rollouts for each setting and
+report the overall average success rate.
+①
+②
+③
+Time
+Fig. 3.
+Real-world long-horizon tabletop organization task. The task
+consists of three sequential manipulation subtasks, denoted by
+1⃝– 3⃝,
+requiring the robot to complete multiple object organization steps over an
+extended temporal horizon.
+2) Evaluation Results:
+We compare RM-WAM with
+FastWAM, which follows a similar world-action modeling
+paradigm, to examine the effectiveness of the proposed
+reliable memory mechanism in physical environments. As
+shown in Table III, RM-WAM consistently outperforms Fast-
+WAM across all three settings. Under Standard, RM-WAM
+achieves a success rate of 90.0%, improving over FastWAM
+by 10 percentage points, indicating more stable execution
+in long-horizon multi-stage tasks. Under Disturbance, RM-
+WAM reaches 83.3%, compared with 70.0% for FastWAM.
+This suggests that when external interventions alter task
+progress, relying mainly on the current observation can
+lead to incorrect stage estimation, whereas RM-WAM can
+leverage historical interactions to better reassess the current
+task state and recover from disturbances. Under Unseen, RM-
+WAM achieves 86.7%, compared with 76.7% for FastWAM,
+
+
+showing that reliable historical context remains beneficial
+when generalizing to unseen objects.
+TABLE III
+REAL-WORLD EVALUATION RESULTS. SUCCESS RATES (%) ARE
+REPORTED, AND BOLD DENOTES THE BEST PERFORMANCE.
+Method
+Standard
+Disturbance
+Unseen
+FastWAM
+80.0
+70.0
+76.7
+RM-WAM
+90.0
+83.3
+86.7
+D. Memory Analysis and Visualization
+1) Short-Term Visual Memory: To understand the ef-
+fectiveness of the short-term memory in RM-WAM, we
+visualize its spatial attention and the corresponding utility
+coefficient on the Blocks Ranking Try task in RMBench. As
+shown in Fig. 4, at the current timestep t, the robot has just
+completed placing the pink block and should subsequently
+interact with the green block. The short-term memory mainly
+attends to manipulation-relevant regions, including the grip-
+per, the previously manipulated pink block, and the green
+block corresponding to the next interaction, providing histor-
+ical cues for identifying the subsequent manipulation target.
+We further visualize the short-memory utility coefficient
+learned through counterfactual memory supervision. As the
+task transitions from placing the pink block to manipulating
+the green block, the utility increases toward the current
+decision and reaches its highest value at t−1. This indicates
+that RM-WAM does not uniformly fuse recent observations,
+but instead adaptively evaluates the utility of short-term
+history according to the current task state.
+0.1
+0.2
+0.3
+0.4
+t-4
+t-3
+t-2
+t-1
+short-memory utility
+t-4
+t-3
+t-2
+t-1
+t
+Fig. 4.
+Visualization of short-term visual memory in RM-WAM. The
+top row shows spatial attention over recent historical observations, and the
+bottom row shows the corresponding raw observations together with the
+current frame. The right panel shows the short-memory utility coefficient
+learned through counterfactual memory supervision.
+2) Latent Event Memory: To analyze how RM-WAM
+utilizes latent event memory during long-horizon manipula-
+tion, we visualize the memory attention over time on the
+Put Back Block task in RMBench. As shown in Fig. 5,
+when the robot needs to return the block to its original
+position, the model assigns noticeably higher attention to an
+earlier historical interval corresponding to the event in which
+the block was initially picked up from that location. The
+result provides qualitative evidence that latent event memory
+captures meaningful interaction events and supports history-
+dependent decision making in long-horizon tasks.
+��
+current
+Fig. 5.
+Visualization of latent event memory in RM-WAM. The model
+attends to earlier event eτ when returning the block to its original position.
+3) Memory-Conditioned Future Prediction: To further
+investigate how reliable memory contributes to world mod-
+eling, we visualize the future state evolution of RM-WAM on
+two tasks from LIBERO-Long. Given the current and histori-
+cal observations, RM-WAM predicts future visual states over
+a long horizon. As shown in Fig. 6, the predicted trajectories
+closely match the ground-truth observations across different
+future timesteps, preserving the evolution of object configu-
+rations and robot-object interactions. These results indicate
+that RM-WAM can effectively generate temporally consistent
+and task-relevant future dynamics.
+RM-WAM
+Predicted
+Ground
+Truth
+t
+t+4
+t+8
+t+12
+t+16
+Ground
+Truth
+RM-WAM
+Predicted
+t+20
+Fig. 6.
+Visualization of future evolution on LIBERO-Long.
+E. Ablation Studies
+We conduct an ablation study on LIBERO to analyze the
+short-term memory and latent event memory across tasks.
+As shown in Table IV, w/o short-mem. and w/o event-
+mem. denote removing the short-term memory and latent
+event memory, respectively. Removing short-term memory
+decreases the success rate on LIBERO-Spatial from 98.8%
+to 97.8%, indicating that recent visual history is impor-
+tant for preserving local spatial information. On LIBERO-
+Goal and LIBERO-Long, removing event memory leads to
+larger performance drops, with success rates decreasing to
+96.8% and 95.0%, respectively. This is consistent with the
+stronger dependence of these tasks on task progress and
+longer-range state transitions, for which latent event memory
+provides more persistent historical context. Overall, RM-
+WAM achieves the highest average success rate, validating
+the complementary roles of the two memory components.
+
+
+TABLE IV
+ABLATION STUDY ON LIBERO. SUCCESS RATES (%) ARE REPORTED,
+AND BOLD DENOTES THE BEST PERFORMANCE.
+Method
+Goal
+Object
+Spatial
+Long
+Avg.
+w/o short-mem.
+97.0
+100.0
+97.8
+96.0
+97.7
+w/o event-mem.
+96.8
+100.0
+98.2
+95.0
+97.5
+RM-WAM
+98.2
+100.0
+98.8
+97.0
+98.5
+V. CONCLUSION
+In this paper, we propose RM-WAM, a reliable memory-
+augmented World Action Model for long-horizon robot
+manipulation. Different from existing memory augmenta-
+tion methods that treat historical information as universally
+useful context, RM-WAM considers memory as a context-
+dependent predictive resource and models history through
+complementary short-term visual memory and latent event
+memory to capture local interactions and long-term state
+transitions. Furthermore, counterfactual memory learning is
+introduced to learn a context-dependent utility estimate for
+historical information under the current task state, enabling
+adaptive memory utilization for world prediction and action
+generation. Experiments demonstrate that RM-WAM effec-
+tively exploits reliable historical information and improves
+long-horizon task performance through more accurate world
+evolution modeling and closed-loop decision making.
+REFERENCES
+[1] M. J. Kim, K. Pertsch, S. Karamcheti, T. Xiao, A. Balakrishna,
+S. Nair, R. Rafailov, E. Foster, G. Lam, P. Sanketi et al., “Open-
+vla: An open-source vision-language-action model,” arXiv preprint
+arXiv:2406.09246, 2024.
+[2] O. M. Team, D. Ghosh, H. Walke, K. Pertsch, K. Black, O. Mees,
+S. Dasari, J. Hejna, T. Kreiman, C. Xu et al., “Octo: An open-source
+generalist robot policy,” arXiv preprint arXiv:2405.12213, 2024.
+[3] P. Intelligence, K. Black, N. Brown, J. Darpinian, K. Dhabalia,
+D. Driess, A. Esmail, M. Equi, C. Finn, N. Fusai et al., “π0.5: a
+vision-language-action model with open-world generalization,” arXiv
+preprint arXiv:2504.16054, 2025.
+[4] Q. Li, Y. Liang, Z. Wang, L. Luo, X. Chen, M. Liao, F. Wei, Y. Deng,
+S. Xu, Y. Zhang et al., “Cogact: A foundational vision-language-action
+model for synergizing cognition and action in robotic manipulation,”
+arXiv preprint arXiv:2411.19650, 2024.
+[5] M. J. Kim, Y. Gao, T.-Y. Lin, Y.-C. Lin, Y. Ge, G. Lam, P. Liang,
+S. Song, M.-Y. Liu, C. Finn et al., “Cosmos policy: Fine-tuning
+video models for visuomotor control and planning,” arXiv preprint
+arXiv:2601.16163, 2026.
+[6] A. Ye, B. Wang, C. Ni, G. Huang, G. Zhao, H. Li, H. Li, J. Li, J. Lv,
+J. Liu et al., “Gigaworld-policy: An efficient action-centered world–
+action model,” arXiv preprint arXiv:2603.17240, 2026.
+[7] S. Ye, Y. Ge, K. Zheng, S. Gao, S. Yu, G. Kurian, S. Indupuru,
+Y. L. Tan, C. Zhu, J. Xiang et al., “World action models are zero-
+shot policies,” arXiv preprint arXiv:2602.15922, 2026.
+[8] H. Bi, H. Tan, S. Xie, Z. Wang, S. Huang, H. Liu, R. Zhao, Y. Feng,
+C. Xiang, Y. Rong et al., “Motus: A unified latent action world model,”
+in Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, 2026, pp. 35 101–35 113.
+[9] T. Yuan, Z. Dong, Y. Liu, and H. Zhao, “Fast-wam: Do world
+action models need test-time future imagination?” arXiv preprint
+arXiv:2603.16666, 2026.
+[10] H. Shi, B. Xie, Y. Liu, L. Sun, F. Liu, T. Wang, E. Zhou, H. Fan,
+X. Zhang, and G. Huang, “Memoryvla: Perceptual-cognitive memory
+in vision-language-action models for robotic manipulation,” arXiv
+preprint arXiv:2508.19236, 2025.
+[11] M. Torne, K. Pertsch, H. Walke, K. Vedder, S. Nair, B. Ichter, A. Z.
+Ren, H. Wang, J. Tang, K. Stachowicz et al., “Mem: Multi-scale
+embodied memory for vision language action models,” arXiv preprint
+arXiv:2603.03596, 2026.
+[12] Z. Li, B. Hu, R. Shao, G. Chen, D. Jiang, P. Xie, J. Hao, and
+L. Nie, “Global prior meets local consistency: Dual-memory aug-
+mented vision-language-action model for efficient robotic manipula-
+tion,” in Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, 2026, pp. 35 135–35 145.
+[13] H. Li, F. Shen, D. Chen, L. Yang, X. Wang, J. Shi, Z. Bing,
+Z. Liu, and A. Knoll, “Remem-vla: Empowering vision-language-
+action model with memory via dual-level recurrent queries,” arXiv
+preprint arXiv:2603.12942, 2026.
+[14] X. Wang, C. Wang, H. Nekoei, C. Pal, A. Lacoste, S. Gella, B. Liu,
+and P. Taslakian, “Mem-π: Adaptive memory through learning when
+and what to generate,” arXiv preprint arXiv:2605.21463, 2026.
+[15] S. Ikier, C. Dönerkayalı, Ö. S. Halıcı, Z. A. Kaymak Gülseren, H. Gök-
+sal, and B. Akba¸s, “When is memory more reliable? scientific findings,
+theories, and myths,” Applied Neuropsychology: Adult, vol. 31, no. 1,
+pp. 77–94, 2024.
+[16] B. Liu, Y. Zhu, C. Gao, Y. Feng, Q. Liu, Y. Zhu, and P. Stone,
+“Libero: Benchmarking knowledge transfer for lifelong robot learn-
+ing,” Advances in Neural Information Processing Systems, vol. 36,
+pp. 44 776–44 791, 2023.
+[17] T. Chen, Y. Wang, M. Li, Y. Qin, H. Shi, Z. Li, Y. Hu, Y. Zhang,
+K. Wang, Y. Chen et al., “Rmbench: Memory-dependent robotic
+manipulation benchmark with insights into policy design,” arXiv
+preprint arXiv:2603.01229, 2026.
+[18] Q. Bu, Y. Yang, J. Cai, S. Gao, G. Ren, M. Yao, P. Luo, and H. Li,
+“Univla: Learning to act anywhere with task-centric latent actions,”
+arXiv preprint arXiv:2505.06111, 2025.
+[19] G. Team, A. Ye, B. Wang, C. Ni, G. Huang, G. Zhao, H. Li, J. Li,
+J. Zhu, L. Feng et al., “Gigabrain-0: A world model-powered vision-
+language-action model,” arXiv preprint arXiv:2510.19430, 2025.
+[20] H. Jang, S. Yu, H. Kwon, H. Jeon, Y. Seo, and J. Shin, “Contextvla:
+Vision-language-action model with amortized multi-frame context,”
+arXiv preprint arXiv:2510.04246, 2025.
+[21] A. Marafioti, O. Zohar, M. Farré, M. Noyan, E. Bakouch, P. Cuenca,
+C. Zakka, L. B. Allal, A. Lozhkov, N. Tazi et al., “Smolvlm:
+Redefining small and efficient multimodal models,” arXiv preprint
+arXiv:2504.05299, 2025.
+[22] S. Bai, Y. Cai, R. Chen, K. Chen, X. Chen, Z. Cheng, L. Deng,
+W. Ding, C. Gao, C. Ge et al., “Qwen3-vl technical report,” arXiv
+preprint arXiv:2511.21631, 2025.
+[23] A. Brohan, N. Brown, J. Carbajal, Y. Chebotar, J. Dabis, C. Finn,
+K. Gopalakrishnan, K. Hausman, A. Herzog, J. Hsu et al., “Rt-1:
+Robotics transformer for real-world control at scale,” arXiv preprint
+arXiv:2212.06817, 2022.
+[24] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart,
+S. Welker, A. Wahid et al., “Rt-2: Vision-language-action models
+transfer web knowledge to robotic control,” in Conference on Robot
+Learning.
+PMLR, 2023, pp. 2165–2183.
+[25] A. O’Neill, A. Rehman, A. Maddukuri, A. Gupta, A. Padalkar,
+A. Lee, A. Pooley, A. Gupta, A. Mandlekar, A. Jain et al., “Open
+x-embodiment: Robotic learning datasets and rt-x models: Open x-
+embodiment collaboration 0,” in 2024 IEEE International Conference
+on Robotics and Automation (ICRA).
+IEEE, 2024, pp. 6892–6903.
+[26] K. Black, N. Brown, D. Driess, A. Esmail, M. Equi, C. Finn,
+N. Fusai, L. Groom, K. Hausman, B. Ichter et al., “π0: A vision-
+language-action flow model for general robot control,” arXiv preprint
+arXiv:2410.24164, 2024.
+[27] J. Cen, C. Yu, H. Yuan, Y. Jiang, S. Huang, J. Guo, X. Li, Y. Song,
+H. Luo, F. Wang et al., “Worldvla: Towards autoregressive action
+world model,” arXiv preprint arXiv:2506.21539, 2025.
+[28] Y. Li, Y. Deng, J. Zhang, J. Jang, M. Memmel, C. Garrett, F. Ramos,
+D. Fox, A. Li, A. Gupta et al., “Hamster: Hierarchical action models
+for open-world robot manipulation,” in International Conference on
+Learning Representations, vol. 2025, 2025, pp. 24 040–24 068.
+[29] X. Zhang, X. Zeng, and W. Zhang, “From world models to world
+action models: A concise tutorial for robotics,” arXiv preprint
+arXiv:2607.00836, 2026.
+[30] D. Hafner, T. Lillicrap, J. Ba, and M. Norouzi, “Dream to con-
+trol: Learning behaviors by latent imagination,” arXiv preprint
+arXiv:1912.01603, 2019.
+
+
+[31] D. Hafner, J. Pasukonis, J. Ba, and T. Lillicrap, “Mastering diverse
+domains through world models,” arXiv preprint arXiv:2301.04104,
+2023.
+[32] Y. Du, S. Yang, B. Dai, H. Dai, O. Nachum, J. Tenenbaum, D. Schu-
+urmans, and P. Abbeel, “Learning universal policies via text-guided
+video generation,” Advances in neural information processing systems,
+vol. 36, pp. 9156–9172, 2023.
+[33] Y. Du, S. Yang, P. Florence, F. Xia, A. Wahid, P. Sermanet, T. Yu,
+P. Abbeel, J. B. Tenenbaum, L. Kaelbling et al., “Video language
+planning,” in International Conference on Learning Representations,
+vol. 2024, 2024, pp. 31 138–31 155.
+[34] A. Bulatov, Y. Kuratov, and M. Burtsev, “Recurrent memory trans-
+former,” Advances in Neural Information Processing Systems, vol. 35,
+pp. 11 079–11 091, 2022.
+[35] M. Lei, H. Cai, Y. Yang, Y. Wu, J. Ren, Z. Cui, L. Tan, J. Hong,
+G. Hu, S. Zhu et al., “Robomemory: A brain-inspired multi-memory
+agentic framework for interactive environmental learning in physical
+embodied systems,” arXiv preprint arXiv:2508.01415, 2025.
+[36] X. Sun, R. Zhang, C. Cao, Y. Sun, J. Chen, Z. Xu, B. Chen,
+H. Chen, Z. Yang, J. Zhu et al., “Himem-wam: Hierarchical memory-
+gated world action models for robotic manipulation,” arXiv preprint
+arXiv:2606.10363, 2026.
+[37] S. Yang, J. Mu, T. Wei, C. Lu, X. Li, L. Xu, Z. Xue, Z. Yuan, D. Lin,
+J. Pang et al., “Memorywam: Efficient world action modeling with
+persistent memory,” arXiv preprint arXiv:2606.20562, 2026.
+[38] T. Wan, A. Wang, B. Ai, B. Wen, C. Mao, C.-W. Xie, D. Chen, F. Yu,
+H. Zhao, J. Yang et al., “Wan: Open and advanced large-scale video
+generative models,” arXiv preprint arXiv:2503.20314, 2025.
+[39] W. Peebles and S. Xie, “Scalable diffusion models with transformers,”
+in 2023 IEEE/CVF International Conference on Computer Vision
+(ICCV).
+IEEE, 2023, pp. 4172–4182.
+[40] C. Chi, Z. Xu, S. Feng, E. Cousineau, Y. Du, B. Burchfiel, R. Tedrake,
+and S. Song, “Diffusion policy: Visuomotor policy learning via action
+diffusion,” The International Journal of Robotics Research, vol. 44,
+no. 10-11, pp. 1684–1704, 2025.
+[41] J. Ho and T. Salimans, “Classifier-Free Diffusion Guidance,” arXiv
+e-prints, p. arXiv:2207.12598, Jul. 2022.

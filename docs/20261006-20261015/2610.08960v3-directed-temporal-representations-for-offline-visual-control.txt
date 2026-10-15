@@ -1,0 +1,3899 @@
+Preprint
+DIRECTED
+TEMPORAL
+REPRESENTATIONS
+FOR
+OFFLINE VISUAL CONTROL
+Chenyang Yuan1
+Haoyu Wang2
+University of Sheffield
+Shanghai Jiao Tong University
+cyuan7@sheffield.ac.uk
+create arc@sjtu.edu.cn
+Zhuo Sun3,†
+Xiaoyuan Cheng4,†
+Shanghai University of Finance and Economics
+University College London
+zhuosunreid@outlook.com
+ucesxc4@ucl.ac.uk
+ABSTRACT
+Predictive world models provide compact visual representations for control. Con-
+trol requires a latent geometry aligned with temporal reachability rather than pre-
+dictive similarity alone.
+We introduce Directed Temporal Representations for
+Control (DTRC), which learns such a geometry from offline visual trajectories
+on top of frozen LeWorldModel (LeWM) features. DTRC constructs a directed
+temporal quasimetric over the learned control representation. Short-range tem-
+poral offsets calibrate the distance scale. Bootstrapped targets extend temporal
+reachability across longer horizons. Action-conditioned consistency aligns the
+representation with local transition dynamics. The resulting distance estimates
+temporal reaching cost, and its change across a transition defines goal-relative
+temporal progress. We use this progress signal as a temporal critic for direct
+goal-conditioned policy learning. Model-assisted targets provide an additional
+training-time refinement under behavior-support and dynamics-agreement con-
+straints. Across ten visual control tasks, DTRC achieves strong goal-conditioned
+control performance relative to planning and direct-policy baselines. Held-out di-
+agnostics on the four LeWM tasks show consistent short-range temporal calibra-
+tion, task-dependent long-range and directional structure, and positive transition-
+level progress. Temporal supervision improves the same flow-policy parameteri-
+zation across all four LeWM tasks, while the resulting policy acts directly without
+iterative trajectory search at test time. Our project website provides code and visu-
+alizations: https://chenyang-yuan.github.io/dtrc-project/.
+1
+INTRODUCTION
+Latent world models compress visual observations into predictive representations and learn action-
+conditioned dynamics in latent space, enabling control through imagined rollouts (Hafner et al.,
+2019; 2020; Hansen et al., 2022; 2024). Visual goal-reaching planners evaluate candidate actions
+using distances between predicted latent states and goal representations (Zhou et al., 2025; Maes
+et al., 2026). Latent geometry therefore directly influences the control objective. Recent work
+reshapes latent spaces to align Euclidean distance with feasible transition structure and improve
+planning (Wang et al., 2026). Temporal reachability provides a complementary control structure
+based on ordered state–goal relations. These relations are associated with interaction cost and may
+be asymmetric across opposite transition directions (Wang et al., 2023). These properties motivate
+a control representation aligned with temporal reachability rather than predictive similarity alone.
+Offline trajectories provide direct supervision for this temporal structure. Future states serve as
+achieved goals for learning from offline experience (Andrychowicz et al., 2017; Ghosh et al., 2021).
+Temporal relations between states have also been used to construct goal-conditioned representa-
+tions and value structure (Eysenbach et al., 2022; Park et al., 2023; 2024; Wang et al., 2023). For
+control, temporal reachability requires local scale, directional structure, and long-horizon consis-
+†Corresponding authors.
+1
+arXiv:2610.08960v3  [cs.LG]  12 Oct 2026
+
+
+Preprint
+tency. Short-range temporal offsets establish the local distance scale. Ordered state–goal relations
+preserve directional information. Multistep relations extend temporal reachability across longer
+horizons (Zheng et al., 2026). Changes in temporal cost across individual transitions provide a lo-
+cal measure of progress. A control representation should preserve these properties in a common
+temporal geometry.
+We introduce Directed Temporal Representations for Control (DTRC) to learn this geometry from
+offline visual trajectories. Starting from frozen LeWorldModel (LeWM) features (Maes et al., 2026),
+DTRC learns a control representation equipped with a directed temporal quasimetric. A symmet-
+ric metric component defines the base geometry. An order-sensitive residual introduces directional
+variation in state–goal reaching cost (Liu et al., 2023). Short-range temporal offsets calibrate the
+distance scale. Bootstrapped targets extend temporal reachability across longer horizons. Action-
+conditioned consistency aligns the representation with local transition dynamics. The resulting dis-
+tance estimates temporal reaching cost. Its reduction across a transition defines goal-relative tempo-
+ral progress.
+The directed temporal distance provides a critic for policy learning. Advantage-weighted methods
+use value estimates to weight recorded actions during policy learning (Peng et al., 2019; Kostrikov
+et al., 2022). DTRC uses goal-relative temporal progress for the same purpose. Recorded actions re-
+ceive larger weights for transitions with greater temporal progress. Policy-generated actions receive
+the same temporal evaluation through their predicted successor states. Additional model-assisted
+targets are restricted by behavior support and dynamics agreement (Yu et al., 2020; 2021; Sikchi
+et al., 2022). Only supported candidates with lower predicted temporal cost than the recorded con-
+tinuation contribute to the additional policy objective. Model-assisted targets therefore provide an
+additional training-time refinement. At test time, the goal-conditioned policy acts directly without
+iterative trajectory search.
+We evaluate DTRC on ten visual goal-conditioned control tasks spanning navigation, reaching, and
+manipulation. We first evaluate end-to-end goal-conditioned control performance. We then study
+temporal structure beyond the directly supervised local range, including task-dependent directional-
+ity and transition-level progress. Controlled comparisons isolate the effect of temporal supervision
+on the same flow-policy parameterization. Finally, qualitative visualizations examine the organiza-
+tion of the learned control representation across tasks. Our main contributions are threefold:
+• We introduce DTRC, a framework for learning a directed temporal control representation
+on frozen predictive visual features. The representation uses a directed quasimetric to rep-
+resent ordered state–goal relations through temporal reaching cost.
+• We develop an offline learning objective for temporal representation learning.
+Short-
+range trajectory offsets establish the distance scale, bootstrapped targets propagate tem-
+poral reachability across longer horizons, and action-conditioned consistency aligns the
+representation with local transition dynamics. Distance reduction then defines goal-relative
+temporal progress for policy supervision.
+• Across ten visual goal-conditioned control tasks, DTRC achieves strong performance rel-
+ative to predictive-model planning and goal-conditioned policy baselines. Held-out diag-
+nostics on the four LeWM tasks show consistent local temporal calibration, task-dependent
+long-range and directional structure, and positive transition-level progress. Temporal su-
+pervision further improves the same flow-policy parameterization across four LeWM tasks.
+2
+PRELIMINARIES
+Offline goal-conditioned control.
+We consider finite-horizon goal-conditioned control from vi-
+sual observations. At time t, the agent observes ot ∈O, aims to reach a goal observation og ∈O
+within a remaining horizon ht ∈{1, . . . , H}, and selects an action at ∈A. The learning setting
+provides a fixed offline dataset D of unlabeled raw-pixel trajectories, where each trajectory is given
+by τ = (o0, a0, o1, a1, . . . , oT ). The goal-conditioned control problem is to learn a policy
+π(at | ot, og, ht)
+(1)
+that maps the current observation, goal observation, and remaining horizon to actions that progres-
+sively steer the system toward the goal. At test time, control is closed-loop: after executing at, the
+2
+
+
+Preprint
+agent receives the next observation and recomputes its action conditioned on the updated state and
+the same goal.
+Frozen predictive visual features.
+We encode the current and goal observations using a pretrained
+LeWM encoder E (Maes et al., 2026),
+zt = E(ot),
+zg = E(og),
+(2)
+where zt, zg ∈Rdz denote predictive visual features. LeWM is a joint-embedding predictive world
+model that supports action-conditioned prediction and latent-space planning without pixel recon-
+struction. We keep the pretrained encoder fixed throughout training. DTRC learns the control rep-
+resentation and temporal geometry on top of these frozen features.
+3
+DIRECTED TEMPORAL REPRESENTATIONS FOR CONTROL
+(a) Offline visual trajectories
+(b) Directed temporal representation
+(c) Policy learning
+Observed temporal offsets
+Temporal progress
+Advantage-weighted policy learning
+Symmetric
+backbone
++
+directional
+residual
+Frozen
+encoder
+z
+s
+g
+s
+g
+d(s,g) ≠ d(g,s)
+Gaussian
+noise
+Conditional
+flow
+Goal-conditioned
+actions
+Figure 1: Overview of directed temporal representation learning and policy training. (a) Of-
+fline visual trajectories provide temporal supervision on top of frozen LeWM features. (b) DTRC
+learns a control representation with a directed temporal quasimetric. A symmetric metric compo-
+nent defines the base geometry, and an order-sensitive residual represents directional state–goal cost.
+(c) Temporal distance reduction measures goal-relative progress. The resulting temporal advantage
+weights recorded continuations for direct policy learning.
+We introduce Directed Temporal Representations for Control (DTRC), an offline framework for
+visual goal-conditioned control. DTRC learns a directed temporal geometry on top of frozen pre-
+dictive visual features. The method contains three stages. First, we learn a control representation
+equipped with a directed temporal quasimetric (Section 3.1). Second, offline trajectory supervi-
+sion calibrates the local temporal scale and propagates temporal reachability across longer hori-
+zons. Action-conditioned consistency further aligns the representation with local transition dynam-
+ics (Section 3.2). Third, temporal distance reduction provides a goal-relative signal for direct policy
+learning (Section 3.3). Model-assisted targets provide an additional training-time refinement.
+3.1
+DIRECTED TEMPORAL REPRESENTATION
+Temporal reaching cost has directional and compositional structure. Opposite transition directions
+can have different reaching costs. A path through an intermediate state also constrains the direct
+state–goal cost (Wang et al., 2023; Liu et al., 2023). We therefore represent temporal reachability
+with a directed quasimetric.
+Given a frozen LeWM feature z, a representation head ψ : Rdz →Rde produces the control repre-
+sentation
+e = ψ(z).
+(3)
+A symmetric metric head S : Rde →Rdϕ defines the base geometry (Park et al., 2024). We augment
+this geometry with an order-sensitive map Aθ : Rde →RK using the metric–residual construction
+(Liu et al., 2023). For et = ψ(zt) and eg = ψ(zg), the directed temporal distance is
+dθ(et, eg) = α
+
+∥S(et) −S(eg)∥2 + max
+j∈[K] [Aθ,j(eg) −Aθ,j(et)]+
+
+,
+(4)
+3
+
+
+Preprint
+where [u]+ = max(u, 0), Aθ : Rde →RK defines the directed residual coordinates. The first term
+is symmetric in the state–goal pair. The residual depends on the ordering of the pair. Reversing
+the state–goal order changes the residual and can therefore produce dθ(et, eg)̸ = dθ(eg, et). The
+parameter α = exp(η) > 0 is a learned positive scale.
+The metric–residual construction also satisfies the triangle inequality. For any intermediate repre-
+sentation em, the direct state–goal cost is bounded by the cost of reaching em and continuing from
+em to the goal:
+dθ(et, eg) ≤dθ(et, em) + dθ(em, eg).
+(5)
+This property gives the distance a compositional structure across state–goal pairs while retaining di-
+rectional asymmetry. The following objectives assign temporal semantics to this structured distance.
+3.2
+LEARNING TEMPORAL GEOMETRY FROM OFFLINE TRAJECTORIES
+The directed quasimetric defines the structural form of the temporal geometry. Offline trajectories
+assign temporal semantics to this geometry. Future states provide achieved goals, and their recorded
+offsets provide direct temporal supervision (Andrychowicz et al., 2017; Ghosh et al., 2021). We first
+calibrate the local distance scale and then propagate temporal reachability across longer horizons.
+Local temporal calibration.
+Short-range state pairs provide direct temporal anchors.
+For a
+recorded offset ∆∈{1, . . . , J}, we supervise dθ(et, et+∆) using the observed separation ∆. We
+minimize
+Llocal = Et,∆
+
+ℓ2
+τe (∆−dθ(et, et+∆))
+
+,
+(6)
+where J denotes the largest directly supervised temporal offset. This objective establishes the local
+temporal scale of the learned distance.
+Bootstrapped long-horizon targets.
+For a current representation et and goal representation eg, let
+∆t,g denote their recorded temporal separation for state–goal pairs from the same trajectory. Direct
+temporal supervision is available for short offsets. Longer-range and cross-trajectory goal pairs use
+a bootstrapped target. We combine an observed n-step prefix with the estimated remaining temporal
+cost:
+yt,g =
+(
+∆t,g,
+0 < ∆t,g ≤n,
+n + d¯θ(¯et+n, ¯eg),
+otherwise.
+(7)
+Here ¯e = ¯ψ(z) denotes the target representation and d¯θ denotes the corresponding target temporal
+distance. The first branch anchors the geometry to observed temporal separation. The second branch
+propagates the same scale to longer state–goal relations by combining an observed prefix with the
+estimated remaining cost. The bootstrap horizon n controls the length of the observed prefix.
+Multiple trajectories and bootstrapped targets can provide different temporal costs for related state–
+goal pairs. We use lower-expectile regression to emphasize lower costs supported by the temporal
+targets (Newey & Powell, 1987; Kostrikov et al., 2022). The goal-conditioned temporal objective is
+Lgoal = E
+
+ℓ2
+τe (yt,g −dθ(et, eg))
+
+,
+(8)
+where ℓ2
+τe(u) = |τe −1(u < 0)| u2 denotes the expectile loss and u = yt,g −dθ(et, eg) is the
+temporal prediction residual. We use τe < 1
+2. This choice assigns greater weight to overestimation
+relative to the temporal target and shifts the learned distance toward lower supported costs.
+Action-conditioned consistency.
+The temporal objectives constrain state–goal relations. We ad-
+ditionally require the control representation to remain compatible with local action-conditioned tran-
+sitions. A transition head Tξ predicts the next control representation through the residual update
+ˆet+1 = et + Tξ(et, at).
+(9)
+We optimize the representation and transition head with
+Lcons = E
+h
+∥ˆet+1 −¯et+1∥2
+2
+i
+,
+(10)
+where gradients are stopped through the target representation ¯et+1. This loss aligns the learned
+control representation with local transition dynamics. The transition head Tξ is used for represen-
+tation learning. It is separate from the latent dynamics ensemble used for model-assisted policy
+augmentation.
+4
+
+
+Preprint
+Overall temporal objective.
+We jointly optimize the control representation, directed temporal
+distance, and transition-consistency head with
+Ltemp = Lgoal + λlocalLlocal + λconsLcons.
+(11)
+The coefficients λlocal and λcons control local temporal calibration and action-conditioned consis-
+tency, respectively.
+3.3
+POLICY LEARNING FROM TEMPORAL PROGRESS
+The learned temporal distance provides a goal-relative signal for policy learning.
+We first use
+recorded continuations to train a direct goal-conditioned policy. Model-assisted alternatives pro-
+vide additional training targets.
+Temporal progress and advantage.
+For a recorded k-step continuation from t to t+k, we define
+goal-relative temporal progress as the reduction in temporal distance:
+P (k)
+t,g = d¯θ(¯et, ¯eg) −d¯θ(¯et+k, ¯eg).
+(12)
+Positive values indicate a reduction in the estimated remaining temporal cost. The recorded contin-
+uation incurs a temporal cost of k transitions. We therefore define its temporal advantage as
+Adata
+t,g
+= P (k)
+t,g −k = d¯θ(¯et, ¯eg) −[k + d¯θ(¯et+k, ¯eg)] .
+(13)
+The subtraction of k accounts for the temporal cost of the recorded action sequence. A larger
+advantage indicates greater temporal progress relative to the cost of the recorded continuation.
+Advantage-weighted policy training.
+We parameterize the goal-conditioned policy with condi-
+tional flow matching (Lipman et al., 2023; Park et al., 2025b). This parameterization supports
+multimodal action distributions under a fixed state–goal condition. For a k-step action sequence
+at = (at, . . . , at+k−1), the policy condition is
+ct = [zt, zg, et, eg, Emb(ht/H)],
+(14)
+where Emb denotes the horizon embedding.
+The temporal advantage determines the contribution of each recorded continuation:
+wdata
+t,g
+= min
+(
+wmax, exp
+ 
+Adata
+t,g
+β
+!)
+,
+(15)
+where β controls the selectivity of advantage weighting and wmax limits large weights.
+The
+recorded-data policy objective is
+Ldata
+policy = E
+
+wdata
+t,g
+ℓFM (ω; at, ct)
+
+,
+(16)
+where ℓFM denotes the standard conditional flow-matching loss.
+Model-assisted refinement.
+The same temporal distance can also evaluate policy-generated al-
+ternatives through their predicted successor states.
+We retain additional targets that satisfy the
+behavior-support and dynamics-agreement criteria and improve the predicted temporal cost relative
+to the recorded continuation. The resulting model-assisted policy objective is denoted by Lim
+policy.
+We provide the candidate construction and filtering procedure in Appendix B.
+The total policy objective is
+Lpolicy = Ldata
+policy + λimLim
+policy,
+(17)
+where λim controls the contribution of the model-assisted targets.
+5
+
+
+Preprint
+DTRC
+GC-IDM
+GCBC
+GC-IQL
+HILP
+LeWM
+0
+20
+40
+60
+80
+100
+Success Rate ( ↑)
+PushT
+90.7
+86.7
+88.7
+84
+82.7
+90.3
+DTRC
+GC-IDM
+GCBC
+GC-IQL
+HILP
+LeWM
+Two-Room
+100
+100
+100
+98
+98
+85.3
+DTRC
+GC-IDM
+GCBC
+GC-IQL
+HILP
+LeWM
+Reacher
+100
+99.7
+100
+98
+97.3
+76
+DTRC
+GC-IDM
+GCBC
+GC-IQL
+HILP
+LeWM
+OGBench-Cube
+96
+99.3
+87.3
+74.7
+60.7
+66
+Figure 2: Goal-conditioned control on the four LeWM tasks. Bars report mean success rate over
+five evaluation seeds; error bars denote sample standard deviation.
+Table 1: Goal-conditioned control on six additional visual OGBench tasks. Results report mean
+success rate (%) ± sample standard deviation over five evaluation seeds. Best results are shown in
+bold and second-best results are underlined.
+Method
+PointMaze
+Cube-Double
+Scene
+AntMaze-Medium
+HumanoidMaze-Medium
+Puzzle-3x3
+LeWM
+13.3 ± 1.2
+50.7 ± 2.3
+56.7 ± 6.4
+32.0 ± 6.0
+82.0 ± 2.0
+24.7 ± 1.2
+GCBC
+28.7 ± 3.1
+44.7 ± 2.3
+48.7 ± 5.0
+28.0 ± 3.5
+83.3 ± 3.1
+35.3 ± 3.1
+GC-IQL
+16.0 ± 2.0
+48.0 ± 5.3
+51.3 ± 9.0
+30.0 ± 5.3
+84.0 ± 2.0
+31.3 ± 5.0
+HILP
+22.7 ± 4.6
+43.3 ± 5.8
+50.0 ± 7.2
+28.7 ± 3.1
+81.3 ± 4.2
+40.0 ± 6.9
+GC-IDM
+28.0 ± 5.3
+38.7 ± 4.6
+48.7 ± 10.3
+30.0 ± 3.5
+88.0 ± 2.0
+33.3 ± 2.3
+DTRC (ours)
+11.3 ± 3.1
+54.7 ± 8.3
+53.3 ± 4.2
+31.3 ± 4.6
+84.7 ± 5.0
+40.0 ± 5.3
+4
+EXPERIMENTS
+4.1
+EXPERIMENTAL SETUP
+Environments and datasets.
+We evaluate DTRC on ten visual goal-conditioned control tasks
+spanning navigation, reaching, and manipulation.
+We use the four offline datasets adopted by
+LeWM (Maes et al., 2026): PushT, TwoRoom, Reacher, and OGBench-Cube.
+We addition-
+ally evaluate on six visual OGBench tasks: PointMaze, Cube-Double, Scene, AntMaze-Medium,
+HumanoidMaze-Medium, and Puzzle-3x3. All methods receive current and goal images encoded
+by pretrained LeWM encoders.
+Baselines.
+We compare against LeWM (Maes et al., 2026), goal-conditioned inverse dynamics
+model (GC-IDM) (Nguyen et al., 2026), goal-conditioned behavioral cloning (GCBC) (Ghosh et al.,
+2021), goal-conditioned IQL (GC-IQL) (Kostrikov et al., 2022; Park et al., 2025a), and a goal-
+conditioned adaptation of Hilbert foundation policies (HILP) (Park et al., 2024). Baseline and im-
+plementation details are provided in Appendices A–D.
+4.2
+GOAL-CONDITIONED CONTROL PERFORMANCE
+We first evaluate end-to-end goal-conditioned control performance. The four LeWM tasks provide
+a direct comparison with predictive-model planning and goal-conditioned policy baselines. We then
+evaluate on six additional visual OGBench tasks to assess performance across a broader set of nav-
+igation and manipulation environments. Figure 2 compares DTRC with predictive-model planning
+and direct-policy baselines on PushT, TwoRoom, Reacher, and OGBench-Cube. DTRC achieves
+the highest or tied-highest success on PushT, TwoRoom, and Reacher, and the second-highest suc-
+cess on Cube. Relative to LeWM, DTRC matches its performance on PushT and improves success
+by 14.7, 24.0, and 30.0 percentage points on TwoRoom, Reacher, and Cube, respectively. The re-
+sults show that temporal representation learning can support direct goal-conditioned control without
+test-time trajectory search.
+Table 1 extends the comparison to six additional visual OGBench tasks. DTRC achieves the best
+or tied-best result on Cube-Double and Puzzle-3x3, and the second-best result on Scene, AntMaze-
+Medium, and HumanoidMaze-Medium. Performance is less favorable on PointMaze, where DTRC
+reaches 11.3% success compared with 28.7% for GCBC. Overall, DTRC ranks among the top two
+6
+
+
+Preprint
+0
+50
+100
+Recorded offset (steps)
+0
+50
+100
+150
+Forward temporal cost
+ρ = 0.85
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+80
+160
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−3
+0
+3
+6
+d(et, eg) −d(et + 1, eg)
+0.00
+0.25
+0.50
+0.75
+Density
+81.4%
+positive progress
+99.2% in view
+c One-step progress
+Figure 3: Temporal structure learned by DTRC on PushT. We evaluate 20,000 held-out state–
+future-goal pairs, with 200 pairs at each temporal offset from 1 to 100 transitions. (a) Forward
+temporal distance as a function of recorded temporal offset. The solid curve and shaded region
+show the median and interquartile range in 5-step bins; the dashed line denotes equality with the
+recorded offset (ρ = 0.845). (b) Forward distance d(et, eg) and reverse distance d(eg, et) for the
+same state–goal pairs. The gray curve shows the symmetric contribution of the same DTRC model.
+(c) Distribution of one-step temporal progress P (1)
+t,g = d(et, eg) −d(et+1, eg). Positive progress
+occurs for 81.41% of the evaluated pairs.
+methods on five of six tasks; larger goal offsets are evaluated in Appendix E.2. We next examine the
+learned temporal structure and its contribution to policy learning.
+4.3
+TEMPORAL STRUCTURE OF THE LEARNED REPRESENTATION
+We first evaluate the learned temporal representation independently of policy performance. We
+use the EMA target network at 200,000 updates and sample state–future-goal pairs from held-out
+episodes. For each task, we draw 200 pairs at every temporal offset from 1 to 100 transitions,
+yielding 20,000 pairs. All distances are computed in the full learned representation. Recorded
+temporal offset is used as a reference for trajectory duration, rather than as ground-truth optimal
+reaching cost. Figure 3 illustrates three properties on PushT: temporal structure across state–goal
+offsets, directional state–goal cost, and transition-level temporal progress.
+Figure 3a shows that the learned forward distance retains substantial temporal structure beyond the
+directly supervised local range, with Spearman correlation ρ = 0.845 over offsets from 1 to 100
+transitions. The median distance increases with recorded offset while deviating from the equality
+reference at longer horizons. This behavior is consistent with the learning objective: short-range
+offsets calibrate the local distance scale, while bootstrapped targets represent longer-horizon state–
+goal reaching cost rather than recorded trajectory duration. Figure 3b further shows pronounced
+directional structure on PushT. The reverse cost exceeds the forward cost for 92.76% of the sam-
+pled pairs, while the symmetric contribution is unchanged under reversal. The asymmetry there-
+fore arises from the order-sensitive component (see Appendices F.3 and F.4). Figure 3c evaluates
+the one-step instance of temporal progress from Eq. 12. The learned distance decreases after the
+recorded transition for 81.41% of the sampled state–goal pairs. This result shows that the learned
+geometry resolves local goal-relative progress over the balanced offset range. Temporal progress is
+subsequently converted into the temporal advantage used for policy supervision.
+We next summarize the same diagnostics across the four LeWM tasks. Table 2 separates short-range
+temporal calibration from longer-range, directional, and transition-level properties of the learned
+geometry. Short-range MAE remains below two transitions on all four tasks, while long-range
+association and directional structure vary by task (Table 2). Positive one-step progress remains
+above 50% on these tasks and above 60% on all six additional OGBench tasks (Appendix F.2). Thus,
+DTRC resolves goal-relative transition progress across all ten tasks without requiring a common
+long-range or directional geometry.
+7
+
+
+Preprint
+Table 2: Temporal representation diagnostics across the four LeWM tasks. MAE1:8 measures
+the mean absolute difference between forward temporal distance and recorded offset over tempo-
+ral offsets 1–8. ρ1:100 denotes Spearman’s rank correlation between forward temporal distance and
+recorded offset over offsets 1–100. Reverse > Forward reports the fraction of state–goal pairs satis-
+fying d(eg, et) > d(et, eg). Positive progress reports the fraction satisfying P (1)
+t,g > 0.
+Task
+MAE1:8
+ρ1:100
+Reverse > Forward
+Positive progress
+(steps)
+(%)
+(%)
+PushT
+1.55
+0.845
+92.76
+81.41
+TwoRoom
+1.51
+0.800
+57.65
+65.78
+Reacher
+1.62
+0.510
+50.28
+59.41
+Cube
+0.74
+0.221
+52.46
+72.35
+Table 3: Effect of temporal supervision on policy learning. Success rates (%) are reported as
+mean ± sample standard deviation over five evaluation seeds. Both variants use the same flow-
+policy parameterization. Temporal supervision adds the learned DTRC control representation and
+temporal-advantage weighting without model-assisted targets. All variants use the same 50 start–
+goal pairs per task and seed, a goal offset of 25 recorded transitions, and a 50-step interaction budget.
+Configuration
+PushT
+TwoRoom
+Reacher
+Cube
+Flow BC
+74.7 ± 4.6
+94.7 ± 4.2
+68.0 ± 3.5
+91.3 ± 1.2
++ temporal supervision
+84.0 ± 5.3
+100.0 ± 0.0
+100.0 ± 0.0
+97.3 ± 3.1
+4.4
+EFFECT OF TEMPORAL SUPERVISION ON POLICY LEARNING
+The representation diagnostics above establish temporal structure in the learned geometry. We next
+evaluate whether this structure provides useful supervision for policy learning. We compare un-
+weighted flow behavioral cloning with the same flow-policy parameterization augmented by the
+learned DTRC control representation and temporal-advantage weighting. Model-assisted targets are
+disabled in this comparison.
+Temporal supervision improves the same flow-policy parameterization on all four tasks (Table 3).
+Success increases by 9.3 percentage points on PushT, 5.3 on TwoRoom, 32.0 on Reacher, and 6.0
+on Cube. The largest change occurs on Reacher, where success increases from 68.0% to 100.0%.
+Since model-assisted targets are disabled, this comparison isolates the effect of the learned temporal
+representation and temporal-advantage supervision from model-assisted policy refinement. With the
+representation diagnostics, these results connect the learned temporal geometry to policy learning.
+Full component ablations, including behavior-support and directional-residual variants, are reported
+in Appendix E.1.
+4.5
+QUALITATIVE STRUCTURE OF THE LEARNED REPRESENTATION
+Figure 4 provides a qualitative view of the transformation from frozen predictive features to the
+learned temporal representation. We visualize frozen LeWM features, the learned control represen-
+tation, the symmetric coordinates, and the directed potentials using their leading principal compo-
+nents. Temporal ordering is less apparent in the leading principal components of the frozen LeWM
+features. After DTRC training, the control representation exhibits a more structured progression
+with offline episode time. The symmetric coordinates and directed potentials further exhibit distinct
+organizations, consistent with their separate roles in the directed quasimetric. These projections
+are illustrative; the temporal scale, directional structure, and transition-level progress are evaluated
+quantitatively in Section 4.3.
+Task-dependent geometry.
+We next visualize recorded trajectories in the learned control repre-
+sentation across tasks. Figure 5 shows distinct geometric organizations across control problems.
+TwoRoom and PointMaze exhibit curved trajectory structure under constrained navigation, while
+Reacher forms an approximately cyclic organization in the PCA projection. The learned trajectories
+therefore remain structured within task-specific geometries rather than collapsing onto a common
+8
+
+
+Preprint
+PC1 (1.9%)
+PC2 (1.8%)
+Frozen LeWM z
+PC1 (23.4%)
+PC2 (15.0%)
+Control representation e
+PC1 (59.3%)
+PC2 (23.6%)
+Symmetric coordinates S(e)
+PC1 (29.8%)
+PC2 (24.1%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+Figure 4: Qualitative organization of the learned representation on PushT. We project frozen
+LeWM features z, learned control representations e, symmetric coordinates S(e), and directed po-
+tentials A(e) onto their first two principal components. Points are colored by normalized time within
+the offline trajectory. The projections are used only for visualization; all temporal distances and
+quantitative diagnostics are computed in the full learned representation.
+−6
+0
+6
+PC1
+−6
+0
+6
+PC2
+TwoRoom
+−6
+0
+6
+PC1
+−6
+0
+6
+PC2
+Reacher
+−8
+0
+8
+PC1
+−8
+0
+8
+PC2
+PointMaze
+Environment
+Control representation
+Figure 5: Task-dependent geometry of the learned control representation. Recorded trajectories
+are shown in the environment (top) and in the first two principal components of the DTRC control
+representation (bottom) for TwoRoom, Reacher, and PointMaze. Gray points show the offline repre-
+sentation distribution, and colored curves show recorded trajectories. Stars denote trajectory goals.
+The PCA projections are used only for qualitative visualization.
+one-dimensional temporal coordinate. This variation is consistent with the task-dependent long-
+range and directional statistics in Table 2, and illustrates why recorded trajectory duration need not
+induce the same global ordering across tasks. Additional representation-space visualizations and
+their evolution during training across all ten tasks are provided in Appendices F.1 and G.
+5
+CONCLUSION
+We introduced Directed Temporal Representations for Control (DTRC), which learns a directed tem-
+poral geometry on top of frozen predictive visual features. The learned quasimetric represents goal-
+relative temporal reaching cost, while distance reduction provides transition-level progress for direct
+policy learning. Across ten visual goal-conditioned control tasks, DTRC achieves strong control per-
+formance and exhibits task-dependent long-range and directional structure together with consistent
+local progress. Controlled comparisons further show that temporal supervision improves the same
+flow-policy parameterization across the four LeWM tasks. These results support directed temporal
+geometry as an effective interface between predictive visual representations and goal-conditioned
+control.
+9
+
+
+Preprint
+REFERENCES
+Marcin Andrychowicz, Filip Wolski, Alex Ray, Jonas Schneider, Rachel Fong, Peter Welinder, Bob
+McGrew, Josh Tobin, Pieter Abbeel, and Wojciech Zaremba. Hindsight experience replay. In
+Advances in Neural Information Processing Systems, volume 30, 2017.
+Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E. Hinton. Layer normalization. arXiv preprint
+arXiv:1607.06450, 2016.
+Benjamin
+Eysenbach,
+Tianjun
+Zhang,
+Sergey
+Levine,
+and
+Ruslan
+Salakhutdi-
+nov.
+Contrastive
+learning
+as
+goal-conditioned
+reinforcement
+learning.
+In
+Ad-
+vances
+in
+Neural
+Information
+Processing
+Systems,
+volume
+35,
+2022.
+URL
+https://proceedings.neurips.cc/paper_files/paper/2022/hash/
+e7663e974c4ee7a2b475a4775201ce1f-Abstract-Conference.html.
+Dibya Ghosh, Abhishek Gupta, Ashwin Reddy, Justin Fu, Coline Devin, Benjamin Eysenbach,
+and Sergey Levine. Learning to reach goals via iterated supervised learning. In International
+Conference on Learning Representations, 2021. URL https://openreview.net/forum?
+id=rALA0Xo6yNJ.
+Danijar Hafner, Timothy Lillicrap, Ian Fischer, Ruben Villegas, David Ha, Honglak Lee, and James
+Davidson. Learning latent dynamics for planning from pixels. In Proceedings of the 36th Inter-
+national Conference on Machine Learning, volume 97 of Proceedings of Machine Learning Re-
+search, pp. 2555–2565. PMLR, 2019. URL https://proceedings.mlr.press/v97/
+hafner19a.html.
+Danijar Hafner, Timothy Lillicrap, Jimmy Ba, and Mohammad Norouzi. Dream to control: Learning
+behaviors by latent imagination. In International Conference on Learning Representations, 2020.
+Nick Hansen, Hao Su, and Xiaolong Wang. TD-MPC2: Scalable, robust world models for continu-
+ous control. In International Conference on Learning Representations, 2024.
+Nicklas Hansen, Xiaolong Wang, and Hao Su. Temporal difference learning for model predictive
+control. In International Conference on Machine Learning, 2022.
+Dan Hendrycks and Kevin Gimpel.
+Gaussian error linear units (gelus).
+arXiv preprint
+arXiv:1606.08415, 2016.
+Ilya Kostrikov, Ashvin Nair, and Sergey Levine. Offline reinforcement learning with implicit q-
+learning. In International Conference on Learning Representations, 2022. URL https://
+openreview.net/forum?id=68n2s9ZJWF8.
+Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximilian Nickel, and Matthew Le. Flow
+matching for generative modeling. In International Conference on Learning Representations,
+2023.
+Bo Liu, Yihao Feng, Qiang Liu, and Peter Stone. Metric residual networks for sample efficient
+goal-conditioned reinforcement learning. In Proceedings of the AAAI Conference on Artificial
+Intelligence, volume 37, pp. 8799–8806, 2023. doi: 10.1609/aaai.v37i7.26058.
+Lucas Maes, Quentin Le Lidec, Damien Scieur, Yann LeCun, and Randall Balestriero. Leworld-
+model: Stable end-to-end joint-embedding predictive architecture from pixels, 2026.
+URL
+https://arxiv.org/abs/2603.19312.
+Whitney K. Newey and James L. Powell. Asymmetric least squares estimation and testing. Econo-
+metrica, 55(4):819–847, 1987. doi: 10.2307/1911031.
+Hoang Nguyen, Xiaohao Xu, and Xiaonan Huang. Latent geometry beyond search: Amortizing
+planning in world models, 2026. URL https://arxiv.org/abs/2605.08732.
+Seohong Park, Dibya Ghosh, Benjamin Eysenbach, and Sergey Levine.
+HIQL: Offline goal-
+conditioned rl with latent states as actions. In Advances in Neural Information Processing Sys-
+tems, volume 36, 2023.
+10
+
+
+Preprint
+Seohong Park, Tobias Kreiman, and Sergey Levine. Foundation policies with Hilbert represen-
+tations.
+In Proceedings of the 41st International Conference on Machine Learning, volume
+235 of Proceedings of Machine Learning Research, pp. 39737–39761. PMLR, 2024.
+URL
+https://proceedings.mlr.press/v235/park24g.html.
+Seohong Park, Kevin Frans, Benjamin Eysenbach, and Sergey Levine. Ogbench: Benchmarking
+offline goal-conditioned rl. In International Conference on Learning Representations (ICLR),
+2025a.
+Seohong Park, Qiyang Li, and Sergey Levine. Flow q-learning. In International Conference on
+Machine Learning, 2025b.
+Xue Bin Peng, Aviral Kumar, Grace Zhang, and Sergey Levine. Advantage-weighted regression:
+Simple and scalable off-policy reinforcement learning. arXiv preprint arXiv:1910.00177, 2019.
+Boris T. Polyak and Anatoli B. Juditsky. Acceleration of stochastic approximation by averaging.
+SIAM Journal on Control and Optimization, 30(4):838–855, 1992. doi: 10.1137/0330046.
+Harshit Sikchi, Wenxuan Zhou, and David Held. Learning off-policy with online planning. In
+Conference on Robot Learning, 2022.
+Tongzhou Wang, Antonio Torralba, Phillip Isola, and Amy Zhang. Optimal goal-reaching reinforce-
+ment learning via quasimetric learning. In Proceedings of the 40th International Conference on
+Machine Learning, volume 202 of Proceedings of Machine Learning Research, pp. 36411–36430.
+PMLR, 2023. URL https://proceedings.mlr.press/v202/wang23al.html.
+Ying Wang, Oumayma Bounou, Gaoyue Zhou, Randall Balestriero, Tim G. J. Rudner, Yann LeCun,
+and Mengye Ren. Temporal straightening for latent planning. In International Conference on
+Machine Learning, 2026.
+Tianhe Yu, Garrett Thomas, Lantao Yu, Stefano Ermon, James Zou, Sergey Levine, Chelsea Finn,
+and Tengyu Ma. MOPO: Model-based offline policy optimization. In Advances in Neural Infor-
+mation Processing Systems, 2020.
+Tianhe Yu, Aviral Kumar, Rafael Rafailov, Aravind Rajeswaran, Sergey Levine, and Chelsea Finn.
+COMBO: Conservative offline model-based policy optimization. In Advances in Neural Informa-
+tion Processing Systems, 2021.
+Bill Zheng, Vivek Myers, Benjamin Eysenbach, and Sergey Levine. Scaling goal-conditioned rein-
+forcement learning with multistep quasimetric distances. In International Conference on Learning
+Representations, 2026.
+Gaoyue Zhou, Hengkai Pan, Yann LeCun, and Lerrel Pinto.
+DINO-WM: World models on
+pre-trained visual features enable zero-shot planning.
+In Proceedings of the 42nd Interna-
+tional Conference on Machine Learning, volume 267 of Proceedings of Machine Learning
+Research, pp. 79115–79135. PMLR, 2025. URL https://proceedings.mlr.press/
+v267/zhou25t.html.
+11
+
+
+Preprint
+A
+BASELINES
+All baselines operate on LeWM features extracted from current and goal images. The visual en-
+coders are kept fixed during downstream training and evaluation. Below, we describe the control
+models and the adaptations used in our comparison.
+A.1
+LEWM
+We use the pretrained LeWM encoder and action-conditioned predictor with CEM-based model-
+predictive control (Maes et al., 2026). Candidate action sequences are evaluated by rolling out the
+predictor in latent space and comparing the predicted outcomes with the encoded goal. Control
+proceeds in a receding-horizon manner using updated visual observations. We retain the original
+latent-planning formulation without adding the temporal distance or policy-learning components of
+DTRC.
+A.2
+GC-IDM
+We use the goal-conditioned inverse-dynamics policy of GC-IDM (Nguyen et al., 2026). The pol-
+icy takes the current LeWM feature, goal feature, and remaining horizon as inputs and predicts
+the recorded action through a supervised regression objective. We retain its MLP architecture and
+horizon-conditioning mechanism. For the additional OGBench tasks, the action output dimension is
+adjusted to the corresponding environment. At evaluation time, the policy predicts actions directly
+from the updated visual input without latent rollout or trajectory search.
+A.3
+GCBC
+GCBC learns a direct goal-conditioned policy by supervised imitation (Ghosh et al., 2021). Future
+observations from the same trajectory are sampled as goals, and an MLP predicts the recorded action
+from the current feature, goal feature, and remaining horizon. Training minimizes the mean squared
+action-prediction error. This baseline uses neither a value function nor advantage weighting. It is
+distinct from the flow-matching behavioral-cloning variant used in our component comparisons.
+A.4
+GC-IQL
+GC-IQL learns a goal-conditioned action-value function Q(zt, at, zg) and value function V (zt, zg)
+(Kostrikov et al., 2022; Park et al., 2025a). The action-value function is trained by Bellman re-
+gression using a target value network. The value function is trained by upper-expectile regression
+toward the target action-value estimates for recorded actions. Goal relabeling supplies a reward of
+zero at the relabeled goal and −1 otherwise, with bootstrapping terminated at the goal. We first train
+the value networks and then extract a direct goal-conditioned policy using the weighted regression
+procedure described below.
+A.5
+HILP
+We adapt the Hilbert value parameterization of HILP (Park et al., 2024) to frozen LeWM features:
+V (zt, zg) = −∥ϕH(zt) −ϕH(zg)∥2 ,
+(18)
+where ϕH is a learned embedding network. The value function is trained with goal-conditioned
+expectile temporal-difference learning. We then extract a direct goal-conditioned policy using the
+same weighted regression procedure as GC-IQL. This adaptation retains symmetric Hilbert value
+structure but replaces its directional skill learning and goal-directed skill selection with direct policy
+extraction. We denote this adaptation by HILP throughout the control results.
+Policy extraction for GC-IQL and HILP.
+For both baselines, the policy is conditioned on the
+current feature, goal feature, and an embedding of the normalized remaining horizon. Recorded
+actions are fitted with a weighted Gaussian negative log-likelihood. The weights are computed from
+the target-value difference
+∆Vt,g = Vtarg(zt+1, zg) −Vtarg(zt, zg),
+wt,g = min {100, exp(αbase∆Vt,g)} ,
+(19)
+12
+
+
+Preprint
+with αbase = 10 for GC-IQL and αbase = 3 for HILP. The weights are treated as fixed during policy
+optimization. This implementation uses the value difference rather than the Q −V advantage of the
+original IQL policy-extraction rule. At evaluation time, both policies execute their predicted mean
+action.
+Network parameterization.
+GCBC, GC-IQL, and HILP use MLPs with three hidden layers of
+width 512. Their policies receive a 64-dimensional sinusoidal embedding of the normalized remain-
+ing horizon. The HILP embedding ϕH has 64 dimensions. These policies predict a single action at
+each decision step and are queried again after receiving the next observation.
+13
+
+
+Preprint
+B
+IMPLEMENTATION DETAILS
+Goal sampling.
+For the temporal objective in Section 3.2, each current state is paired with a goal
+sampled from three sources. We use the next state as the goal with probability 0.1, sample a future
+state from the same trajectory with probability 0.6, and sample an observation uniformly from the
+offline dataset with probability 0.3. Future states are sampled geometrically with Pr(∆= m) =
+0.02(0.98)m−1 for m ≥1, with offsets beyond the remaining trajectory clipped to its final state.
+Temporal-critic hyperparameters.
+We use a bootstrap horizon of n = 8 and a local supervision
+range of J = 8. The expectile parameter τe = 0.3 is used for both Lgoal and Llocal. The loss
+coefficients are λlocal = 1 and λcons = 0.1.
+Target networks.
+We maintain slowly updated target networks for the control representation and
+directed temporal distance. After each critic update, each target parameter ¯w is updated from its
+online counterpart w by exponential moving average (EMA)
+¯w ←0.995 ¯w + 0.005 w,
+(20)
+following standard parameter averaging (Polyak & Juditsky, 1992). Bootstrap targets are computed
+entirely with the target representation and target temporal distance, with gradients stopped through
+all target quantities. Target-distance estimates and the resulting bootstrapped targets are capped at
+dmax = 200 for numerical stability, while online critic predictions are left unclipped.
+Numerical distance evaluation.
+For numerical stability, the Euclidean component of Eq. equa-
+tion 4 is evaluated using the smoothed norm
+√
+r2 + ϵ2 −ϵ, where r = ∥S(et) −S(eg)∥2 and
+ϵ = 10−4, which preserves zero self-distance while smoothing the norm near zero.
+Latent dynamics.
+To obtain the predicted successor ˆzt+k(a) in Eq. equation 27, we learn an
+ensemble of residual dynamics predictors in the frozen LeWM latent space. For the m-th ensemble
+member, the next latent state is defined as
+ˆz(m)
+t+1 = zt + fm(zt, at),
+m ∈{1, . . . , M},
+(21)
+where fm predicts the action-conditioned change in the LeWM latent and M denotes the number
+of ensemble members. These predictors are trained separately from the pretrained LeWM predictor.
+They operate in the visual latent space z, whereas the transition head Tξ used in the representation-
+consistency objective operates in the control representation space.
+For multi-step training, each predictor is initialized at ˆz(m)
+t
+= zt and recursively applied under the
+recorded actions:
+ˆz(m)
+t+ℓ= ˆz(m)
+t+ℓ−1 + fm
+
+ˆz(m)
+t+ℓ−1, at+ℓ−1
+
+,
+ℓ= 1, . . . , HF .
+(22)
+The predicted rollout is matched to the corresponding recorded LeWM latents with
+Ldyn = ED
+"
+1
+MHF dz
+M
+X
+m=1
+HF
+X
+ℓ=1
+ˆz(m)
+t+ℓ−zt+ℓ
+
+2
+2
+#
+,
+(23)
+where HF is the dynamics training horizon and dz is the LeWM latent dimension. For candidate
+evaluation, each ensemble member is rolled out for k transitions under the proposed action sequence
+a. The successor used in Eq. equation 27 is the ensemble-mean prediction
+ˆzt+k(a) = 1
+M
+M
+X
+m=1
+ˆz(m)
+t+k(a),
+(24)
+which is mapped through the target representation ¯ψ and then evaluated by the target temporal critic.
+14
+
+
+Preprint
+Model-assisted policy augmentation.
+As a training-time augmentation to the advantage-
+weighted policy objective, we use the policy to generate alternative action targets that remain sup-
+ported by the offline behavior and can be predicted consistently by the learned dynamics. Specifi-
+cally, under the same policy condition ct, we sample N candidate action sequences {a(i)
+t }N
+i=1 from
+the conditional flow policy. Before ranking candidates with the temporal critic, we filter them using
+a behavior-support error and a dynamics-disagreement score, since a low predicted temporal cost is
+informative only for candidates whose actions remain compatible with the offline data and whose
+predicted outcomes are consistent across the learned dynamics ensemble.
+Behavior support. We train an auxiliary state-conditioned flow model vν on recorded actions by
+minimizing the standard conditional flow-matching loss (Lipman et al., 2023), with the current
+LeWM latent zt as its condition. For the i-th candidate a(i)
+t , we define the behavior-support er-
+ror as
+q(i)
+beh =
+1
+Rkda
+R
+X
+r=1
+vν
+
+x(i,r)
+sr
+, sr, zt
+
+−
+
+a(i)
+t
+−x(r)
+0
+
+2
+2 ,
+(25)
+where x(r)
+0
+∼N(0, Ikda), sr ∼U(0.1, 0.9), and x(i,r)
+sr
+= (1 −sr)x(r)
+0
++ sra(i)
+t . The parameter R
+denotes the number of flow residuals used to estimate the error. A candidate satisfying q(i)
+beh ≤δbeh
+is considered sufficiently supported by the recorded behavior.
+Dynamics agreement. For the same candidate a(i)
+t , each dynamics model predicts a latent trajectory
+{ˆz(m,i)
+t+ℓ}k
+ℓ=1. We define the dynamics-disagreement score as
+q(i)
+dyn =
+1
+kdz
+k
+X
+ℓ=1
+dz
+X
+j=1
+Stdm=1,...,M
+
+[ˆz(m,i)
+t+ℓ]j
+
+,
+(26)
+where dz denotes the LeWM latent dimension. A candidate satisfying q(i)
+dyn ≤δdyn is considered
+sufficiently consistent across the dynamics ensemble.
+The thresholds δbeh and δdyn are calibrated from the corresponding scores of recorded actions.
+Every 50 training updates, we compute the 90th percentile of each score in the current data batch
+and update the corresponding threshold by exponential moving average with retention coefficient
+0.99.
+We denote by Vt the candidate action sequences satisfying both q(i)
+beh ≤δbeh and q(i)
+dyn ≤δdyn.
+Among these candidates, we select the sequence with the lowest predicted temporal cost:
+a⋆
+t = arg min
+a∈Vt
+
+k + d¯θ
+  ¯ψ (ˆzt+k(a)) , ¯eg
+
+.
+(27)
+If Vt is empty, no model-assisted update is applied to that training sample.
+We compare the selected candidate with the recorded continuation through the predicted improve-
+ment
+Aim
+t,g = CD −C⋆,
+(28)
+where CD = k + d¯θ(¯et+k, ¯eg) is the predicted temporal cost of the recorded continuation, and
+C⋆= k + d¯θ
+  ¯ψ(ˆzt+k(a⋆
+t )), ¯eg
+
+is the predicted temporal cost of the selected candidate. A positive
+Aim
+t,g indicates that the candidate is predicted to improve upon the recorded continuation.
+Accepted candidates provide additional flow-matching targets with weight
+wim
+t,g = min
+(
+wmax, exp
+ 
+Aim
+t,g
+β
+!)
+,
+(29)
+and the corresponding model-assisted policy objective is
+Lim
+policy = E
+
+1
+ Aim
+t,g > 0
+
+wim
+t,g ℓFM (ω; a⋆
+t , ct)
+
+,
+(30)
+where λim controls the contribution of the model-assisted targets. The candidate contributes to the
+policy update only when Aim
+t,g > 0.
+15
+
+
+Preprint
+C
+ALGORITHM AND TRAINING PROCEDURE
+Algorithm 1 Training Directed Temporal Representations for Control
+Input: offline trajectories D, frozen visual encoder E
+1: Initialize ψ, dθ, Tξ, πω, {fm}M
+m=1, vν and target networks ¯ψ, d¯θ
+2: for u = 1, . . . , U do
+3:
+Sample (ot, at, ot+k) ∼D and relabel goal og
+4:
+zt ←E(ot), zg ←E(og); et ←ψ(zt), eg ←ψ(zg)
+5:
+Set ct ←[zt, zg, et, eg, Emb(ht/H)]
+6:
+Update {fm}M
+m=1 with Ldyn and update vν on recorded actions
+7:
+Compute yt,g with Eq. 7
+8:
+Compute Adata
+t,g , wdata
+t,g , and Ldata
+policy
+9:
+Lim
+policy ←0
+10:
+if u ≥Uim then
+11:
+Sample {a(i)
+t }N
+i=1 ∼πω(· | ct)
+12:
+Compute {q(i)
+beh, q(i)
+dyn}N
+i=1 and obtain Vt
+13:
+if Vt̸ = ∅then
+14:
+Select a⋆
+t with Eq. 27
+15:
+Compute Aim
+t,g with Eq. 28
+16:
+if Aim
+t,g > 0 then
+17:
+Compute Lim
+policy with Eq. 30
+18:
+Refine eligible bootstrapped temporal targets
+19:
+end if
+20:
+end if
+21:
+end if
+22:
+Update ψ, dθ, Tξ by minimizing Ltemp
+23:
+Update ¯ψ, d¯θ with Eq. 20
+24:
+Update πω by minimizing Lpolicy = Ldata
+policy + λimLim
+policy
+25: end for
+Return: πω
+16
+
+
+Preprint
+D
+ARCHITECTURES AND HYPERPARAMETERS
+Network architectures.
+We implement all trainable modules as multilayer perceptrons. Hidden
+layers use GELU activations (Hendrycks & Gimpel, 2016), with LayerNorm applied in the rep-
+resentation, policy, behavior, and dynamics networks (Ba et al., 2016). The symmetric head S,
+order-sensitive head Aθ, and transition head Tξ use GELU without LayerNorm. The representation
+head additionally applies LayerNorm to its output. We use linear output layers throughout and do not
+use dropout. The directed-distance scale is initialized to α = 1. Table 4 reports the corresponding
+input, hidden, and output dimensions.
+Table 4: Trainable network architectures. Hidden widths exclude output layers. The policy condition
+has dimension 2dz + 2de + 64 = 704. Emb(s) denotes the 64-dimensional flow-time embedding.
+Network
+Input
+Hidden widths
+Output
+Representation ψ
+z
+512, 512
+128
+Symmetric head S
+e
+256
+64
+Order-sensitive head Aθ
+e
+256
+64
+Transition head Tξ
+[e, a]
+256
+128
+Dynamics member fm
+[z, a]
+512, 512
+192
+Policy velocity vω
+[xs, Emb(s), ct]
+512, 512, 512
+kda
+Behavior velocity vν
+[xs, Emb(s), zt]
+512, 512, 512
+kda
+Tξ predicts a residual update to e, and each fm predicts a residual update to z. Dynamics ensemble members
+have independent parameters and are trained on the same minibatches.
+Hyperparameters.
+Table 5 summarizes the default configuration.
+17
+
+
+Preprint
+Table 5: Default training and inference hyperparameters for DTRC.
+Hyperparameter
+Value
+Optimization
+Training iterations U
+200,000
+Minibatch size
+1024
+Optimizer
+Adam
+Learning rate
+3 × 10−4 (constant)
+Adam moment coefficients
+(0.9, 0.999)
+Adam numerical epsilon
+10−8
+Weight decay
+0
+Gradient clipping
+None
+Temporal critic and goal sampling
+Next / future / dataset-wide goal probabilities
+0.1/0.6/0.3
+Future-goal continuation γg
+0.98
+Bootstrap horizon n
+8
+Local supervision range J
+8
+Expectile τe
+0.3
+Local coefficient λlocal
+1
+Consistency coefficient λcons
+0.1
+Target-network update rate
+0.005
+Target distance / bootstrap cap dmax
+200
+Norm-smoothing constant ϵ
+10−4
+Flow policy
+Action horizon k
+1
+Horizon-conditioning cap H
+50
+Flow sampling solver
+Forward Euler
+Flow sampling steps
+8
+Advantage temperature β
+1
+Maximum weight wmax
+20
+Action clip (standardized space)
+[−3, 3]
+Test-time policy samples per decision
+1
+Model-assisted augmentation
+Dynamics ensemble size M
+4
+Dynamics training horizon HF
+4
+Model-assisted start iteration Uim
+10,000
+Policy candidates per condition N
+16
+Behavior-score samples R
+2
+Model-assisted coefficient λim
+1
+18
+
+
+Preprint
+E
+ADDITIONAL RESULTS
+E.1
+COMPONENT ABLATIONS
+Table 6: Ablation study on the four LeWM tasks. Success rates (%) are reported as mean ±
+sample standard deviation over five evaluation seeds. All variants use the same 50 start–goal pairs
+per task and seed, a goal offset of 25 recorded transitions, and a 50-step interaction budget.
+Configuration
+PushT
+TwoRoom
+Reacher
+Cube
+Flow BC
+74.7 ± 4.6
+94.7 ± 4.2
+68.0 ± 3.5
+91.3 ± 1.2
+Flow BC + temporal supervision
+84.0 ± 5.3
+100.0 ± 0.0
+100.0 ± 0.0
+97.3 ± 3.1
+DTRC w/o behavior support
+88.0 ± 4.0
+100.0 ± 0.0
+100.0 ± 0.0
+95.3 ± 1.2
+DTRC w/o directional residual
+90.0 ± 5.3
+100.0 ± 0.0
+100.0 ± 0.0
+98.7 ± 2.3
+DTRC (full)
+90.7 ± 5.0
+100.0 ± 0.0
+100.0 ± 0.0
+96.0 ± 2.0
+Configuration details.
+Flow BC uses unweighted conditional flow matching. Flow BC + temporal
+supervision adds the learned DTRC control representation and temporal-advantage weighting, with-
+out model-assisted augmentation. The behavior-support ablation retains the dynamics-agreement
+filter. The directional-residual ablation removes the order-sensitive component and retains only the
+symmetric metric component.
+E.2
+PERFORMANCE ACROSS GOAL OFFSETS
+Table 7: Goal-conditioned control across goal offsets. Task-averaged success rates (%) over six
+OGBench tasks.
+Goal offset
+Method
+25
+50
+100
+LeWM
+43.2 ± 1.6
+17.6 ± 4.1
+10.7 ± 1.9
+GCBC
+44.8 ± 1.4
+16.4 ± 4.6
+9.1 ± 0.8
+GC-IQL
+43.4 ± 2.2
+16.9 ± 3.8
+9.8 ± 1.0
+HILP
+44.3 ± 2.2
+17.2 ± 2.7
+9.0 ± 0.9
+GC-IDM
+44.5 ± 2.2
+16.8 ± 3.3
+8.3 ± 0.3
+DTRC (ours)
+45.9 ± 2.2
+20.3 ± 4.7
+18.9 ± 0.7
+Evaluation details.
+The six tasks are PointMaze, Cube-Double, Scene, AntMaze-Medium,
+HumanoidMaze-Medium, and Puzzle-3x3, with equal weight in the task average. Within each goal
+offset, all methods use the same 50 start–goal pairs per task and evaluation seed. We first average
+success rates across tasks for each seed, then report the mean and sample standard deviation over 5
+evaluation seeds. Goal offsets count recorded trajectory transitions rather than minimum reaching
+times. HILP denotes the Hilbert-value adaptation used in our visual-control comparison. Check-
+points are fixed across goal offsets and evaluation seeds, so the reported deviations do not measure
+variability across independent training runs.
+19
+
+
+Preprint
+F
+ADDITIONAL REPRESENTATION ANALYSES
+F.1
+REPRESENTATION SPACES ACROSS TASKS
+The main text visualizes the transformation from frozen LeWM features to the learned DTRC rep-
+resentation on PushT. We provide the corresponding visualizations for the remaining three LeWM
+tasks in Figures 6 and 7. For each task, we visualize frozen predictive features z, the learned control
+representation e, symmetric coordinates S(e), and directed potentials A(e). Each space is projected
+independently onto its first two principal components. Colors indicate normalized time within the
+offline episode. The projections are used only for qualitative visualization; all temporal distances
+and quantitative diagnostics are computed in the full learned representation. PCA orientations and
+scales are therefore not directly comparable across spaces or tasks.
+The learned spaces exhibit distinct organizations across the three tasks. TwoRoom develops a curved
+control representation with separate structures in the symmetric and directed heads. Reacher exhibits
+an approximately cyclic organization in both the control representation and directed potentials. Cube
+produces a different non-cyclic geometry, with the symmetric and directed heads again organizing
+the representation differently. Together with the PushT visualization in the main text, these exam-
+ples show that DTRC does not impose a single low-dimensional geometric form across tasks. The
+relevant common structure is instead defined by the induced state–goal temporal distance and its
+control semantics.
+Additional OGBench tasks.
+We further visualize the same four representation spaces on the six
+additional OGBench tasks. These tasks exhibit substantially different projected geometries, provid-
+ing a broader qualitative view of the task-dependent representations learned by DTRC.
+Across the ten tasks, the learned representation does not converge to a single common projected
+geometry. Navigation, reaching, manipulation, and puzzle environments produce different organi-
+zations in e, S(e), and A(e). In several tasks, the leading principal components of the frozen LeWM
+features explain only a small fraction of the variance, while the learned control and distance-head
+representations exhibit substantially more structured low-dimensional organization. The symmet-
+ric and directed heads also differ markedly across tasks, consistent with their distinct roles in the
+quasimetric and with the task-dependent directional statistics reported in the main text. These visu-
+alizations therefore support interpreting DTRC through the induced state–goal temporal geometry
+rather than through any single low-dimensional representation shape.
+F.2
+ADDITIONAL TEMPORAL DIAGNOSTICS
+The main text reports detailed temporal-distance diagnostics on PushT. Here we provide the cor-
+responding results for TwoRoom, Reacher, and OGBench-Cube under the same held-out, offset-
+balanced evaluation protocol. For each task, we evaluate 20,000 state–future-goal pairs, with 200
+pairs at every integer temporal offset from 1 to 100 transitions. All distances are computed with the
+EMA target network at 200,000 training updates in the full learned representation. Recorded tem-
+poral offset is used as a reference for trajectory duration and is not treated as ground-truth optimal
+reaching cost.
+Each figure reports three properties.
+The left panel compares forward temporal distance with
+recorded temporal offset. The middle panel compares forward and reverse temporal costs together
+with the shared symmetric contribution of the same DTRC model. The right panel reports one-step
+temporal progress,
+P (1)
+t,g = d(et, eg) −d(et+1, eg).
+These diagnostics use the same definitions as Section 4.3.
+The diagnostics reveal distinct long-range structure across tasks. TwoRoom retains a strong rank
+association between temporal distance and recorded offset, with ρ = 0.80, while Reacher shows a
+weaker association of ρ = 0.51 and Cube shows a substantially weaker association of ρ = 0.22.
+The forward and reverse curves are also much closer on these tasks than on PushT, consistent with
+the task-dependent directional statistics reported in the main text. Despite these differences, positive
+one-step progress remains above 50% on all three tasks: 65.8% on TwoRoom, 59.4% on Reacher,
+20
+
+
+Preprint
+PC1 (2.3%)
+PC2 (2.2%)
+Frozen LeWM z
+PC1 (33.5%)
+PC2 (17.2%)
+Control representation e
+PC1 (78.3%)
+PC2 (7.3%)
+Symmetric coordinates S(e)
+PC1 (49.0%)
+PC2 (38.2%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) TwoRoom
+PC1 (2.0%)
+PC2 (2.0%)
+Frozen LeWM z
+PC1 (34.8%)
+PC2 (33.9%)
+Control representation e
+PC1 (89.0%)
+PC2 (5.6%)
+Symmetric coordinates S(e)
+PC1 (48.8%)
+PC2 (45.5%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) Reacher
+Figure 6: Learned representation spaces on TwoRoom and Reacher. From left to right, each
+row shows frozen LeWM features z, the learned control representation e, symmetric coordinates
+S(e), and directed potentials A(e). Colors denote normalized offline episode time. PCA is fitted
+independently in each space.
+PC1 (1.5%)
+PC2 (1.4%)
+Frozen LeWM z
+PC1 (20.4%)
+PC2 (12.7%)
+Control representation e
+PC1 (32.2%)
+PC2 (19.6%)
+Symmetric coordinates S(e)
+PC1 (38.7%)
+PC2 (20.5%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+Figure 7: Learned representation spaces on OGBench-Cube. From left to right, the panels show
+frozen LeWM features z, the learned control representation e, symmetric coordinates S(e), and
+directed potentials A(e). Colors denote normalized offline episode time. PCA is fitted independently
+in each space.
+21
+
+
+Preprint
+PC1 (1.0%)
+PC2 (1.0%)
+Frozen LeWM z
+PC1 (39.0%)
+PC2 (18.1%)
+Control representation e
+PC1 (97.6%)
+PC2 (1.7%)
+Symmetric coordinates S(e)
+PC1 (54.7%)
+PC2 (25.1%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) PointMaze
+PC1 (1.4%)
+PC2 (1.3%)
+Frozen LeWM z
+PC1 (24.2%)
+PC2 (17.5%)
+Control representation e
+PC1 (23.5%)
+PC2 (14.7%)
+Symmetric coordinates S(e)
+PC1 (38.1%)
+PC2 (19.7%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) AntMaze-Medium
+Figure 8: Learned representation spaces on PointMaze and AntMaze-Medium. For each task,
+the panels show frozen LeWM features z, the learned control representation e, symmetric coordi-
+nates S(e), and directed potentials A(e). Colors indicate normalized offline episode time. PCA
+is fitted independently in each space, so orientations and scales are not directly comparable across
+panels or tasks.
+PC1 (0.9%)
+PC2 (0.9%)
+Frozen LeWM z
+PC1 (12.4%)
+PC2 (9.5%)
+Control representation e
+PC1 (22.3%)
+PC2 (19.2%)
+Symmetric coordinates S(e)
+PC1 (26.3%)
+PC2 (21.3%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) Cube-Double
+PC1 (1.0%)
+PC2 (0.9%)
+Frozen LeWM z
+PC1 (18.4%)
+PC2 (14.6%)
+Control representation e
+PC1 (12.0%)
+PC2 (10.6%)
+Symmetric coordinates S(e)
+PC1 (35.5%)
+PC2 (22.1%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) Scene
+Figure 9: Learned representation spaces on Cube-Double and Scene. The visualization follows
+the same construction as Figure 8. Each space is projected independently onto its first two principal
+components and colored by normalized offline episode time.
+22
+
+
+Preprint
+PC1 (5.1%)
+PC2 (4.8%)
+Frozen LeWM z
+PC1 (25.4%)
+PC2 (20.2%)
+Control representation e
+PC1 (94.5%)
+PC2 (3.1%)
+Symmetric coordinates S(e)
+PC1 (34.8%)
+PC2 (31.8%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) HumanoidMaze-Medium
+PC1 (1.3%)
+PC2 (1.3%)
+Frozen LeWM z
+PC1 (21.3%)
+PC2 (16.8%)
+Control representation e
+PC1 (48.3%)
+PC2 (42.4%)
+Symmetric coordinates S(e)
+PC1 (27.8%)
+PC2 (17.8%)
+Directed potentials A(e)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) Puzzle-3x3
+Figure 10: Learned representation spaces on HumanoidMaze-Medium and Puzzle-3x3. From
+left to right, each task shows frozen LeWM features z, the learned control representation e, sym-
+metric coordinates S(e), and directed potentials A(e). PCA is fitted independently in each space.
+0
+50
+100
+Recorded offset (steps)
+0
+30
+60
+90
+Forward temporal cost
+ρ = 0.80
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+15
+30
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−2
+0
+2
+d(et, eg) −d(et + 1, eg)
+0.0
+0.3
+0.6
+0.9
+Density
+65.8%
+positive progress
+99.4% in view
+c One-step progress
+0
+50
+100
+Recorded offset (steps)
+0
+30
+60
+90
+Forward temporal cost
+ρ = 0.51
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+6
+12
+18
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−2
+0
+2
+d(et, eg) −d(et + 1, eg)
+0.0
+0.2
+0.4
+0.6
+Density
+59.4%
+positive progress
+99.8% in view
+c One-step progress
+Figure 11: Additional temporal diagnostics on TwoRoom and Reacher. Each task is evaluated
+on 20,000 held-out state–future-goal pairs with balanced temporal offsets from 1 to 100 transitions.
+The panels show temporal structure across recorded offsets, directional state–goal cost, and one-step
+temporal progress. The shared symmetric term is computed from the same trained DTRC model and
+is not a separately trained baseline.
+23
+
+
+Preprint
+and 72.3% on Cube. These results reinforce the distinction between local actionable temporal struc-
+ture and global agreement with recorded trajectory duration.
+Additional OGBench tasks.
+We further apply the same held-out, offset-balanced diagnostic pro-
+tocol to the six additional visual OGBench tasks. For each task, we evaluate 20,000 state–future-
+goal pairs, with 200 pairs at every integer temporal offset from 1 to 100 transitions. All distances
+are computed with the EMA target network at 200,000 training updates in the full learned represen-
+tation. The figures report temporal structure across recorded offsets, directional state–goal cost, and
+one-step temporal progress using the same definitions as in the main text.
+Across the six additional tasks, the relation between temporal distance and recorded trajectory du-
+ration remains task-dependent. Spearman correlation over offsets 1–100 ranges from 0.53 on Cube-
+Double to 0.74 on PointMaze. The directional curves also exhibit different degrees of forward–
+reverse separation across tasks, further supporting the task-dependent use of the order-sensitive
+component. In contrast, positive one-step progress remains above 60% on every task, ranging from
+60.4% on HumanoidMaze-Medium to 84.9% on PointMaze. Together with the four LeWM tasks,
+these results show that transition-level temporal progress is observed across all ten evaluated control
+problems without requiring a common long-range or directional geometry.
+F.3
+QUASIMETRIC DECOMPOSITION
+We further examine the two components of the directed temporal quasimetric along recorded tra-
+jectories. For each task, we evaluate pairwise distances between states from a recorded episode and
+index source and goal states by normalized episode time. We separately visualize the symmetric
+metric contribution, the order-sensitive directed contribution, and their sum. These matrices provide
+a qualitative view of the structure induced by the two components of Eq. 4.
+The decomposition varies substantially across tasks. On PushT, the pairwise structure of the to-
+tal temporal distance is dominated by the order-sensitive component, consistent with the strong
+forward–reverse asymmetry observed in the main-text diagnostics. TwoRoom, Reacher, and Cube
+exhibit different relative contributions and pairwise structures. The directed component therefore
+provides task-dependent order-sensitive structure rather than imposing a common asymmetric pat-
+tern across environments. The symmetric component remains invariant to source–goal reversal,
+while asymmetry in the total distance arises from the directed component by construction.
+Additional OGBench tasks.
+We provide the same quasimetric decomposition for the six addi-
+tional visual OGBench tasks. As in the four LeWM tasks, each matrix evaluates pairwise temporal
+distance along a recorded trajectory and separates the symmetric metric contribution from the order-
+sensitive directed contribution.
+Across the additional tasks, the relative contributions of the symmetric and directed components vary
+substantially. PointMaze, Cube-Double, and Scene exhibit visible structure in both components,
+while AntMaze-Medium, HumanoidMaze-Medium, and Puzzle-3x3 place comparatively greater
+structure in the order-sensitive component. The total distance inherits these task-specific decom-
+positions rather than following a common pairwise pattern across environments. Together with the
+four LeWM tasks, these visualizations show that the metric–residual construction provides a com-
+mon structural form while allowing the learned balance between symmetric and directed geometry
+to adapt to the control problem.
+F.4
+GOAL-RELATIVE DIRECTIONAL LANDSCAPES
+We further visualize the directional temporal cost around a fixed recorded goal. For each task, we
+evaluate the temporal distance from every sampled state to the reference goal and in the reverse
+direction from the goal to each state. We also visualize the directional difference d(eg, e)−d(e, eg).
+Distances are computed in the full learned representation. PCA is used only to position states for
+visualization.
+The directional landscapes vary substantially across tasks. PushT exhibits large spatial differences
+between forward and reverse costs, consistent with its pronounced forward–reverse asymmetry in the
+main-text diagnostics. TwoRoom, Reacher, and Cube show substantially weaker or more localized
+24
+
+
+Preprint
+0
+50
+100
+Recorded offset (steps)
+0
+30
+60
+90
+Forward temporal cost
+ρ = 0.22
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+10
+20
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−2
+0
+2
+d(et, eg) −d(et + 1, eg)
+0.0
+0.3
+0.6
+0.9
+Density
+72.3%
+positive progress
+99.9% in view
+c One-step progress
+Figure 12: Additional temporal diagnostics on OGBench-Cube. The evaluation uses the same
+held-out, offset-balanced protocol as the main text. The panels show temporal structure across
+recorded offsets, directional state–goal cost, and one-step temporal progress.
+0
+50
+100
+Recorded offset (steps)
+0
+30
+60
+90
+Forward temporal cost
+ρ = 0.74
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+25
+50
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−2
+−1
+0
+1
+2
+d(et, eg) −d(et + 1, eg)
+0.0
+0.5
+1.0
+1.5
+Density
+84.9%
+positive progress
+99.5% in view
+c One-step progress
+(a) PointMaze
+0
+50
+100
+Recorded offset (steps)
+0
+50
+100
+150
+Forward temporal cost
+ρ = 0.56
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+30
+60
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−3
+0
+3
+d(et, eg) −d(et + 1, eg)
+0.0
+0.2
+0.4
+0.6
+Density
+76.9%
+positive progress
+99.2% in view
+c One-step progress
+(b) AntMaze-Medium
+Figure 13: Temporal diagnostics on PointMaze and AntMaze-Medium. The panels show tem-
+poral structure across recorded offsets, directional state–goal cost, and one-step temporal progress.
+Forward, reverse, and shared symmetric curves are computed from the same trained DTRC model.
+25
+
+
+Preprint
+0
+50
+100
+Recorded offset (steps)
+0
+60
+120
+180
+Forward temporal cost
+ρ = 0.53
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+40
+80
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−5
+0
+5
+10
+d(et, eg) −d(et + 1, eg)
+0.00
+0.15
+0.30
+Density
+71.0%
+positive progress
+99.3% in view
+c One-step progress
+(a) Cube-Double
+0
+50
+100
+Recorded offset (steps)
+0
+50
+100
+150
+200
+Forward temporal cost
+ρ = 0.54
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+25
+50
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−4
+0
+4
+8
+d(et, eg) −d(et + 1, eg)
+0.00
+0.15
+0.30
+0.45
+Density
+69.7%
+positive progress
+99.2% in view
+c One-step progress
+(b) Scene
+Figure 14: Temporal diagnostics on Cube-Double and Scene. The evaluation follows the same
+held-out, offset-balanced protocol used for the main-text representation diagnostics. Recorded offset
+is used as a reference for trajectory duration rather than as ground-truth optimal reaching cost.
+26
+
+
+Preprint
+0
+50
+100
+Recorded offset (steps)
+0
+40
+80
+120
+Forward temporal cost
+ρ = 0.69
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+15
+30
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−3
+0
+3
+6
+d(et, eg) −d(et + 1, eg)
+0.00
+0.15
+0.30
+Density
+60.4%
+positive progress
+99.2% in view
+c One-step progress
+(a) HumanoidMaze-Medium
+0
+50
+100
+Recorded offset (steps)
+0
+30
+60
+90
+Forward temporal cost
+ρ = 0.62
+Median + IQR
+a Temporal alignment
+0
+50
+100
+Recorded offset
+0
+15
+30
+Temporal cost
+b Directional cost structure
+Forward
+Reverse
+Shared symmetric term
+−4
+−2
+0
+2
+d(et, eg) −d(et + 1, eg)
+0.00
+0.25
+0.50
+0.75
+Density
+69.9%
+positive progress
+99.5% in view
+c One-step progress
+(b) Puzzle-3x3
+Figure 15: Temporal diagnostics on HumanoidMaze-Medium and Puzzle-3x3. Each task is
+evaluated on the same offset-balanced cohort used throughout the additional temporal diagnostics.
+27
+
+
+Preprint
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+50
+100
+150
+Distance
+(a) PushT
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+5
+10
+15
+20
+25
+30
+Distance
+(b) TwoRoom
+Figure 16: Pairwise decomposition of the learned temporal distance on PushT and TwoRoom.
+Rows index source states and columns index goal states by normalized episode time. From left to
+right, each row shows the symmetric metric contribution, the order-sensitive directed contribution,
+and their total temporal distance. Each task uses its own distance scale.
+28
+
+
+Preprint
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+10
+20
+30
+40
+Distance
+(a) Reacher
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+20
+40
+60
+80
+Distance
+(b) OGBench-Cube
+Figure 17: Pairwise decomposition of the learned temporal distance on Reacher and OGBench-
+Cube. Rows index source states and columns index goal states by normalized episode time. From
+left to right, each row shows the symmetric metric contribution, the order-sensitive directed contri-
+bution, and their total temporal distance. Each task uses its own distance scale.
+29
+
+
+Preprint
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+50
+100
+150
+200
+Distance
+(a) PointMaze
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+50
+100
+150
+Distance
+(b) AntMaze-Medium
+Figure 18:
+Pairwise decomposition of the learned temporal distance on PointMaze and
+AntMaze-Medium. Rows index source states and columns index goal states by normalized episode
+time. From left to right, each row shows the symmetric metric contribution, the order-sensitive di-
+rected contribution, and their total temporal distance. Each task uses its own distance scale.
+30
+
+
+Preprint
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+50
+100
+150
+200
+Distance
+(a) Cube-Double
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+50
+100
+150
+200
+Distance
+(b) Scene
+Figure 19: Pairwise decomposition of the learned temporal distance on Cube-Double and
+Scene. The visualization follows the same construction as Figure 18. Symmetric and directed
+contributions are evaluated separately before forming the total temporal distance.
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+50
+100
+150
+200
+Distance
+(a) HumanoidMaze-Medium
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Symmetric contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Directed contribution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Goal: normalized episode time
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Source: normalized episode time
+Total raw distance
+0
+10
+20
+30
+40
+Distance
+(b) Puzzle-3x3
+Figure 20: Pairwise decomposition of the learned temporal distance on HumanoidMaze-
+Medium and Puzzle-3x3. Rows and columns index source and goal states by normalized episode
+time. Each task uses its own distance scale.
+31
+
+
+Preprint
+Fixed reference goal
+−10
+−5
+0
+5
+10
+Control representation PC1
+−10
+−5
+0
+5
+10
+PC2
+Forward: state to goal
+−10
+−5
+0
+5
+10
+Control representation PC1
+−10
+−5
+0
+5
+10
+PC2
+Reverse: goal to state
+−10
+−5
+0
+5
+10
+Control representation PC1
+−10
+−5
+0
+5
+10
+PC2
+Reverse minus forward
+0
+50
+100
+150
+200
+Raw H3 distance
+−100
+0
+100
+Directional difference
+(a) PushT
+Fixed reference goal
+−5.0
+−2.5
+0.0
+2.5
+5.0
+Control representation PC1
+−6
+−4
+−2
+0
+2
+4
+6
+8
+PC2
+Forward: state to goal
+−5.0
+−2.5
+0.0
+2.5
+5.0
+Control representation PC1
+−6
+−4
+−2
+0
+2
+4
+6
+8
+PC2
+Reverse: goal to state
+−5.0
+−2.5
+0.0
+2.5
+5.0
+Control representation PC1
+−6
+−4
+−2
+0
+2
+4
+6
+8
+PC2
+Reverse minus forward
+0
+10
+20
+30
+40
+Raw H3 distance
+−4
+−2
+0
+2
+4
+Directional difference
+(b) TwoRoom
+Figure 21: Goal-relative directional landscapes on PushT and TwoRoom. For a fixed recorded
+goal, the panels show the goal observation, forward temporal distance from each state to the goal,
+reverse temporal distance from the goal to each state, and the reverse–forward difference. PCA is
+used only for visualization; temporal distances are evaluated in the full learned representation.
+Fixed reference goal
+−5
+0
+5
+Control representation PC1
+−8
+−6
+−4
+−2
+0
+2
+4
+6
+8
+PC2
+Forward: state to goal
+−5
+0
+5
+Control representation PC1
+−8
+−6
+−4
+−2
+0
+2
+4
+6
+8
+PC2
+Reverse: goal to state
+−5
+0
+5
+Control representation PC1
+−8
+−6
+−4
+−2
+0
+2
+4
+6
+8
+PC2
+Reverse minus forward
+0
+10
+20
+30
+40
+50
+60
+Raw H3 distance
+−3
+−2
+−1
+0
+1
+2
+3
+Directional difference
+(a) Reacher
+Fixed reference goal
+−5.0
+−2.5
+0.0
+2.5
+5.0
+Control representation PC1
+−8
+−6
+−4
+−2
+0
+2
+4
+6
+PC2
+Forward: state to goal
+−5.0
+−2.5
+0.0
+2.5
+5.0
+Control representation PC1
+−8
+−6
+−4
+−2
+0
+2
+4
+6
+PC2
+Reverse: goal to state
+−5.0
+−2.5
+0.0
+2.5
+5.0
+Control representation PC1
+−8
+−6
+−4
+−2
+0
+2
+4
+6
+PC2
+Reverse minus forward
+0
+20
+40
+60
+80
+Raw H3 distance
+−40
+−20
+0
+20
+40
+Directional difference
+(b) OGBench-Cube
+Figure 22: Goal-relative directional landscapes on Reacher and OGBench-Cube. The visualiza-
+tion follows the same construction as Figure 21. The forward and reverse landscapes are evaluated
+for the same fixed goal, and the final panel shows their difference.
+32
+
+
+Preprint
+differences. These visualizations therefore provide a spatial view of the task-dependent directional
+structure captured by the quasimetric. They complement the aggregate forward–reverse statistics
+reported in Section 4.3.
+Additional OGBench tasks.
+We provide the same fixed-goal directional visualizations for the six
+additional OGBench tasks. For each task, we evaluate forward temporal distance from sampled
+states to a fixed recorded goal, reverse temporal distance from the goal to the same states, and their
+difference. All distances are computed in the full learned representation. PCA is used only to
+position states for visualization.
+The additional tasks further illustrate that directional structure is not uniform across control prob-
+lems. Some environments exhibit pronounced spatial differences between forward and reverse tem-
+poral costs, while others remain closer to symmetric around the selected reference goal. The spatial
+pattern of the reverse–forward difference also varies substantially across tasks. Together with the
+aggregate diagnostics, these visualizations show that the directed quasimetric provides capacity for
+order-sensitive state–goal evaluation without imposing a fixed directional pattern across environ-
+ments.
+33
+
+
+Preprint
+Fixed reference goal
+−10
+0
+10
+Control e PC1
+−5.0
+−2.5
+0.0
+2.5
+5.0
+7.5
+10.0
+PC2
+Forward: state to goal
+−10
+0
+10
+Control e PC1
+−5.0
+−2.5
+0.0
+2.5
+5.0
+7.5
+10.0
+PC2
+Reverse: goal to state
+−10
+0
+10
+Control e PC1
+−5.0
+−2.5
+0.0
+2.5
+5.0
+7.5
+10.0
+PC2
+Reverse minus forward
+0
+50
+100
+150
+Raw H3 distance
+−20
+−10
+0
+10
+20
+Directional difference
+(a) PointMaze
+Fixed reference goal
+−10
+0
+10
+Control e PC1
+−10
+−5
+0
+5
+10
+PC2
+Forward: state to goal
+−10
+0
+10
+Control e PC1
+−10
+−5
+0
+5
+10
+PC2
+Reverse: goal to state
+−10
+0
+10
+Control e PC1
+−10
+−5
+0
+5
+10
+PC2
+Reverse minus forward
+0
+50
+100
+150
+200
+250
+Raw H3 distance
+−100
+0
+100
+Directional difference
+(b) AntMaze-Medium
+Figure 23: Goal-relative directional landscapes on PointMaze and AntMaze-Medium. For a
+fixed recorded goal, the panels show the goal observation, forward temporal distance from each
+state to the goal, reverse temporal distance from the goal to each state, and the reverse–forward
+difference. PCA is used only for visualization.
+Fixed reference goal
+−10
+0
+10
+Control e PC1
+−5
+0
+5
+10
+PC2
+Forward: state to goal
+−10
+0
+10
+Control e PC1
+−5
+0
+5
+10
+PC2
+Reverse: goal to state
+−10
+0
+10
+Control e PC1
+−5
+0
+5
+10
+PC2
+Reverse minus forward
+0
+50
+100
+150
+200
+Raw H3 distance
+−50
+−25
+0
+25
+50
+Directional difference
+(a) Cube-Double
+Fixed reference goal
+−10
+0
+10
+Control e PC1
+−10
+−5
+0
+5
+10
+PC2
+Forward: state to goal
+−10
+0
+10
+Control e PC1
+−10
+−5
+0
+5
+10
+PC2
+Reverse: goal to state
+−10
+0
+10
+Control e PC1
+−10
+−5
+0
+5
+10
+PC2
+Reverse minus forward
+0
+50
+100
+150
+200
+Raw H3 distance
+−50
+−25
+0
+25
+50
+Directional difference
+(b) Scene
+Figure 24: Goal-relative directional landscapes on Cube-Double and Scene. Forward and reverse
+temporal distances are evaluated for the same fixed goal, and the final panel shows their difference.
+Distances are computed in the full learned representation.
+34
+
+
+Preprint
+Fixed reference goal
+−10
+0
+10
+Control e PC1
+−5
+0
+5
+10
+PC2
+Forward: state to goal
+−10
+0
+10
+Control e PC1
+−5
+0
+5
+10
+PC2
+Reverse: goal to state
+−10
+0
+10
+Control e PC1
+−5
+0
+5
+10
+PC2
+Reverse minus forward
+0
+50
+100
+150
+200
+Raw H3 distance
+−50
+−25
+0
+25
+50
+Directional difference
+(a) HumanoidMaze-Medium
+Fixed reference goal
+−5
+0
+5
+Control e PC1
+−6
+−4
+−2
+0
+2
+4
+6
+PC2
+Forward: state to goal
+−5
+0
+5
+Control e PC1
+−6
+−4
+−2
+0
+2
+4
+6
+PC2
+Reverse: goal to state
+−5
+0
+5
+Control e PC1
+−6
+−4
+−2
+0
+2
+4
+6
+PC2
+Reverse minus forward
+0
+10
+20
+30
+40
+Raw H3 distance
+−10
+0
+10
+Directional difference
+(b) Puzzle-3x3
+Figure 25: Goal-relative directional landscapes on HumanoidMaze-Medium and Puzzle-3x3.
+The visualization follows the same construction as Figure 23.
+35
+
+
+Preprint
+G
+TRAINING DYNAMICS
+We visualize the evolution of the learned DTRC representation during training on the four LeWM
+tasks. For each task, we show the control representation e, symmetric coordinates S(e), and directed
+potentials A(e) at 0, 1,000, 10,000, 20,000, 60,000, and 200,000 training updates. Points are colored
+by normalized offline episode time. These visualizations are intended to illustrate the development
+of representation structure during optimization rather than to provide quantitative convergence cri-
+teria.
+The learned structures emerge progressively during optimization and differ substantially across
+tasks. On TwoRoom, the control representation develops a curved geometry while the directed
+potentials expand into a distinct order-sensitive structure. Reacher develops an approximately cyclic
+control representation and directed-potential geometry. PushT and Cube exhibit different non-cyclic
+organizations, consistent with the task-dependent final representations reported in Section F.1. These
+visualizations indicate that DTRC does not converge toward a single common projected geometry
+across environments.
+Additional OGBench tasks.
+We further visualize representation evolution on the six additional
+OGBench tasks using the same checkpoints and PCA protocol. These results show that task-specific
+geometric structure also emerges progressively beyond the four LeWM tasks.
+Across the additional tasks, representation structure develops progressively during optimization
+while remaining strongly task-dependent. PointMaze and AntMaze-Medium develop distinct non-
+linear organizations in the control representation and directed potentials. Cube-Double and Puzzle-
+3x3 form different structured manifolds, while Scene and HumanoidMaze-Medium exhibit more dif-
+fuse projected organizations. The symmetric and directed heads also evolve differently across tasks.
+These visualizations are therefore consistent with the final task-dependent geometries reported in
+the representation analyses, rather than with convergence toward a single common projected form.
+36
+
+
+Preprint
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) PushT
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) TwoRoom
+Figure 26: Evolution of the learned representation on PushT and TwoRoom. Columns corre-
+spond to training checkpoints and rows show the control representation e, symmetric coordinates
+S(e), and directed potentials A(e). Colors indicate normalized offline episode time.
+37
+
+
+Preprint
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) Reacher
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) OGBench-Cube
+Figure 27: Evolution of the learned representation on Reacher and OGBench-Cube. Columns
+correspond to training checkpoints and rows show the control representation e, symmetric coordi-
+nates S(e), and directed potentials A(e). Colors indicate normalized offline episode time.
+38
+
+
+Preprint
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) PointMaze
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) AntMaze-Medium
+Figure 28: Evolution of the learned representation on PointMaze and AntMaze-Medium.
+Columns correspond to training checkpoints and rows show the control representation e, symmetric
+coordinates S(e), and directed potentials A(e). Colors indicate normalized offline episode time.
+PCA is fitted independently at each checkpoint, so orientation and scale are not directly comparable
+across columns.
+39
+
+
+Preprint
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) Cube-Double
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) Scene
+Figure 29: Evolution of the learned representation on Cube-Double and Scene. The visualiza-
+tion follows the same checkpoint and PCA protocol as Figure 28.
+40
+
+
+Preprint
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(a) HumanoidMaze-Medium
+PC1
+Control representation e
+PC2
+0 updates
+PC1
+PC2
+1,000 updates
+PC1
+PC2
+10,000 updates
+PC1
+PC2
+20,000 updates
+PC1
+PC2
+60,000 updates
+PC1
+PC2
+200,000 updates
+PC1
+Symmetric coordinates S(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+Directed potentials A(e)
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+PC1
+PC2
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Normalized offline episode time
+(b) Puzzle-3x3
+Figure 30: Evolution of the learned representation on HumanoidMaze-Medium and Puzzle-
+3x3. Columns correspond to training checkpoints and rows show e, S(e), and A(e). PCA is fitted
+independently at each checkpoint.
+41

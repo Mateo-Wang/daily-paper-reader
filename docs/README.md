@@ -18,17 +18,17 @@
 <section class="dpr-home-dashboard-card dpr-home-report-card">
   <div class="dpr-home-dashboard-header">
     <div>
-      <span class="dpr-home-dashboard-kicker">2026-10-08</span>
+      <span class="dpr-home-dashboard-kicker">2026-10-06 ~ 2026-10-15</span>
       <h3 class="dpr-home-dashboard-title">今日汇总</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">共 22 篇</strong>
+    <strong class="dpr-home-dashboard-count">共 39 篇</strong>
   </div>
   <dl class="dpr-home-dashboard-stats">
     <div class="dpr-home-dashboard-stat"><dt>累计更新</dt><dd>1 次</dd></div>
-    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>10</dd></div>
+    <div class="dpr-home-dashboard-stat"><dt>精读</dt><dd>27</dd></div>
     <div class="dpr-home-dashboard-stat"><dt>速读</dt><dd>12</dd></div>
   </dl>
-  <p class="dpr-home-dashboard-body">最近更新：2026-10-08 23:59:28 UTC<br>状态：成功</p>
+  <p class="dpr-home-dashboard-body">最近更新：2026-10-15 07:49:56 UTC<br>状态：成功</p>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-brief-card">
   <div class="dpr-home-dashboard-header">
@@ -39,9 +39,9 @@
     <strong class="dpr-home-dashboard-count">AI</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<p>今日日报完成22篇筛选，精读10篇、速读12篇，重点聚焦可控世界动作模型与基于流的视觉-语言-动作模型。</p>
-<p>最值得看的是两篇9.0分工作：CtrlWAM关注意图与预见对齐的可控世界动作模型，NarrativeFlow用机器人速度场构建流式VLA；速读中的CogWAM、RawVLA和Speed in the Blind Spot分别指向事件驱动对齐、具身图像信号处理与自动驾驶VLM动态感知。</p>
-<p>普通读者可先读CtrlWAM和NarrativeFlow，再按兴趣追CogWAM、RawVLA、Speed in the Blind Spot，重点关注“世界模型+动作控制”和“VLA效率与可解释性”两条线。</p>
+<p>2026-10-06~10-15日报从39篇中精读27篇、速读12篇，重点聚焦自动驾驶的轨迹预测与决策关键不确定性。</p>
+<p>最值得看的是两篇9.0分精读：Context-aware Attention-based Gaussian Mixture Models用于车辆轨迹预测，以及Simulation-in-the-Loop快慢推理应对决策关键不确定性。</p>
+<p>普通读者可先读这两篇精读，再按兴趣浏览WayFinder、EVO-WAM、MotorMind等8.0分速读。</p>
   </div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-deep-card">
@@ -50,12 +50,12 @@
       <span class="dpr-home-dashboard-kicker">今日累计</span>
       <h3 class="dpr-home-dashboard-title">精读推荐</h3>
     </div>
-    <strong class="dpr-home-dashboard-count">10 篇</strong>
+    <strong class="dpr-home-dashboard-count">27 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="CtrlWAM: Controllable World Action Models with Aligned Intent and Foresight">CtrlWAM: Controllable World Action Models with Aligned Intent and Foresight</span></li><li><span class="dpr-home-dashboard-paper-title" title="NarrativeFlow: Flow-Based Vision-Language-Action Model Using Robot Velocity Fields">NarrativeFlow: Flow-Based Vision-Language-Action Model Using Robot Velocity Fields</span></li><li><span class="dpr-home-dashboard-paper-title" title="UniWAM: Unified World-Action Model">UniWAM: Unified World-Action Model</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Context-aware Attention-based Gaussian Mixture Models for Vehicular Trajectory Prediction">Context-aware Attention-based Gaussian Mixture Models for Vehicular Trajectory Prediction</span></li><li><span class="dpr-home-dashboard-paper-title" title="Not All Uncertainty Matters: Simulation-in-the-Loop Fast-Slow Reasoning for Decision-Critical Autonomous Driving System">Not All Uncertainty Matters: Simulation-in-the-Loop Fast-Slow Reasoning for Decision-Critical Autonomous Driving System</span></li><li><span class="dpr-home-dashboard-paper-title" title="Do Better Visual Representations Always Lead to Better End-to-End Autonomous Driving?">Do Better Visual Representations Always Lead to Better End-to-End Autonomous Driving?</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>7</strong></span><span class="dpr-home-dashboard-tag">driving <strong>3</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">driving <strong>23</strong></span><span class="dpr-home-dashboard-tag">robotics <strong>4</strong></span></div>
 </section>
 <section class="dpr-home-dashboard-card dpr-home-skim-card">
   <div class="dpr-home-dashboard-header">
@@ -66,9 +66,9 @@
     <strong class="dpr-home-dashboard-count">12 篇</strong>
   </div>
   <div class="dpr-home-dashboard-body">
-<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="Speed in the Blind Spot: An Interpretability Analysis of Dynamic Perception in VLMs for Autonomous Driving">Speed in the Blind Spot: An Interpretability Analysis of Dynamic Perception in VLMs for Autonomous Driving</span></li><li><span class="dpr-home-dashboard-paper-title" title="RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation">RawVLA: Embodied Neural Image Signal Processor For Robotic Manipulation</span></li><li><span class="dpr-home-dashboard-paper-title" title="CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces">CogWAM: Aligning Semantic Cognition with World Action Modeling via Event-Driven Interfaces</span></li></ul>
+<ul class="dpr-home-dashboard-paper-list"><li><span class="dpr-home-dashboard-paper-title" title="WayFinder: Hierarchical Visual-Language-Action for Zero-Shot Waypoint Generation and Low-Level Kinematic Control">WayFinder: Hierarchical Visual-Language-Action for Zero-Shot Waypoint Generation and Low-Level Kinematic Control</span></li><li><span class="dpr-home-dashboard-paper-title" title="EVO-WAM: Evolving World Action Models through Video-Action Verification">EVO-WAM: Evolving World Action Models through Video-Action Verification</span></li><li><span class="dpr-home-dashboard-paper-title" title="MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation">MotorMind: Scaffolding General Vision Language Models for Zero-Shot Robot Manipulation</span></li></ul>
   </div>
-  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>10</strong></span><span class="dpr-home-dashboard-tag">driving <strong>2</strong></span></div>
+  <div class="dpr-home-dashboard-tags"><span class="dpr-home-dashboard-tag">robotics <strong>11</strong></span><span class="dpr-home-dashboard-tag">driving <strong>1</strong></span></div>
 </section>
 </div>
 

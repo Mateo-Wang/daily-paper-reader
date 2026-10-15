@@ -1,0 +1,1625 @@
+Under review as a conference paper at ICLR 2027
+BRIDGEGUARD:
+EXPLICIT
+SAFETY
+DRIFT
+FOR
+DIFFUSION-BASED AUTONOMOUS DRIVING
+Zhenjun Qiu1,2∗, Jianing Huang1, Dongang Liu2, Baiyu Du2, Yixun Niu2,
+Hao Yang1, Xinyu Huang1, Chuan Hu2†, Shu Liu1†
+1Bosch Research
+2Shanghai Jiao Tong University
+ABSTRACT
+Diffusion-based driving planners capture diverse behaviors but can generate unsafe
+trajectories under distribution shift. We propose BridgeGuard, a safety-constrained
+diffusion planning method that progressively strengthens a constraint term during
+denoising to drive intermediate trajectories toward a scene-dependent safety do-
+main. Corrections operate in a low-dimensional curve space, promoting geometric
+coherence. A learned module, DistanceFieldNet, predicts a time-dependent dis-
+tance field from bird’s-eye-view features. Value and spatial-gradient supervision
+at queries sampled beyond expert trajectories teaches this field about both safe
+and unsafe regions. The learned field supplies the constraint term through safety
+injection while the pretrained perception backbone and planner remain frozen. We
+further establish sufficient conditions for terminal safety in an idealized continuous-
+time bridge. On Bench2Drive, BridgeGuard improves driving score/success rate
+from 87.99/74.99% to 90.88/76.36% for BridgeDrive and from 80.79/58.18% to
+90.46/74.09% for DiffusionDrivegeo, demonstrating cross-model generalization.
+1
+INTRODUCTION
+Motion planning converts scene observations and route intent into safe, comfortable, and dynam-
+ically feasible trajectories. Classical planners use search, sampling, or optimization with explicit
+constraints (Paden et al., 2016; Schwarting et al., 2018), while learning-based systems learn from
+demonstrations (Bansal et al., 2018; Hu et al., 2023). Diffusion and flow models support multimodal
+planning through conditional generation (Ho et al., 2020; Lipman et al., 2023). DiffusionDrive
+denoises multimodal trajectory anchors (Liao et al., 2025), while BridgeDrive refines anchors through
+diffusion bridges with efficient probability-flow ODE solvers (Liu et al., 2026b; Zhou et al., 2024).
+Learning expert behavior does not ensure safety under limited data coverage or distribution shift.
+Existing strategies include cost-gradient guidance during denoising (Jiang et al., 2023; Zhong et al.,
+2023), reward-based search in Diffusion-ES (Yang et al., 2024), risk-based candidate ranking in
+SafeDrive (Kim et al., 2026), and flow-based planning with control barrier functions (SafeFlow) (Yang
+et al., 2026) or learned energies and physical constraints (GuideFlow) (Liu et al., 2026a). However,
+candidate selection depends on proposal coverage, cost guidance on informative gradients along the
+sampling path, and barrier constraints on accurate scene geometry.
+Manually Bridged Models (MBM) (Naderiparizi et al., 2025) add the time-weighted negative gradient
+of a constraint distance to the diffusion score. This distance is zero on a feasible set Ωand positive
+outside it. Directly applying MBM to driving poses two challenges: the collision-free set depends on
+the scene and prediction horizon, requiring future obstacle geometry, and direct waypoint corrections
+can distort trajectory geometry.
+We propose BridgeGuard, which adapts MBM through a learned distance field and low-dimensional
+curve corrections. DistanceFieldNet predicts a scene- and horizon-dependent field from bird’s-eye-
+view (BEV) features, with value and spatial-gradient supervision covering safe and unsafe regions
+beyond expert paths. Its gradients refine curves during denoising to promote geometric coherence,
+∗Work done during internship at Bosch.
+†Corresponding authors: Chuan Hu (chuan.hu@sjtu.edu.cn) and
+Shu Liu (shu.liu2@cn.bosch.com).
+1
+arXiv:2610.11483v1  [cs.AI]  8 Oct 2026
+
+
+Under review as a conference paper at ICLR 2027
+Figure 1: BridgeGuard safety correction. A learned distance field guides curve refinement during
+denoising, promoting geometric coherence. Terminal safety is guaranteed only for the idealized
+continuous-time bridge under the stated assumptions.
+while the pretrained backbone and planner remain frozen. Our terminal-safety guarantee concerns
+an idealized continuous-time bridge and does not directly extend to the learned field and discretized
+corrections.
+Our contributions are threefold:
+• We adapt Manually Bridged Model to autonomous driving using a distance function encoding
+dynamic obstacle constraints and establish sufficient conditions for terminal safety in an
+idealized continuous-time bridge.
+• We introduce DistanceFieldNet with value and spatial-gradient supervision beyond ex-
+pert paths, and inject its learned constraint corrections into a frozen planner through low-
+dimensional curve updates.
+• On the Bench2Drive (Jia et al., 2024) closed-loop benchmark, BridgeGuard improves
+BridgeDrive’s driving score from 87.99 to 90.88 and success rate from 74.99% to 76.36%. It
+also improves DiffusionDrivegeo’s driving score from 80.79 to 90.46 and success rate from
+58.18% to 74.09%, demonstrating cross-model generalization.
+2
+PRELIMINARIES
+2.1
+DIFFUSION MODELS IN TRAJECTORY PLANNING
+Diffusion models. Diffusion models generate samples by integrating the reverse-time SDE from T
+to 0 (Zhou et al., 2024):
+dxt =
+
+f(xt, t) −g2(t)s(xt, t)
+
+dt + g(t)d ¯wt,
+(1)
+where f and g are the forward drift and diffusion coefficients, s(xt, t) = ∇xt log qt(xt) is the score
+of the forward marginal, and ¯wt is a reverse-time Wiener process. For the Gaussian perturbation
+kernel qt(xt | x0) = N(λtx0, σ2
+t I), the endpoint prediction ˆx0|t = xθ(xt, t) induces the score
+ˆst = λtˆx0|t −xt
+σ2
+t
+.
+(2)
+Diffusion bridges condition on an endpoint xT , allowing initialization from structured priors. For the
+Gaussian bridge kernel qt(xt | x0, xT ) = N(atxT + btx0, c2
+tI), the endpoint prediction similarly
+induces ˆst = (atxT + btˆx0|t −xt)/c2
+t, where xT is the fixed terminal endpoint and at, bt, ct are the
+2
+
+
+Under review as a conference paper at ICLR 2027
+bridge-scheduler coefficients (Zheng et al., 2025). Appendix B gives the forward dynamics, training
+objectives, and reverse SDE/ODE formulations.
+Diffusion models for planning. Given scene context z, the planner predicts H planar waypoints
+x0 ∈R2H using temporal or geometric sampling. Anchors Y = {ym}M
+m=1 ⊂R2H represent different
+trajectory modes. DiffusionDrive (Liao et al., 2025) initializes noisy candidates around multiple
+anchors, then refines and ranks them with a short, truncated denoising process. BridgeDrive (Liu et al.,
+2026b) uses a mode classifier hϕ to select an anchor as xT and refines it through a diffusion bridge.
+BridgeDrive and DiffusionDrivegeo output (xgeo, v): geometric waypoints and a separate target speed;
+only the waypoints undergo diffusion. Our correction retains each planner’s waypoint representation
+and any separately predicted speed, evaluating safety at physical horizons τ (Section 3.1).
+2.2
+CONSTRAINED DIFFUSION AND MANUALLY BRIDGED MODELS
+Ω-Bridge.
+For a constraint set Ω⊆Rd and reverse drift ν(xt, t) = f(xt, t) −g2(t)s(xt, t), a
+vector field BΩis an Ω-bridge (Liu et al., 2023) if the modified reverse process
+dxt =
+
+ν(xt, t) −g2(t)BΩ(xt, t)
+
+dt + g(t)d ¯wt
+(3)
+satisfies P(x0 ∈Ω) = 1.
+Manually bridged models.
+Manually Bridged Models (Naderiparizi et al., 2025) use an Ω-distance:
+a nonnegative, continuous function ℓΩwith finite gradients almost everywhere, satisfying
+ℓΩ(x) = 0
+⇐⇒
+x ∈Ω.
+(4)
+For a schedule γ ∈C1((0, T], R>0) satisfying
+γ(T) ≈0,
+lim
+t↓0 γ(t) = +∞,
+(5)
+the manual bridge and the resulting score are
+bΩ(xt, t) = −γ(t)∇xtℓΩ(xt),
+sΩ(xt, t) = s(xt, t) + bΩ(xt, t).
+(6)
+This is the score of the tilted density qΩ
+t (x) ∝qt(x) exp[−γ(t)ℓΩ(x)], which downweights constraint
+violations. The construction alone does not establish an Ω-bridge; sufficient conditions (Wu et al.,
+2022) are given in Appendix I.1. Nonnegative component distances can be summed to obtain a
+manual bridge for a nonempty intersection of constraint sets.
+3
+METHOD
+We augment a pretrained diffusion-bridge planner with a scene-dependent safety field. The field
+represents obstacle-avoidance constraints and supplies spatial gradients for refining the planner’s
+intermediate predictions. We first define the safety domain and its violation loss, then describe safety
+injection through curve-space correction and trajectory-sampled field supervision. Finally, we present
+the architecture that learns the field from sensor features and couples it to the frozen planner.
+3.1
+SAFETY DOMAIN AND DISTANCE FUNCTION
+Spatial and temporal representation.
+Let z denote the observed driving scene and x ∈R2H the
+planner’s waypoint sequence, which may use temporal or geometric sampling. The diffusion state xt
+uses the same representation. For safety evaluation, we map x to positions at K physical prediction
+horizons τ = (τ1, . . . , τK):
+P = Eτ(x) = (p1, . . . , pK) ∈R2K,
+pi = Eτi(x).
+(7)
+For temporal waypoints already indexed by τ, Eτ is the identity; otherwise it evaluates the trajectory at
+the query horizons. For geometric plans (xgeo, v), it extrapolates temporal positions along xgeo using
+the separately predicted target speed v. Such auxiliary predictions are held fixed and suppressed in
+the arguments of E. The safety domain and distance function are defined in the space of time-indexed
+positions P. The diffusion model predicts waypoints in the base planner’s original representation.
+Safety correction updates the parameters of a curve fitted to these waypoints, then resamples the
+corrected curve into the same waypoint representation. Physical horizons are measured from the
+current observation and remain fixed during correction. They are distinct from diffusion time t, which
+decreases from T to 0.
+3
+
+
+Under review as a conference paper at ICLR 2027
+Dynamic obstacle geometry.
+For obstacle j, let cj(τ) and ψj(τ) denote its center and heading at
+horizon τ, and let aj, bj > 0 be its half-length and half-width. During training, these quantities are
+obtained from obstacle-box and motion annotations, with short-horizon kinematic extrapolation used
+to construct the queried future geometry prediction. Thus, an ego query and an obstacle are compared
+at the same time horizon. In the obstacle’s local frame, define
+˜px
+j
+˜py
+j
+
+=
+
+cos ψj(τ)
+sin ψj(τ)
+−sin ψj(τ)
+cos ψj(τ)
+  p −cj(τ)
+
+,
+Γj(p, τ) =
+ ˜px
+j
+aj
+8
++
+ 
+˜py
+j
+bj
+!8
+−1.
+(8)
+The eighth-order super-ellipse approximates an oriented obstacle footprint. The resulting safety
+domain in temporal-waypoint space is
+Ω(z; τ) =
+
+P ∈R2K  Γj(pi, τi) ≥0,
+∀i = 1, . . . , K,
+∀j = 1, . . . , J
+	
+.
+(9)
+Here J is the number of surrounding obstacles. A plan x satisfies these sampled safety constraints
+when Eτ(x) ∈Ω(z; τ).
+Distance function.
+We assign each temporal query (pi, τi) a per-obstacle pointwise distance
+function
+ℓΩ
+j (pi, τi; z) = [arctan(−Γj(pi, τi))]+ ,
+[u]+ = max(u, 0).
+(10)
+This bounded value is positive inside the obstacle region and exactly zero on its boundary and exterior.
+It is continuous and differentiable almost everywhere with finite gradients. It is an Ω-distance in the
+sense of Eq. (4).
+To aggregate obstacles, let K(p, τ; z) contain the indices of the min(κ, J) largest per-obstacle values,
+with κ ≥1. For a fixed query (pi, τi), we define the pointwise distance dΩ(pi, τi; z) by summing
+the per-obstacle distances over the retained obstacles K(pi, τi; z). The trajectory-level distance then
+sums these pointwise distances over all query points:
+ℓΩ(P; z, τ) =
+K
+X
+i=1
+dΩ(pi, τi; z) =
+K
+X
+i=1
+X
+j∈K(pi,τi;z)
+ℓΩ
+j (pi, τi; z).
+(11)
+An empty obstacle set contributes zero. Because all components are nonnegative and the largest is
+always retained, the top-κ reduction preserves the zero set of the full sum:
+ℓΩ(P; z, τ) = 0
+⇐⇒
+P ∈Ω(z; τ).
+(12)
+For a planner output x, the corresponding distance function is therefore ℓΩ(Eτ(x); z, τ). The
+aggregation is continuous and differentiable almost everywhere; ranking switches introduce additional
+nondifferentiable points. Its negative spatial gradient supplies a local direction for reducing the
+distance function.
+3.2
+THEORETICAL ANALYSIS
+We analyze terminal safety for the idealized continuous-time manual bridge acting directly in the full
+temporal-waypoint space, with Xt ∈R2K and safety set Ω(z; τ). The resulting guarantee applies
+to this idealized process and does not directly extend to the approximate curve-space correction
+introduced in Section 3.3. The following result summarizes Corollary 1; the full assumptions and
+proof are provided in Appendix I.
+Sufficient condition for terminal safety. Consider the manually bridged reverse SDE in Eq. (40). If the
+distance function satisfies the expected Polyak–Łojasiewicz condition in Eq. (44) and Assumptions A1–A5
+in Eqs. (46)–(50) of Appendix I.2 hold, then the manual bridge term bΩis an Ω-bridge, and
+P(X0 ∈Ω) = 1.
+Thus, the terminal generated trajectory belongs to the prescribed safe set almost surely, as stated in Eq. (61).
+The key requirements are expected gradient dominance (Condition 1, Eq. (44)), linking distance
+function to gradient strength, and terminal domination (A3 and A4, Eqs. (48) and (49)), ensuring
+schedule strength dominates the drift and diffusion contributions.
+4
+
+
+Under review as a conference paper at ICLR 2027
+3.3
+SAFETY INJECTION
+The goal of safety injection is to refine the planner’s waypoints x so that Eτ(x) lies in Ω(z; τ). We
+learn a distance field DΩ
+ψ(p, τ; z) over spatial positions and prediction horizons. At inference, we
+refine the predicted trajectory in a low-dimensional curve space using field values at temporal query
+waypoints. During training, temporal queries from multiple driving modes teach the field where
+correction is needed, including locations absent from the scene’s expert trajectory. Detailed training
+and inference procedures are described in 3.4.
+Correction in a parameterized curve space.
+Direct waypoint corrections can distort path geometry.
+We therefore fit each denoised waypoint sequence ˆx0|t ∈R2H with parameters η = Fit(ˆx0|t) ∈Rdη,
+where dη ≪2H. Let F(η) resample the curve into the base planner’s waypoint representation,
+following its spatial sampling or temporal indexing. The learned distance is evaluated at the corre-
+sponding physical query horizons:
+bℓΩ
+ψ(η; z, τ) =
+K
+X
+i=1
+DΩ
+ψ(Eτi(F(η)), τi; z) .
+(13)
+We differentiate through E and F, holding the query horizons, sampling convention, and any auxiliary
+predictions fixed. After updating η, the corrected endpoint is ˆxΩ
+0|t = F(ηΩ). Thus, safety is evaluated
+in temporal-waypoint space, while correction acts on the curve parameters. Please see more details
+on inference process in 3.4. The induced waypoint correction is restricted to directions expressible by
+the chosen curve family; its first-order form is derived in Appendix D.
+Supervision beyond the expert path.
+The learned distance function DΩ
+ψ(p, τ; z) must provide
+useful values and gradients wherever the planner may query it, whereas expert waypoints cover only a
+narrow and typically safe part of this domain. We thus leverage additional sources, such as trajectories
+sampled from a pretrained planner or trajectory anchors, including the clustered anchors used for
+training 2. For each training scene z, we map sampled plans through Eτ and sample the resulting
+temporal waypoint–horizon pairs (pi, τi). We denote this distribution of sampled points and time
+horizon as (p, τ) ∼Q(z). These queries cover both safe and dangerous regions (Luo et al., 2026;
+Bansal et al., 2018) without requiring additional expert demonstrations. The sampling configuration
+is given in Section 4. Quantitative improvements are reported in Sec. 4.2.
+Figure 2: DistanceFieldNet training queries. Expert-only sampling (left) covers a narrow, typically
+safe region. Anchor-based sampling (right) broadens coverage to safe (green) and violating (red)
+queries beyond the expert path.
+3.4
+TRAINING OBJECTIVE AND INFERENCE
+Training objective.
+We train the distance function with the following value and gradient (Li et al.,
+2023; Peng et al., 2022; Rakib and Bagavathi, 2025) supervision from distance function
+LD = Ez,(p,τ)∼Q(z)
+hDΩ
+ψ(p, τ; z) −dΩ(p, τ; z)
+2i
+,
+(14)
+LGD = Ez,(p,τ)∼Q(z)
+h∇pDΩ
+ψ(p, τ; z) −∇pdΩ(p, τ; z)
+2
+2
+i
+.
+(15)
+At nondifferentiable target locations, a consistent subgradient convention is used. The two supervision
+terms give the overall training loss
+L = LD + λgdLGD.
+(16)
+5
+
+
+Under review as a conference paper at ICLR 2027
+Algorithm 1 Diffusion Planning with Learned Safety Injection (on BridgeDrive)
+Input: Scene z, anchors Y = {ym}, pretrained planner (hϕ, xθ), separately predicted speed v, trained
+DistanceFieldNet DΩ
+ψ, horizons τ, reverse times T = tN > · · · > t0 = 0
+Output: Refined geometric path x0 with unchanged target speed v
+1: m⋆←arg maxm hϕ(ym, z); xtN ←xT ←ym⋆
+2: for each reverse step t = tn →t′ = tn−1, n = N, . . . , 1 do
+3:
+ˆx0|t ←xθ(xt, t, xT , z)
+▷Predict the clean path
+4:
+η ←Fit(ˆx0|t)
+▷Project the path into curve space
+5:
+Evaluate ∇ηbℓΩ
+ψ using Eτ ◦F in Eq. (13)
+▷Compute the safety direction
+6:
+Update ηΩby Eq. (18) with α(t) = (c2
+t/bt)γε(t)
+▷Correct the curve coefficients
+7:
+ˆxΩ
+0|t ←F(ηΩ)
+▷Recover refined waypoints
+8:
+xt′ ←ODESolverStep(xt, ˆxΩ
+0|t, xT , t, t′)
+▷Advance the reverse ODE
+9: end for
+10: return (x0, v)
+During training, only parameters ψ are optimized; the original perception backbone and diffusion
+planner remain frozen.
+Inference.
+DistanceFieldNet predicts the field from observed BEV features and spatial–temporal
+queries. We use a finite, stabilized score-level schedule γε(t) that is small near T and increases
+toward t = 0. At fixed xt and z, Eq. (2) gives
+ˆxΩ
+0|t = ˆx0|t + σ2
+t
+λt
+∆st,
+∆st = ˆsΩ
+t −ˆst.
+(17)
+At each reverse step, we fit η = Fit(ˆx0|t) and apply
+ηΩ= η −α(t)Wη∇ηbℓΩ
+ψ(η; z, τ),
+α(t) = σ2
+t
+λt
+γε(t).
+(18)
+Here Wη is positive diagonal and sets the relative parameter scales. Query horizons and auxiliary
+predictions remain fixed, while positions are recomputed through Eτ ◦F. For Gaussian diffusion
+bridges, α(t) = (c2
+t/bt)γε(t). The effective step is the full product α(t); conversion ratios are
+evaluated at nonsingular interior times, with endpoint limits handled by the base scheduler.
+We resample ˆxΩ
+0|t = F(ηΩ) and use its induced score in the base reverse SDE or probability-flow
+ODE. For diffusion bridges, we keep xT fixed and retain the base solver’s anchor-conditioning drift.
+Algorithm 1 summarizes the procedure; Appendix C derives the score–endpoint conversion.
+Scope of the bridge interpretation.
+Equation (17) is exact, but curve fitting, resampling, and
+restricted gradients (Eq. (38)) approximate full-state manual-bridge dynamics. The idealized guaran-
+tee in Appendix I does not directly extend to learned fields, finite schedules, or discretized updates.
+The curve representation promotes geometric coherence without certifying kinematic feasibility or
+collision freedom.
+3.5
+MODEL ARCHITECTURE
+Perception and base planner.
+The system comprises a perception backbone, an anchor-based
+diffusion planner, and the learned distance-field module, DistanceFieldNet. Our BridgeDrive im-
+plementation retains the pretrained TransFuser++ perception backbone (Jaeger et al., 2023). Its
+pretraining includes predicting other agents’ velocities, so its BEV features encode motion informa-
+tion for DistanceFieldNet. The correction can also be coupled to DiffusionDrivegeo, the geometric
+adaptation of DiffusionDrive described in the BridgeDrive paper (Liao et al., 2025; Liu et al., 2026b).
+The backbone and selected planner remain frozen. Sensor observations are encoded into FBEV(z),
+which is shared by the planner and DistanceFieldNet. We retain each planner’s denoising and
+trajectory-selection procedure, while DistanceFieldNet supplies the safety objective for refining its
+clean waypoint predictions at each reverse step.
+6
+
+
+Under review as a conference paper at ICLR 2027
+Figure 3: BridgeGuard inference. Green components denote BridgeGuard additions. At each
+denoising step, DistanceFieldNet supplies gradients for curve correction; resampled waypoints are
+returned to the frozen planner’s solver.
+Query-conditioned DistanceFieldNet.
+DistanceFieldNet takes a waypoint sequence P
+=
+(p1, . . . , pK), the corresponding physical horizons τ = (τ1, . . . , τK), and shared BEV features
+FBEV(z) as input. A shared convolutional stem encodes the BEV features as F0 = Convψ(FBEV).
+We describe the per-waypoint computation for one query pair (p, τ), omitting the waypoint index
+below. Sinusoidal positional features (Vaswani et al., 2017) and MLPs embed the BEV-normalized
+coordinate ¯p and horizon τ as ep and eτ. The spatial query embedding cross-attends to position-
+encoded BEV tokens ZBEV, yielding a context h that generates spatial FiLM (Perez et al., 2018)
+parameters. Spatial FiLM modulates F0 into Fp, and temporal FiLM driven by eτ further produces
+Fτ,p. A query-specific gate filters the conditioned features as Fg = Fτ,p ⊙G. DistanceFieldHead
+aggregates Fg into a dense response map R, reduces the flattened map to a scalar logit r, and applies a
+bounded monotonic activation. The same network evaluates all K query pairs, and their scalar outputs
+are summed to obtain the trajectory-level safety objective. Backpropagating this sum through the
+waypoint coordinates and trajectory parameterization provides the curve-space correction direction.
+Architecture details are given in Appendix E.
+4
+EXPERIMENTS
+4.1
+CLOSED-LOOP EVALUATION IN CARLA SIMULATOR
+Benchmark
+We evaluate BridgeGuard on Bench2Drive (Jia et al., 2024), a closed-loop benchmark
+in CARLA (Dosovitskiy et al., 2017) built on the CARLA Leaderboard 2.0 protocol. Its 220 routes
+span CARLA towns, each covering approximately 150 m and one safety-critical scenario. This
+setting exposes failures arising from interactions with the environment. Motivated by safety failures
+observed in our reproductions of leading end-to-end and vision-language-action (VLA) planners (Liu
+et al., 2026b; Jaeger et al., 2023; Fu et al., 2025; Renz et al., 2025), we compare their performance
+with BridgeGuard on these challenging scenarios.
+Dataset
+Following BridgeDrive (Liu et al., 2026b), we use the publicly released CARLA Garage
+training dataset (Zimmerlin et al., 2024).
+The data were generated using the PDM-Lite ex-
+pert (Beißwenger, 2024; Sima et al., 2024) and include camera images, LiDAR observations, and
+expert driving annotations. Table 1 also includes baselines trained on the official Bench2Drive dataset,
+generated using the Think2Drive expert (Li et al., 2024).
+Baselines
+We compare BridgeGuard with ten end-to-end driving baseline configurations in Table 1.
+DriveTransformer (Jia et al., 2025), TransFuser++ (Zimmerlin et al., 2024), and SparseDriveV2 (Sun
+et al., 2026) provide non-VLA, non-diffusion reference points; ORION (Fu et al., 2025), Mind-
+Drive (Fu et al., 2026), and SimLingo (Renz et al., 2025) represent VLA-based planners; Diffusion-
+Drive (Liao et al., 2025) and BridgeDrive (Liu et al., 2026b) represent diffusion-based planners;
+and AutoMoT (Huang et al., 2026) combines VLA and diffusion-based planning. We report both
+DiffusionDrive adaptations from BridgeDrive (Liu et al., 2026b): DiffusionDrivetemp retains the
+original temporal waypoint representation, while DiffusionDrivegeo predicts geometric waypoints
+7
+
+
+Under review as a conference paper at ICLR 2027
+and a separate target speed. Our DiffusionDrive-based results use the geometric variant. The table
+also identifies the data-collection expert for each method.
+Implementation Details
+We freeze the pretrained perception backbone and diffusion planner
+and train only DistanceFieldNet. For each training scene, we sample 20 query points from two
+anchors and supervise field values and spatial gradients using annotated obstacle geometry. Safety is
+evaluated over a 0.5 s horizon. We fit planar paths with y(x) = η1x + η2x2 + η4x4, where x and
+y denote forward and lateral ego-frame coordinates. This quartic family has three free coefficients,
+with constant and cubic terms fixed at zero. Correction updates these coefficients while keeping
+the target speed fixed. At inference, DistanceFieldNet uses observed BEV features and waypoint–
+horizon queries, without explicit obstacle dimensions or ground-truth geometry. Detailed network,
+supervision, curve-refinement, training, and sensor settings are given in Appendix F.
+Table 1: Comparison of different methods on Bench2Drive.
+Method
+Expert
+VLA
+Diffusion
+DS
+SR(%)
+DriveTransformer (Jia et al., 2025)
+Think2Drive
+✘
+✘
+63.46
+35.01
+ORION (Fu et al., 2025)
+Think2Drive
+✘
+77.74
+54.62
+MindDrive (Fu et al., 2026)
+Think2Drive
+✘
+80.59
+58.26
+TransFuser++ (Zimmerlin et al., 2024)
+PDM-Lite
+✘
+✘
+84.21
+67.27
+SimLingo (Renz et al., 2025)
+PDM-Lite
+✘
+85.07
+67.27
+AutoMoT (Huang et al., 2026)
+PDM-Lite
+89.42
+74.09
+SparseDriveV2 (Sun et al., 2026)
+PDM-Lite
+✘
+✘
+89.15
+70.00
+DiffusionDrivetemp (Liu et al., 2026b)
+PDM-Lite
+✘
+77.68
+52.72
+DiffusionDrivegeo (Liu et al., 2026b)
+PDM-Lite
+✘
+80.79
+58.18
+BridgeDrive (Liu et al., 2026b)
+PDM-Lite
+✘
+87.99
+74.99
+Ours (based on DiffusionDrivegeo)
+PDM-Lite
+✘
+90.46(+9.67)
+74.09(+15.91)
+Ours (based on BridgeDrive)
+PDM-Lite
+✘
+90.88(+2.89)
+76.36(+1.37)
+Main results
+Table 1 shows that BridgeGuard on BridgeDrive achieves the highest Driving Score
+(DS, 90.88) and Success Rate (SR, 76.36%) among the compared methods, outperforming VLA
+baselines with a much smaller model. BridgeGuard improves DS by 2.89 and SR by 1.37% over
+BridgeDrive, 9.67 and 15.91% over DiffusionDrivegeo. These gains support its effectiveness across
+both diffusion planners. The larger improvements on DiffusionDrivegeo may reflect its higher baseline
+collision rate, which leaves more room for safety correction. When trained on LEAD, BridgeGuard
+reaches 96.76 DS and 89.78% SR, outperforming the compared baselines (Appendix G.2).
+4.2
+ABLATION STUDY AND QUALITATIVE ANALYSIS
+Curve dimensionality.
+The quadratic ablation fixes η4 = 0, leaving the two coefficients of
+y(s) = η1s + η2s2. Allowing the third coefficient η4 gives our quartic curve and improves DS from
+88.65 to 90.88 and SR from 73.18% to 76.36% (Table 2). Mean ability also rises from 64.77% to
+69.74%, despite a small decline in merging performance (75.00% to 73.75%). These results favor the
+richer curve representation for safety correction; full results are in Appendix G.1.
+Training-query sampling.
+Anchor-based queries outperform expert-only queries at the same ten-
+point budget (Table 3). Sampling 20 points from two anchors yields the best mean DS (90.96) and SR
+(75.23%), while increasing to 100 points from ten anchors provides no further improvement. These
+results support supervising the distance field beyond expert trajectories with a moderate query budget.
+Advantages over BridgeDrive
+Figures 4 and 5 show traffic conflicts that BridgeDrive fails to
+resolve during an unprotected left turn and a multi-lane change on Bench2Drive. BridgeGuard instead
+yields and completes both maneuvers safely. These cases illustrate how our safety drift term corrects
+potentially dangerous trajectories, pulling the ego vehicle away from imminent conflicts and back
+into the safe region in an explicit manner. We refer readers to the supplementary videos described in
+Appendix H for comparisons of BridgeDrive and BridgeGuard in two lane-changing cases and one
+unprotected left-turn case.
+8
+
+
+Under review as a conference paper at ICLR 2027
+Table 2: Curve dimensionality.
+Metric
+Quadratic
+Quartic
+DS
+88.65
+90.88
+SR (%)
+73.18
+76.36
+Merging (%)
+75.00
+73.75
+Mean ability (%)
+64.77
+69.74
+Table 3: Training-query sampling.
+Queries Source
+DS
+SR (%)
+10 Expert
+89.17 ± 0.68
+70.23 ± 2.25
+10 1 anchor
+89.67 ± 0.23
+72.73 ± 1.93
+20 2 anchors
+90.96 ± 0.34 75.23 ± 0.96
+100 10 anchors
+90.69 ± 0.01
+73.41 ± 0.96
+Figure 4: Unprotected left turn on Bench2Drive. BridgeDrive (blue) collides with an oncoming
+vehicle; BridgeGuard (orange) avoids the collision by bypassing the vehicle. See also Appendix H.
+Figure 5: Multi-lane change on Bench2Drive. BridgeDrive (blue) enters an occupied lane; Bridge-
+Guard (orange) yields to the white vehicle and merges safely. See also Appendix H.
+5
+LIMITATIONS & FUTURE WORK
+BridgeGuard has two main limitations. First, we consider only one distance function, constructed
+from eighth-order superellipses. Although it correctly identifies the prescribed safe set, its gradient
+can be small in the interior of a superellipse, providing a weak correction for waypoints that lie deep
+inside an unsafe region. This behavior may also make the gradient-dominance condition underlying
+the idealized Ω-bridge guarantee more difficult to satisfy. Future work should explore alternative
+smooth distance functions with well-conditioned gradients throughout unsafe regions and characterize
+when they satisfy the sufficient conditions for an Ω-bridge.
+Second, our correction is restricted to a low-dimensional parametric curve space. This promotes
+geometric coherence but limits the available correction directions and may not capture the full
+diversity of drivable, dynamically feasible trajectories. A promising direction is to learn a richer
+drivable trajectory manifold or a constraint-aware trajectory representation that preserves feasibility
+while allowing more flexible safety corrections.
+6
+CONCLUSION
+We introduced BridgeGuard, which combines a learned safety field with low-dimensional curve
+corrections for diffusion-based driving. DistanceFieldNet learns values and spatial gradients beyond
+expert trajectories, drifting denoising while the perception backbone and planner remain frozen. On
+Bench2Drive, BridgeGuard improves DS and SR for both BridgeDrive and DiffusionDrivegeo. Our
+analysis establishes sufficient conditions for terminal safety in an idealized continuous-time bridge;
+these do not directly guarantee safety for the learned field and discretized corrections.
+9
+
+
+Under review as a conference paper at ICLR 2027
+AI USE STATEMENT
+We used ChatGPT and Codex to assist in drafting portions of the manuscript, including some
+mathematical expressions. ChatGPT also helped improve the clarity and readability of the text,
+while Codex assisted with the design of selected modules and the development of scripts. The
+authors manually reviewed all AI-assisted work and checked the correctness of the text, mathematical
+expressions, module designs, and scripts. We take full responsibility for the final content of this work,
+including all text, mathematical claims, code, and results produced with the assistance of these tools.
+REPRODUCIBILITY STATEMENT
+To support reproducibility, Section 3 describes our method, model architecture, and training and
+inference procedures. Section 4 reports the datasets, evaluation protocol, and implementation settings
+used in our experiments. The assumptions and proofs underlying our theoretical analysis are provided
+in Appendix I. We plan to open-source our code and release our trained model to enable independent
+reproduction of the reported results and support further research.
+REFERENCES
+Bansal, M., Krizhevsky, A., and Ogale, A. S. (2018). Chauffeurnet: Learning to drive by imitating
+the best and synthesizing the worst. ArXiv, abs/1812.03079.
+Beißwenger,
+J.
+(2024).
+PDM-Lite:
+A
+rule-based
+planner
+for
+carla
+leaderboard
+2.0.
+https://github.com/OpenDriveLab/DriveLM/blob/DriveLM-CARLA/
+docs/report.pdf.
+Dhariwal, P. and Nichol, A. Q. (2021). Diffusion models beat GANs on image synthesis. In Beygelz-
+imer, A., Dauphin, Y., Liang, P., and Vaughan, J. W., editors, Advances in Neural Information
+Processing Systems.
+Doob, J. L. et al. (1984). Classical potential theory and its probabilistic counterpart, volume 19.
+Springer.
+Dosovitskiy, A., Ros, G., Codevilla, F., Lopez, A., and Koltun, V. (2017). CARLA: An open urban
+driving simulator. In Proceedings of the 1st Annual Conference on Robot Learning, pages 1–16.
+Fu, H., Zhang, D., Zhao, Z., Cui, J., Liang, D., Zhang, C., Zhang, D., Xie, H., Wang, B., and Bai, X.
+(2025). Orion: A holistic end-to-end autonomous driving framework by vision-language instructed
+action generation. In Proceedings of the IEEE/CVF International Conference on Computer Vision.
+Fu, H., Zhang, D., Zhao, Z., Cui, J., Xie, H., Wang, B., Chen, G., Liang, D., and Bai, X. (2026).
+Minddrive: A vision-language-action model for autonomous driving via online reinforcement
+learning. In Proceedings of the European Conference on Computer Vision.
+Ho, J., Jain, A. N., and Abbeel, P. (2020). Denoising diffusion probabilistic models. In Advances in
+Neural Information Processing Systems, volume 33, pages 6840–6851.
+Ho, J. and Salimans, T. (2021). Classifier-free diffusion guidance. In NeurIPS 2021 Workshop on
+Deep Generative Models and Downstream Applications.
+Hu, Y., Yang, J., Chen, L., Li, K., Sima, C., Zhu, X., Chai, S., Du, S., Lin, T., Wang, W., Lu, L.,
+Jia, X., Liu, Q., Dai, J., Qiao, Y., and Li, H. (2023).
+Planning-oriented Autonomous Driving
+. In 2023 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages
+17853–17862, Los Alamitos, CA, USA. IEEE Computer Society.
+Huang, W., Zhang, S., Huang, Q., Wang, Z., Mao, Z., Chua, C., Chen, Z., Chen, L., and Lv, C. (2026).
+Automot: A unified vision-language-action model with asynchronous mixture -of-transformers for
+end-to-end autonomous driving. In Forty-third International Conference on Machine Learning.
+Jaeger, B., Chitta, K., and Geiger, A. (2023). Hidden biases of end-to-end driving models. In Proc.
+of the IEEE International Conf. on Computer Vision (ICCV), pages 8240–8249.
+10
+
+
+Under review as a conference paper at ICLR 2027
+Jia, X., Yang, Z., Li, Q., Zhang, Z., and Yan, J. (2024). Bench2drive: Towards multi-ability
+benchmarking of closed-loop end-to-end autonomous driving. In NeurIPS 2024 Datasets and
+Benchmarks Track.
+Jia, X., You, J., Zhang, Z., and Yan, J. (2025). Drivetransformer: Unified transformer for scalable
+end-to-end autonomous driving. In International Conference on Learning Representations (ICLR).
+Jiang, C., Cornman, A., Park, C., Sapp, B., Zhou, Y., and Anguelov, D. (2023). MotionDiffuser:
+Controllable multi-agent motion prediction using diffusion. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, pages 9644–9653.
+Kim, J., Oh, J., Yu, S., Shin, H., Kwak, D., and Choi, J. W. (2026). Safedrive: Fine-grained safety
+reasoning for end-to-end driving in a sparse world. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition.
+Li, H., Li, X., Hu, P., Lei, Y., Li, C.-X., and Zhou, Y. (2023).
+Boosting multi-modal model
+performance with adaptive gradient modulation. 2023 IEEE/CVF International Conference on
+Computer Vision (ICCV), pages 22157–22167.
+Li, Q., Jia, X., Wang, S., and Yan, J. (2024). Think2drive: Efficient reinforcement learning by
+thinking in latent world model for quasi-realistic autonomous driving (in carla-v2).
+Liao, B., Chen, S., Yin, H., Jiang, B., Wang, C., Yan, S., Zhang, X., Li, X., Zhang, Y., Zhang, Q., and
+Wang, X. (2025). DiffusionDrive: Truncated diffusion model for end-to-end autonomous driving.
+In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages
+12037–12047.
+Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., and Le, M. (2023). Flow matching for
+generative modeling. In International Conference on Learning Representations.
+Liu, L., Jia, C., Yu, G., Song, Z., Li, J., Jia, F., Wu, P., Hao, X., and Luo, Y. (2026a). GuideFlow:
+Constraint-guided flow matching for planning in end-to-end autonomous driving. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 3719–3728.
+Liu, S., Chen, W., Li, W., Wang, Z., Yang, L., Huang, J., YipinZhang, Huang, Z., Cheng, Z., and
+Yang, H. (2026b). Bridgedrive: Diffusion bridge policy for closed-loop trajectory planning in
+autonomous driving. In The Fourteenth International Conference on Learning Representations.
+Liu, X., Wu, L., Ye, M., and qiang liu (2023). Learning diffusion bridges on constrained domains. In
+The Eleventh International Conference on Learning Representations.
+Luo, Y., Chen, Q., Li, F., Xu, S., Liu, J., Song, Z., xin Yang, Z., and Wen, F. (2026). Unleashing vla
+potentials in autonomous driving via explicit learning from failures.
+Naderiparizi, S., Liang, X., Zwartsenberg, B., and Wood, F. (2025). Constrained generative modeling
+with manually bridged diffusion models. Proceedings of the AAAI Conference on Artificial
+Intelligence, 39(18):19607–19615.
+Nguyen, L., Fauth, M., Jaeger, B., Dauner, D., Igl, M., Geiger, A., and Chitta, K. (2026). Lead:
+Minimizing learner-expert asymmetry in end-to-end driving. In Conference on Computer Vision
+and Pattern Recognition (CVPR).
+Paden, B., ˇCáp, M., Yong, S. Z., Yershov, D., and Frazzoli, E. (2016). A survey of motion planning
+and control techniques for self-driving urban vehicles. IEEE Transactions on Intelligent Vehicles,
+1(1):33–55.
+Peng, X., Wei, Y., Deng, A., Wang, D., and Hu, D. (2022). Balanced multimodal learning via
+on-the-fly gradient modulation. In 2022 IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 8228–8237.
+Perez, E., Strub, F., de Vries, H., Dumoulin, V., and Courville, A. C. (2018). Film: Visual reasoning
+with a general conditioning layer. In AAAI.
+11
+
+
+Under review as a conference paper at ICLR 2027
+Rakib, M. and Bagavathi, A. (2025). G2d: Boosting multimodal learning with gradient-guided
+distillation.
+Renz, K., Chen, L., Arani, E., and Sinavski, O. (2025). Simlingo: Vision-only closed-loop au-
+tonomous driving with language-action alignment. In Conference on Computer Vision and Pattern
+Recognition (CVPR).
+Schwarting, W., Alonso-Mora, J., and Rus, D. (2018). Planning and decision-making for autonomous
+vehicles. Annual Review of Control, Robotics, and Autonomous Systems, 1:187–210.
+Sima, C., Renz, K., Chitta, K., Chen, L., Zhang, H., Xie, C., Beißwenger, J., Luo, P., Geiger, A., and
+Li, H. (2024). Drivelm: Driving with graph visual question answering. In Proc. of the European
+Conf. on Computer Vision (ECCV).
+Stratonovich, R. L. (1965). Conditional markov processes. In KUZNETSOV, P., STRATONOVICH,
+R., and TIKHONOV, V., editors, Non-Linear Transformations of Stochastic Processes, pages
+427–453. Pergamon.
+Sun, W., Lin, X., Chen, K., Pei, Z., Li, X., Shi, Y., and Zheng, S. (2026). Sparsedrivev2: Scoring is
+all you need for end-to-end autonomous driving. arXiv preprint arXiv:2603.29163.
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, L. u., and
+Polosukhin, I. (2017). Attention is all you need. In Guyon, I., Luxburg, U. V., Bengio, S., Wallach,
+H., Fergus, R., Vishwanathan, S., and Garnett, R., editors, Advances in Neural Information
+Processing Systems, volume 30. Curran Associates, Inc.
+Wu, L., Gong, C., Liu, X., Ye, M., and Liu, Q. (2022). Diffusion-based molecule generation with
+informative prior bridges. Advances in neural information processing systems, 35:36533–36545.
+Yang, B., Su, H., Gkanatsios, N., Ke, T.-W., Jain, A., Schneider, J., and Fragkiadaki, K. (2024).
+Diffusion-es: Gradient-free planning with diffusion for autonomous and instruction-guided driving.
+In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages
+15342–15353.
+Yang, J., Jang, S., and Han, S. (2026).
+Safeflowmatcher: Safe and fast planning using flow
+matching with control barrier functions. In The Fourteenth International Conference on Learning
+Representations.
+Yin, L., Ju, R., Guo, G., and Cheng, E. (2025). Diffrefiner: Coarse to fine trajectory planning via
+diffusion refinement with semantic interaction for end to end autonomous driving.
+Zheng, K., He, G., Chen, J., Bao, F., and Zhu, J. (2025). Diffusion bridge implicit models.
+Zheng, W., Song, R., Guo, X., Zhang, C., and Chen, L. (2024). Genad: Generative end-to-end
+autonomous driving. arXiv preprint arXiv: 2402.11502.
+Zheng, Y., Tan, T., Huang, B., Liu, E., Liang, R., Zhang, J., Cui, J., Chen, G., Ma, K., Ye, H., Chen,
+L., Zhang, Y.-Q., Zhan, X., and Liu, J. (2026). Unleashing the potential of diffusion models for
+end-to-end autonomous driving. arXiv preprint arXiv:2602.22801.
+Zhong, Z., Rempe, D., Xu, D., Chen, Y., Veer, S., Che, T., Ray, B., and Pavone, M. (2023). Guided
+conditional diffusion for controllable traffic simulation. In 2023 IEEE International Conference
+on Robotics and Automation (ICRA), pages 3560–3566.
+Zhou, L., Lou, A., Khanna, S., and Ermon, S. (2024). Denoising diffusion bridge models. In
+International Conference on Learning Representations.
+Zimmerlin, J., Beißwenger, J., Jaeger, B., Geiger, A., and Chitta, K. (2024). Hidden biases of
+end-to-end driving datasets. arXiv.org, 2412.09602.
+12
+
+
+Under review as a conference paper at ICLR 2027
+A
+RELATED WORK
+A.1
+GENERATIVE MODELS FOR END-TO-END AUTONOMOUS DRIVING
+Classical autonomous-driving planners use search, sampling, or optimization with explicit vehicle
+models and constraints (Paden et al., 2016; Schwarting et al., 2018). Learning-based approaches
+instead derive driving policies from demonstrations; representative systems range from ChauffeurNet,
+which augments imitation with synthesized perturbations (Bansal et al., 2018), to planning-oriented
+end-to-end architectures that jointly optimize perception, prediction, and planning (Hu et al., 2023).
+Although these methods can learn rich scene–action mappings, a single deterministic prediction may
+not represent the multiple plausible behaviors in an interactive scene.
+Generative planners address this ambiguity by modeling a distribution over future trajectories. Diffu-
+sion models (Ho et al., 2020) and flow matching (Lipman et al., 2023) provide general frameworks
+for iterative conditional generation. In end-to-end driving, GenAD learns a latent space of multimodal
+driving behaviors with a variational autoencoder (Zheng et al., 2024), whereas DiffusionDrive per-
+forms efficient truncated denoising from multimodal trajectory anchors (Liao et al., 2025). DiffRefiner
+uses diffusion to refine coarse proposals through fine-grained semantic interaction (Yin et al., 2025).
+BridgeDrive instead casts anchor-to-trajectory refinement as a diffusion bridge, allowing informative
+endpoints and efficient probability-flow ODE sampling (Liu et al., 2026b; Zhou et al., 2024). Recent
+large-scale studies further investigate diffusion-planner scaling and real-world deployment (Zheng
+et al., 2026). BridgeGuard is complementary to these advances: it retains a pretrained diffusion-bridge
+planner and adds an explicit safety-correction mechanism to its reverse process.
+A.2
+SAFETY-GUIDED AND CONSTRAINED TRAJECTORY GENERATION
+Guidance provides a flexible way to control a pretrained diffusion model. Classifier guidance modifies
+the score using gradients from an auxiliary model (Dhariwal and Nichol, 2021), while classifier-free
+guidance combines conditional and unconditional predictions (Ho and Salimans, 2021). In motion
+generation, differentiable objectives have similarly been used to guide denoising toward desired
+behaviors or away from collisions (Jiang et al., 2023; Zhong et al., 2023). Such objectives bias
+the generated distribution, but their effectiveness depends on the quality and scale of the guidance
+gradients; without additional assumptions, they do not by themselves establish terminal constraint
+satisfaction.
+Other approaches incorporate safety through search, ranking, or constrained dynamics. Diffusion-ES
+performs gradient-free reward optimization over diffusion-generated trajectories (Yang et al., 2024),
+while SafeDrive uses trajectory-conditioned safety reasoning to rank candidate plans (Kim et al.,
+2026). Flow-based planners have introduced control barrier functions in SafeFlowMatcher (Yang
+et al., 2026), and GuideFlow combines learned energy guidance with physical constraints (Liu et al.,
+2026a). Candidate-based methods depend on the coverage of their proposals, while barrier-based
+methods require an appropriate barrier and sufficiently accurate state and geometry estimates.
+Constrained-domain diffusion bridges offer a more direct connection between generation and feasible-
+set membership (Wu et al., 2022; Liu et al., 2023). Manually Bridged Models (MBM) define a
+distance function that vanishes on a feasible set Ωand add its time-weighted negative gradient to the
+reverse diffusion dynamics (Naderiparizi et al., 2025). BridgeGuard adapts this idea to autonomous
+driving in two ways: it learns a scene- and horizon-dependent distance field from BEV features,
+and it applies the resulting correction in a low-dimensional curve space to preserve path coherence.
+We additionally give sufficient conditions under which the idealized continuous-time manual bridge
+reaches Ωat the terminal time. This guarantee applies to the idealized full-space process; the learned
+field and discretized curve-space correction remain practical approximations.
+B
+DIFFUSION MODELS AND DIFFUSION BRIDGE MODELS
+This section expands the diffusion-model background in Section 2.1 and makes explicit how an
+ordinary diffusion model extends to a diffusion bridge.
+13
+
+
+Under review as a conference paper at ICLR 2027
+Diffusion models.
+Consider the forward Itô SDE
+dxt = f(xt, t) dt + g(t) dwt,
+(19)
+and let qt denote the marginal density of xt. Its score is s(xt, t) = ∇xt log qt(xt). Starting from
+the terminal distribution qT and evolving from T to 0, the reverse-time SDE and the corresponding
+probability-flow ODE are, respectively,
+dxt =
+
+f(xt, t) −g2(t)s(xt, t)
+
+dt + g(t) d ¯wt,
+(20)
+dxt =
+
+f(xt, t) −1
+2g2(t)s(xt, t)
+
+dt.
+(21)
+The ODE has the same time-indexed marginal densities as the SDE, but defines a deterministic
+transport once its terminal state is fixed.
+The score can be learned without evaluating the generally intractable marginal qt. Given a tractable
+perturbation kernel qt|0(xt | x0), denoising score matching minimizes (Ho et al., 2020; Zhou et al.,
+2024)
+LDSM(θ) = Et,x0,xt
+h
+w(t)
+sθ(xt, t) −∇xt log qt|0(xt | x0)
+2
+2
+i
+,
+(22)
+where t is sampled from (0, T), x0 is a data sample, xt ∼qt|0(· | x0), and w(t) > 0 is a weighting
+function. An equivalent parameterization predicts the clean sample by minimizing
+Lx0(θ) = Et,x0,xt
+h
+w(t) ∥xθ(xt, t) −x0∥2
+2
+i
+.
+(23)
+For the Gaussian kernel qt|0(xt | x0) = N(λtx0, σ2
+t I), a clean-sample prediction ˆx0|t = xθ(xt, t)
+yields the score estimate
+ˆsθ(xt, t) = λtˆx0|t −xt
+σ2
+t
+.
+(24)
+Diffusion bridge models.
+Ordinary diffusion models transport samples between data and a simple
+reference distribution, usually Gaussian noise. In applications where both endpoints carry infor-
+mation, a diffusion bridge instead models paired endpoints (x0, xT ) and interpolates between their
+distributions. Conditioning the reference SDE in Eq. (19) on the terminal event xT = y gives the
+Doob h-transform (Doob et al., 1984; Zhou et al., 2024)
+dxt =
+
+f(xt, t) + g2(t)h(xt, t; y, T)
+
+dt + g(t) dwt,
+h(xt, t; y, T) = ∇xt log qT |t(y | xt),
+(25)
+where qT |t is the transition density of the unconditioned reference process. The additional drift
+attracts the process to y as t →T.
+Let sy(xt, t) = ∇xt log qt(xt | xT = y) denote the score of the bridge marginal. The reverse-time
+SDE and its probability-flow ODE are
+dxt =
+
+f(xt, t) −g2(t) [sy(xt, t) −h(xt, t; y, T)]
+	
+dt + g(t) d ¯wt,
+xT = y,
+(26)
+dxt =
+
+f(xt, t) −g2(t)
+1
+2sy(xt, t) −h(xt, t; y, T)
+
+dt,
+xT = y.
+(27)
+Thus, relative to Eqs. (20) and (21), bridge dynamics retain the terminal endpoint through both the
+conditional score and the h-transform drift. If terminal information is discarded and xT is drawn
+from a fixed noise distribution, the formulation reduces to the ordinary diffusion-model setting.
+Bridge scores can likewise be learned by denoising bridge score matching (Zhou et al., 2024). For a
+tractable bridge kernel qt|0,T (xt | x0, xT ), the objective is
+LBDSM(θ) = Et,x0,xT ,xt
+h
+w(t)
+sθ(xt, t, xT ) −∇xt log qt|0,T (xt | x0, xT )
+2
+2
+i
+.
+(28)
+For the Gaussian bridge kernel used in Section 2.1,
+qt|0,T (xt | x0, xT ) = N(atxT + btx0, c2
+tI),
+∇xt log qt|0,T = atxT + btx0 −xt
+c2
+t
+.
+(29)
+14
+
+
+Under review as a conference paper at ICLR 2027
+Consequently, a bridge model may predict the clean endpoint directly via ˆx0|t = xθ(xt, t, xT ) and
+minimize
+Lbridge(θ) = Et,x0,xT ,xt
+h
+w(t) ∥xθ(xt, t, xT ) −x0∥2
+2
+i
+,
+(30)
+with induced conditional-score estimate
+ˆsθ(xt, t, xT ) = atxT + btˆx0|t −xt
+c2
+t
+.
+(31)
+This endpoint parameterization is the one used by the diffusion-bridge planner and motivates the
+score-to-endpoint conversion derived next.
+C
+DERIVING ENDPOINT CORRECTIONS FROM SCORE CORRECTIONS
+Since the diffusion-bridge planner is parameterized by the clean-endpoint prediction ˆx0|t rather than
+by an explicit score network, we express the score correction as an equivalent endpoint correction.
+We first consider the Gaussian perturbation kernel of a standard diffusion model, qt(xt | x0) =
+N(λtx0, σ2
+t I). Its original and corrected endpoint predictions induce
+ˆst = λtˆx0|t −xt
+σ2
+t
+,
+ˆsΩ
+t =
+λtˆxΩ
+0|t −xt
+σ2
+t
+.
+(32)
+Evaluating both scores at the same xt and subtracting gives
+∆st = ˆsΩ
+t −ˆst = λt
+σ2
+t
+
+ˆxΩ
+0|t −ˆx0|t
+
+,
+ˆxΩ
+0|t = ˆx0|t + σ2
+t
+λt
+∆st,
+(33)
+which is Eq. (17).
+We next consider the Gaussian bridge kernel in Section 2.1, qt(xt | x0, xT ) = N(atxT + btx0, c2
+tI).
+With the anchor xT and scene context z fixed, the corresponding scores are
+ˆst = atxT + btˆx0|t −xt
+c2
+t
+,
+ˆsΩ
+t =
+atxT + btˆxΩ
+0|t −xt
+c2
+t
+.
+(34)
+Subtracting cancels the shared anchor and current-state terms, yielding
+∆st = bt
+c2
+t
+
+ˆxΩ
+0|t −ˆx0|t
+
+,
+ˆxΩ
+0|t = ˆx0|t + c2
+t
+bt
+∆st.
+(35)
+Here ∆st ∈R2H is the score increment in the base planner’s waypoint space, induced by resampling
+the corrected curve. Any separately predicted target speed is absent from the diffusion state and its
+score. The score increment is distinct from the update in curve-parameter space.
+A diffusion bridge differs from a conventional diffusion model because its reverse transition is
+conditioned not only on the current state xt but also on the terminal anchor xT . During one rollout,
+the selected anchor xT and scene context z are fixed conditioning variables. Thus, the reverse
+dynamics can be regarded as a conditional Markov process (Stratonovich, 1965):
+pθ(xt′ | xt, xT , z).
+Under fixed (xT , z), the bridge score depends on the current state xt and diffusion time t. This
+justifies evaluating both the original and corrected scores at the same xt when deriving the endpoint
+correction induced by the manual bridge term.
+D
+LOW-DIMENSIONAL CONSTRAINED CORRECTION
+The planner’s waypoint sequence x ∈R2H and the temporal trajectory P ∈R2K used for safety eval-
+uation are connected by P = Eτ(x) (Eq. (7)). This map is the identity for temporal waypoints at the
+query horizons and uses extrapolation for geometric waypoints with a separate target speed. During
+correction, the scene z, physical horizons τ, sampling convention, and any auxiliary predictions are
+fixed. For parameter space Θ ⊂Rdη, the resampling map F : Θ →R2H follows the base planner’s
+representation and restricts waypoints to M = F(Θ). The fitting map is generally not invertible.
+15
+
+
+Under review as a conference paper at ICLR 2027
+The temporal safety domain Ω= Ω(z; τ) induces safe sets for planner waypoints and curve parame-
+ters:
+Ωplan = {x ∈R2H : Eτ(x) ∈Ω},
+ΘΩ= {η ∈Θ : Eτ(F(η)) ∈Ω}.
+(36)
+Consequently, F(ΘΩ) = M ∩Ωplan. Curve refinement searches only among representable waypoint
+sequences whose temporal query positions satisfy the safety constraints.
+The learned temporal-trajectory loss is bℓΩ
+ψ(P; z, τ) = PK
+i=1 DΩ
+ψ(pi, τi; z). The curve objective
+composes resampling with evaluation at physical horizons:
+bℓΩ
+ψ(η; z, τ) = bℓΩ
+ψ(Eτ(F(η)); z, τ) .
+(37)
+Let JF = ∂F/∂η and JE = ∂Eτ(x)/∂x. At differentiable points, the update in Eq. (18) induces
+displacements in planner waypoints and temporal query positions, ∆x = F(ηΩ) −F(η) and
+∆P = Eτ(F(ηΩ)) −P:
+∇ηbℓΩ
+ψ = J⊤
+F J⊤
+E ∇P bℓΩ
+ψ,
+∆x = −α(t)JF WηJ⊤
+F J⊤
+E ∇P bℓΩ
+ψ + o(α(t)),
+∆P = −α(t)JEJF WηJ⊤
+F J⊤
+E ∇P bℓΩ
+ψ + o(α(t)).
+(38)
+All derivatives are evaluated at the current parameters, x = F(η), and P = Eτ(x). For temporal
+waypoints at the query horizons, JE = I and ∆P = ∆x; otherwise the safety gradient also
+propagates through Eτ. With positive diagonal Wη, the parameter update is a descent direction
+whenever this pulled-back gradient is nonzero; whether a finite step decreases the objective depends
+on its magnitude. This construction restricts waypoint changes to the tangent space of M and
+temporal query changes to their images under Eτ. It is an approximation to direct manual-bridge
+correction in the full temporal-waypoint space.
+E
+QUERY-CONDITIONED DISTANCE FIELD NETWORK
+DistanceFieldNet takes a waypoint sequence P = (p1, . . . , pK), the corresponding physical horizons
+τ = (τ1, . . . , τK), and BEV features FBEV(z) as input. It predicts a scalar distance-function value
+for each waypoint–horizon pair and sums these values to obtain the trajectory-level output. The BEV
+features are first encoded by a shared convolutional stem,
+F0 = Convψ(FBEV),
+which provides a base spatial representation shared across all K queries. We describe the per-
+waypoint computation for one query pair (p, τ) = (pi, τi), omitting the waypoint index below. This
+representation is conditioned on both the queried spatial location and the queried prediction time.
+The query point p is normalized by the BEV metric extent and encoded with sinusoidal positional
+features:
+¯p =
+
+x
+xmax
+,
+y
+ymax
+
+,
+ep = MLPψ ([¯p, PE(¯p)]) .
+The query token attends to dense BEV tokens through a stack of cross-attention blocks:
+h = CrossAttnBlocks (ep, ZBEV) ,
+where ZBEV denotes the BEV tokens with spatial positional encoding. The resulting query context
+produces spatial FiLM (Perez et al., 2018) parameters:
+(γp, βp) = SpatialFiLMψ(h).
+These parameters condition the BEV feature on the queried coordinate:
+Fp = γp ⊙F0 + βp.
+The prediction time τ is encoded by a sinusoidal embedding followed by an MLP, and transformed
+into temporal FiLM parameters:
+eτ = MLPτ(PE(τ)),
+(γτ, βτ) = TemporalFiLMψ(eτ).
+16
+
+
+Under review as a conference paper at ICLR 2027
+The temporal FiLM injects future-time information into the query-conditioned BEV feature:
+Fτ,p = γτ ⊙Fp + βτ.
+The essential design is to condition the BEV representation on both query location and prediction
+time before distance-field prediction. We further compute a query-specific gate:
+G = Gψ (ZBEV, h, Fτ,p) .
+Together with a learned convolutional gate, the conditioned BEV feature is filtered as
+Fg = Fτ,p ⊙G.
+Finally, the gated feature is passed to a DistanceFieldHead, which denotes the complete output
+mapping from the query-conditioned BEV feature to a scalar distance-function value. It consists
+of three components: a BEV aggregation head that integrates spatial BEV evidence into a dense
+response map, a lightweight reducer that gradually reduces the flattened response map to a scalar
+logit, and a bounded monotonic activation:
+R = Aggregationψ(Fg),
+r = Reducerψ(Flatten(R)).
+The final distance-function value is then obtained by the activation part of DistanceFieldHead:
+Dψ(p, τ, FBEV) = π
+2 −arctan(softplus(r)).
+The same network parameters are used for all waypoint–horizon pairs. Summing the per-waypoint
+predictions gives the trajectory-level safety objective:
+bℓΩ
+ψ(P; z, τ) =
+K
+X
+i=1
+Dψ(pi, τi, FBEV(z)).
+(39)
+Here Dψ(p, τ, FBEV(z)) implements the scene-conditioned field DΩ
+ψ(p, τ; z) used in the method.
+Differentiating the summed objective through the waypoint coordinates and trajectory parameteriza-
+tion provides the curve-space correction direction.
+F
+IMPLEMENTATION CONFIGURATION
+Tables 4 and 5 summarize the DistanceFieldNet architecture and the training and sensor settings used
+in our BridgeDrive-based implementation. Network operations are described in Appendix E.
+Planner and control.
+The pretrained perception backbone and diffusion planner remain frozen
+during DistanceFieldNet training. The planner outputs ten geometric waypoints in the ego frame
+(H = 10) and a scalar target speed. Safety injection refines the path while keeping the target speed
+fixed, and a PID controller generates throttle and steering commands. All remaining decoding settings
+follow the respective pretrained diffusion planner.
+Safety labels and query horizons.
+Training labels use ground-truth obstacle half-lengths aj and
+half-widths bj without additional safety margins. Obstacle positions are linearly extrapolated using
+their annotated velocities, while headings remain constant. We set κ = 1, so each query is supervised
+by its largest per-obstacle violation. Physical query times are uniformly spaced over a horizon of
+0.5 s. At inference, the field is predicted from observed BEV features and waypoint–horizon queries,
+without explicit obstacle dimensions or ground-truth geometry.
+Curve refinement.
+We fit denoised waypoints by ridge regression using y(x) = η1x+η2x2+η4x4,
+where x is the forward coordinate and y is the lateral displacement in the ego frame. Thus, η =
+(η1, η2, η4) has dimension dη = 3, with zero constant and cubic terms. The quadratic ablation omits
+the quartic term, giving dη = 2. Corrected curves are resampled at approximately 1 m arc-length
+intervals. We use γϵ(t) = 1/(t + ϵ) with ϵ > 0 and Wη = 10−3Idη in Eq. (18), including the
+corresponding score-to-endpoint conversion factor.
+17
+
+
+Under review as a conference paper at ICLR 2027
+Table 4: DistanceFieldNet configuration (B: batch size, Q: query number).
+Component
+Configuration
+Inputs
+Shared BEV features, waypoint coordinates, and corresponding
+time horizons
+BEV feature shape
+(B, 64, 64, 64)
+Convolutional stem
+FBEV ∈RB×64×H×W →F0 ∈RB×32×H×W
+Spatial query encoding
+Sinusoidal positional encoding and MLP; dimensions = 256
+Temporal query encoding
+Sinusoidal positional encoding and MLP; dimensions = 256
+Query normalization
+Position scaled by BEV metric extent (ymax = xmax = 32)
+Cross-attention
+Query: zq ∈RBQ×1×256; Key/Value: ZBEV ∈RBQ×HW ×256
+Feature modulation
+F′ = F ⊙(1 + γ) + β
+Gate
+Conv3×3(32, 16), GN(4), GELU, Conv3×3(16, 1), Sigmoid.
+DistanceFieldHead
+Fg
+q ∈RBQ×32×H×W →Rq ∈RBQ×1×H×W
+Reducer
+Rq ∈RBQ×1×H×W →rq ∈RBQ
+Output activation
+π/2 −arctan(softplus(rq))
+Table 5: Training and sensor configuration.
+Setting
+Configuration
+Trainable module
+DistanceFieldNet only; perception backbone and planner frozen
+Optimizer
+AdamW
+Initial learning rate / epochs
+3 × 10−4 / 30
+Batch size
+50 (per GPU)
+Learning-rate schedule
+cosine annealing schedule
+Gradient clipping
+none
+Supervision
+Field values and spatial gradients, equally weighted (λgd = 1)
+Anchor bank
+60 trajectory anchors adapted from BridgeDrive for mode classi-
+fication and training-query construction
+Training queries per scene
+20 spatial points randomly sampled from two randomly selected
+anchors
+Range observations
+4 LiDAR frames
+Motion compensation
+Constant Velocity Prediction
+Camera input
+One front-view image (256 × 256)
+Navigation input
+Target-point coordinates
+Hardware
+Eight NVIDIA H20 GPUs, 96 GB each
+Training cost
+Approximately 190 GPU hours
+18
+
+
+Under review as a conference paper at ICLR 2027
+G
+ADDITIONAL EXPERIMENTAL RESULTS
+G.1
+CURVE DIMENSIONALITY: FULL RESULTS
+Table 6 reports the full Bench2Drive results for the quadratic ablation (η4 = 0) and the quartic curve
+representation. The quartic representation improves four of the five ability metrics, with the largest
+gains in giving way (20.00% to 30.00%) and overtaking (60.00% to 68.89%). Although merging
+performance decreases slightly from 75.00% to 73.75%, mean ability increases from 64.77% to
+69.74%, alongside improvements in DS and SR. These results support retaining the quartic term for
+safety correction across diverse driving scenarios.
+Table 6: Full curve-dimensionality results on Bench2Drive.
+Metric
+Quadratic
+Quartic
+DS
+88.65
+90.88
+SR (%)
+73.18
+76.36
+Merging (%)
+75.00
+73.75
+Overtaking (%)
+60.00
+68.89
+Emer. brake (%)
+78.33
+85.00
+Give way (%)
+20.00
+30.00
+Traffic sign (%)
+90.53
+91.05
+Mean ability (%)
+64.77
+69.74
+G.2
+EVALUATION WITH LEAD TRAINING
+Table 7: Performance adapted to LEAD on Bench2Drive.
+Method
+Expert
+DS
+SR(%)
+Effi.
+Comfort.
+TFv6 (Nguyen et al., 2026)
+LEAD
+95.2 ± 0.3
+86.8 ± 0.7
+N/A
+N/A
+BridgeDrive (Liu et al., 2026b)
+LEAD
+96.34 ± 0.55
+89.25 ± 0.50
+202.92 ± 3.27
+23.24 ± 1.06
+BridgeGuard(Ours)
+LEAD
+96.76 ± 0.15
+89.78 ± 0.32
+208.50 ± 2.04
+20.37±0.19
+Table 7 presents the evaluation results of our method on the Bench2Drive benchmark when trained
+with the LEAD dataset, where BridgeGuard achieves state-of-the-art performance. Compared with
+training on the original dataset, the performance gap between different baselines becomes noticeably
+smaller under LEAD. We attribute this reduced margin to the higher quality of the LEAD dataset,
+which substantially alleviates safety-critical failure cases for existing baselines and consequently
+leaves less room for further improvement.
+H
+SUPPLEMENTARY VIDEOS
+We provide six videos in the supplementary materials comparing BridgeDrive and BridgeGuard (ours)
+in three scenarios: two lane-changing cases and one unprotected left-turn case. Each scenario includes
+one video for each model. We refer readers to these paired videos for a qualitative comparison of the
+models’ driving behavior and interactions with surrounding traffic.
+I
+SUFFICIENT CONDITIONS FOR Ω-BRIDGE
+This section specializes the sufficient conditions in Appendix C.1 of Naderiparizi et al. (2025) to the
+autonomous-driving setting.
+I.1
+ORIGINAL SUFFICIENT CONDITION
+Let Xt ∈Rd denote the stochastic process generated by the manually bridged model 2.2
+dxt =
+
+ν(xt, t) −g2(t)bΩ(xt, t)
+
+dt + g(t)d ¯wt
+(40)
+19
+
+
+Under review as a conference paper at ICLR 2027
+and let pΩ
+t be its marginal law. Following the notation of Naderiparizi et al. (2025), define
+β(t) := EXt∼pΩ
+t
+
+∇xℓΩ(Xt; t)⊤ν(Xt, t)
+
+,
+(41)
+ρ(t) := EXt∼pΩ
+t
+
+∂tℓΩ(Xt; t) + 1
+2g2(t) tr
+ ∇2
+xℓΩ(Xt; t)
+
+,
+(42)
+ζ(t) := exp
+ Z T
+t
+γ(s) ds
+!
+.
+(43)
+The two sufficient conditions in Appendix C.1 of Naderiparizi et al. (2025) are as follows.
+1. The Ω-distance satisfies the expected Polyak–Łojasiewicz condition, at every fixed diffusion
+time,
+EXt∼pΩ
+t
+
+ℓΩ(Xt; t)
+
+≤EXt∼pΩ
+t
+
+∥∇xℓΩ(Xt; t)∥2
+,
+t ∈[0, T].
+(44)
+2. The integrating factor dominates both the initial value and the accumulated drift, time-
+variation, and diffusion-curvature terms:
+lim
+t↓0 ζ(t) = +∞,
+lim
+t↓0
+ζ(t)
+Z T
+t
+ζ(s)
+ β(s) + ρ(s)
+
+ds
+= +∞.
+(45)
+We leave Condition 1 in Eq. (44) unchanged. The remainder of this section replaces only the less
+transparent asymptotic Condition 2 by assumptions with a direct interpretation for trajectory planning.
+I.2
+A TERMINAL-DOMINATION CONDITION FOR TRAJECTORY PLANNING
+Fix a terminal interval (0, δ]. Assume that there are constants GΩ, HΩ, Mν, g 2, κ > 0 and an
+exponent q ∈[0, 1) such that the following named assumptions hold for 0 < t ≤δ:
+(A1) Time-invariant distance function:
+ℓΩ(x; t) = ℓΩ(x),
+(46)
+(A2) Bounded gradient and curvature of the distance function:
+∥∇xℓΩ(x)∥≤GΩ,
+∥∇2
+xℓΩ(x)∥op ≤HΩ,
+(47)
+(A3) Controlled non-safety drift and diffusion terms:
+Et,Xt∼pΩ
+t [∥ν(Xt, t)∥] ≤Mνt−q,
+g2(t) ≤g 2,
+(48)
+(A4) Sufficiently singular terminal guidance:
+γ(t) ≥κ
+t ,
+(49)
+(A5) Well-behaved coefficients away from the terminal endpoint:
+γ, β, ρ ∈L1([ε, T]),
+for every ε ∈(0, T).
+(50)
+Proposition 1 (Terminal domination implies the original Condition 2). Under Assumptions A1–A5
+in Eqs. (46)– (50), we have
+lim
+t↓0 ζ(t) = +∞,
+lim
+t↓0
+1
+ζ(t)
+Z T
+t
+ζ(s)
+ |β(s)| + |ρ(s)|
+
+ds = 0.
+(51)
+Proof. Time independence of the safety potential gives
+|ρ(t)| ≤d
+2 g 2HΩ.
+(52)
+20
+
+
+Under review as a conference paper at ICLR 2027
+The Cauchy–Schwarz inequality for the Euclidean inner product and the first moment bound on ν
+give
+|β(t)| ≤E
+
+∥∇xℓΩ(Xt)∥∥ν(Xt, t)∥
+
+≤GΩMνt−q.
+(53)
+It follows that, for some finite constant CR,
+R(t) = |β(t)| + |ρ(t)| ≤CRt−q,
+0 < t ≤δ.
+(54)
+By Eqs. (49) and (50), let
+Cδ := exp
+ Z T
+δ
+γ(r) dr
+!
+∈(0, ∞).
+(55)
+Then, for 0 < t ≤δ,
+ζ(t) = Cδ exp
+ Z δ
+t
+γ(r) dr
+!
+(56)
+≥Cδ exp
+ Z δ
+t
+κ
+r dr
+!
+= Cδ
+δ
+t
+κ
+.
+(57)
+so ζ(t) →+∞. Moreover, whenever t ≤s ≤δ,
+ζ(s)
+ζ(t) = exp
+
+−
+Z s
+t
+γ(r) dr
+
+≤
+ t
+s
+κ
+.
+(58)
+Therefore,
+1
+ζ(t)
+Z δ
+t
+ζ(s)R(s) ds ≤CRtκ
+Z δ
+t
+s−(κ+q) ds
+=
+
+
+
+O(tκ),
+κ + q < 1,
+O(tκ log(δ/t)) ,
+κ + q = 1,
+O(t1−q),
+κ + q > 1.
+(59)
+All three cases converge to zero because κ > 0 and q < 1. The integral over [δ, T] is finite and
+independent of the lower limit t; after division by ζ(t) →∞, its contribution also vanishes. This
+proves Eq. (51). Finally,
+
+Z T
+t
+ζ(s)(β(s) + ρ(s)) ds
+ ≤
+Z T
+t
+ζ(s)R(s) ds,
+(60)
+which proves the claimed implication.
+Corollary 1 (The manual bridge is an Ω-bridge). Suppose that Condition 1 in Eq. (44) and Assump-
+tions A1–A5 in Eqs. (46)– (50) hold. Then the manual bridge term bΩin Eq. (40) is an Ω-bridge;
+equivalently, the solution of the manually bridged reverse SDE satisfies
+P(X0 ∈Ω) = 1.
+(61)
+I.3
+INTERPRETATION OF CONDITION 1 AND ASSUMPTION A3
+Condition 1 and Assumption A3 are the only two conditions that can present difficulty in verification
+because they may involve calculating an expectation under the marginal distribution of the reverse
+SDE. Let us give some interpretation on these conditions.
+Condition 1 is a distributional gradient-dominance requirement. At each fixed diffusion time, define
+Lt := EpΩ
+t [ℓΩ(Xt; t)],
+Dt := EpΩ
+t
+
+∥∇xℓΩ(Xt; t)∥2
+.
+(62)
+Then Eq. (44) requires Lt ≤Dt. A stronger, easier-to-check sufficient condition is the pointwise
+inequality ℓΩ(x; t) ≤∥∇xℓΩ(x; t)∥2 on the states reachable by the process. More generally, a finite
+constant in ℓΩ≤C∥∇xℓΩ∥2 can be absorbed by rescaling the potential and inversely rescaling its
+guidance coefficient.
+21
+
+
+Under review as a conference paper at ICLR 2027
+However, no non-zero, globally bounded C1 distance function can satisfy a pointwise PL inequality
+on all of Rd because the gradient of ℓΩ(x) vanishes at maximum point. The expected condition can
+nevertheless hold if pΩ
+t assigns sufficiently little mass to such regions.
+Assumption A3 controls the drift of the original reverse dynamics along its actual marginal law. Its
+drift requirement is equivalently
+sup
+0<t≤δ
+tq EXt∼pΩ
+t [∥ν(Xt, t)∥] < ∞
+for some q < 1.
+(63)
+The remaining part of A3, boundedness of g2, follows directly from the chosen analytic diffusion
+schedule in both VP and VE cases Zhou et al. (2024).
+22

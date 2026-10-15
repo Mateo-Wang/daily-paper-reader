@@ -1,0 +1,2477 @@
+ManeuverFlow: Maneuver Hypothesis Generation with Future Evidence for
+Trajectory Evaluation and Refinement in End-to-End Autonomous Driving
+Yuhao Wei1, Yong Chen2, Chen Yang1, Yingchen Wang1, Delin Ouyang1,
+Lingfeng Qi1, Qi Lan1, Zhanhua Zhang2, Jie Li1, Guofa Li1,*
+1Chongqing University
+2Artificial Intelligence Center, Geely Automotive Research Institute
+Abstract
+End-to-end planning in complex scenes must model diverse
+driving intentions and select the most appropriate trajec-
+tory using scene context and future risks. However, multi-
+query regression may collapse to one mode, while anchor-
+based and generative planners share a scaling bottleneck:
+small candidate sets limit maneuver coverage or discov-
+ery of high-quality trajectories, whereas large sets increase
+generation and scoring costs. We propose ManeuverFlow
+to generate trajectories for distinct intentions in one step
+and evaluate and refine them using current and future evi-
+dence. The model selects relevant maneuver modes, draws
+corresponding noise from the Gaussian mixture prior, and
+maps it to intention-specific trajectories through a maneuver-
+routed mixture-of-experts MeanFlow field. Current features
+and future features predicted by the world model are ag-
+gregated along each candidate path into trajectory-specific
+evidence for PDM-factor prediction. Using the same evi-
+dence, the refiner predicts local Frenet residuals for selected
+candidates; refined and retained candidates are then jointly
+re-scored for selection. With a lightweight TransFuser-style
+ResNet-34 backbone, ManeuverFlow achieves 90.6 PDMS
+and 90.1 EPDMS on NAVSIM v1/v2 navtest, respectively.
+On WorldEngine’s recent 3DGS closed-loop benchmark, it
+attains the highest listed PDMS∗scores of 75.19 and 74.58
+under logged and IDM-controlled traffic, respectively. Code:
+https://github.com/wyh-autonomy/maneuverflow.
+1
+Introduction
+End-to-end autonomous driving maps sensor observations,
+ego states, and navigation cues directly to future ego mo-
+tion, unifying perception and planning under a single ob-
+jective (Chitta et al. 2023; Hu et al. 2022b, 2023; Jiang
+et al. 2023; Jia et al. 2023; Sun et al. 2025). Complex traf-
+fic scenes often admit multiple plausible driving hypotheses,
+so a single trajectory cannot capture the underlying deci-
+sion space. Multimodal motion forecasting represents this
+ambiguity with fixed anchor vocabularies or mode-specific
+queries (Chai et al. 2020; Shi et al. 2022); recent planners
+further use learned queries, trajectory anchors, and diffusion-
+or flow-based generators to produce candidates, then select a
+final plan through candidate–scene interactions (Jiang et al.
+2026; Li et al. 2024b; Liao et al. 2025; Xing et al. 2025; Wang
+∗Corresponding author: Guofa Li (liguofa@cqu.edu.cn).
+Trajectory
+Decoder
+Trajectory
+score
+Perception
+Backbone
+Trajectory 
+Queries
+World
+Model
+Trajectory
+offset
+Perception
+Backbone
+Trajectory 
+anchors
+M3F
+Trajectory
+score
+Maneuver Queries
+Maneuver-GMP
+World
+Model
+Perception
+Backbone
+…
+Trajectory 
+Evidence
+Refiner
+(a)
+(b)
+(c)
+Figure 1: Candidate-based planning paradigms. (a) Query
+candidates without explicit mode structure, scored from cur-
+rent features. (b) Fixed-anchor candidates evaluated with per-
+candidate future rollouts. (c) ManeuverFlow with maneuver-
+structured generation, shared-future evidence, and Frenet re-
+finement before joint re-scoring.
+et al. 2026). As shown in Fig. 1(a), learned queries without
+explicit mode-level structure may concentrate in similar re-
+gions of trajectory space, producing redundant candidates
+and risking mode collapse.
+Standard diffusion and ODE-based flow sampling is itera-
+tive (Lipman et al. 2023; Liu, Gong, and Liu 2023), although
+recent driving planners reduce the process to two steps in
+DiffusionDrive (Liao et al. 2025) or one step in GoalFlow
+and MeanFuser (Xing et al. 2025; Wang et al. 2026). Mean-
+Fuser generates multiple proposals in one MeanFlow step,
+but its Adaptive Reconstruction Module (ARM) attends to
+and fuses them into a single output trajectory; the initial
+hypotheses thus do not remain explicit candidates for down-
+stream evaluation, refinement, and selection (Wang et al.
+2026). Fixed anchors encode predefined modes but may al-
+locate part of the candidate budget to modes weakly relevant
+to the current scene. For a frozen generator, Fig. 2 retrospec-
+tively shows that larger pools expose stronger candidates.
+arXiv:2610.13409v1  [cs.RO]  9 Oct 2026
+
+
+Figure 2: Post-hoc candidate-quality analysis of the frozen
+Maneuver-Mixture MeanFlow Field (M3F) across 12,146
+NAVSIM v1 navtest scenes, excluded from training and
+model selection. Curves report best and Top-κ mean PDMS
+over nested pools; HumanAgent 94.8 is a dashed reference.
+This motivates improving candidate quality under a compact
+proposal budget through scene-adaptive hypothesis genera-
+tion and evidence-conditioned local trajectory refinement.
+Candidate generation also requires reliable selection.
+Candidate-tree and generation–evaluation planners pair ego
+hypotheses with conditional predictions or learned evalua-
+tors (Huang et al. 2024, 2025), whereas current-only scorers
+do not explicitly query predicted future scene states along
+candidate paths. WoTE provides such evidence through one
+future rollout per candidate (Fig. 1(b)), repeating future BEV
+prediction across candidate trajectories and multiple future
+time steps (Li et al. 2025b).
+Together,
+these
+limitations
+define
+a
+fixed-budget
+hypothesis-lifecycle problem. We therefore ask: How can
+a planner generate scene-relevant, mode-distinct hypothe-
+ses under a fixed budget and use current/future evidence to
+evaluate, refine, and select them?
+To this end, we propose ManeuverFlow, a unified
+Hypothesize–Verify–Improve framework that preserves ex-
+plicit maneuver-indexed hypotheses, as shown in Figs. 1(c)
+and 3. The Maneuver Gaussian Mixture Prior (M-GMP) pre-
+dicts scene-conditioned weights over motion-defined com-
+ponents, and M3F generates base hypotheses by maneuver-
+routed one-step transport. Once per planning step, the world
+model predicts one candidate-independent future BEV field;
+a learned trajectory-guided probe projects each hypothesis
+into the current and predicted fields to form path-specific
+Trajectory Evidence Memory. Metric Prism pre-scores can-
+didates through learned PDM factors. The Evidence-Coupled
+Frenet Refiner (ECFR) uses the same evidence to predict
+local Frenet residuals for selected hypotheses. Refined hy-
+potheses replace selected bases, re-query the shared field,
+and compete with retained hypotheses under the same Met-
+ric Prism scoring function.
+Our main contributions are summarized as follows:
+• Scene-adaptive maneuver generation. We introduce a
+maneuver-structured generator that combines M-GMP
+with the maneuver-routed M3F to model motion-defined
+maneuver components and generate scene-adaptive,
+intent-conditioned trajectory hypotheses as explicit al-
+ternatives in one step.
+• Future-evidence verification and refinement. A learned
+probe projects each candidate onto a shared future BEV
+field to extract trajectory-specific evidence for PDM-
+aligned scoring and ECFR’s local Frenet refinement. Met-
+ric Prism jointly re-scores refined and retained hypotheses
+for final selection.
+• With a lightweight ResNet-34 TransFuser (TF) percep-
+tion backbone, ManeuverFlow-TF achieves 90.58 PDMS
+and 90.14 EPDMS on NAVSIM v1/v2 navtest, respec-
+tively. Its camera-only Latent TransFuser (LTF) variant
+further obtains 75.19 and 74.58 PDMS∗under replayed
+and reactive traffic on WorldEngine, delivering the high-
+est listed composite planning scores across all reported
+benchmark and traffic settings.
+2
+Related Work
+2.1
+End-to-End and Generative Planning
+End-to-end planners predict ego motion from sensor obser-
+vations, ego states, and navigation commands. TransFuser
+fuses camera and LiDAR features, while later systems in-
+troduce planning-oriented queries and sparse scene repre-
+sentations (Chitta et al. 2023; Hu et al. 2023; Jiang et al.
+2023; Sun et al. 2025). Generative planners model multi-
+ple feasible decisions through structured latent spaces, dif-
+fusion, or flow matching: GenAD learns a trajectory latent
+space, Diffusion Planner and DiffusionDrive denoise trajec-
+tory distributions, and GoalFlow applies goal-conditioned
+flow matching (Zheng et al. 2024, 2025a; Liao et al. 2025;
+Xing et al. 2025). MeanFuser combines a Gaussian-mixture
+source with one-step MeanFlow and aggregates sampled pro-
+posals into a single ARM output (Geng et al. 2025; Wang
+et al. 2026). MM-FM jointly designs a Gaussian-mixture
+source and mode-dependent coupling for general multimodal
+generation (Luo et al. 2026). A challenge is to organize
+driving-specific motion modes and retain diverse hypotheses
+as an explicit interface for evaluation and refinement.
+2.2
+World Models for Planning
+Driving world models predict visual observations, occu-
+pancy, or latent states to support planning. MILE jointly
+learns latent dynamics and a driving policy, Think2Drive
+trains a planner through interaction with a compact latent
+world model, and LAW learns self-supervised latent dy-
+namics (Hu et al. 2022a; Li et al. 2024a, 2025a). Drive-
+WM, Drive-OccWorld, World4Drive, and WorldRFT use
+predicted visual, occupancy, or latent futures for planning
+evaluation and optimization (Wang et al. 2024; Yang et al.
+2025; Zheng et al. 2025b; Yang et al. 2026). For online
+evaluation, WoTE runs a recurrent BEV world model for
+each anchor-refined candidate and selects the highest-scoring
+trajectory (Li et al. 2025b). Candidate-conditioned rollouts
+provide trajectory-specific futures but require separate com-
+putation for every candidate. Shared predictions, such as the
+future occupancy used by ST-P3, amortize forecasting across
+candidates (Hu et al. 2022b) but do not directly provide
+
+
+Evidence-Coupled 
+Frenet Refiner
+BEVFeature
+egoFeature
+𝑡∈0,1
+𝑟∈0,1
+ManeuverRoute
+Multiview images
+LiDAR
+Ego Status
+  
+    
+  
+    
+Score query
+ℒ𝑠𝑐𝑜𝑟𝑒
+Score
+Rank
+Trajectory
+evidence
+tokens
+Trajectory
+evidence
+tokens
+BEVabs@T+1
+BEVres@T+1
+BEVabs@T+2
+BEVres@T+2
+BEVabs@T+K
+BEVres@T+K
+World Model
+ℒFBEV
+Trajectory
+Sampling
+Infer：𝑡−𝑟= 1
+Γ−1(ොx)
+Metric Prism 
+Decoder
+Future perception
+…
+…
+Trajectory
+Sampling
+Maneuver-GMP
+DiT Block
+Maneuver-Experts
+𝑣𝑐
+෤𝑣𝜃
+ℒM3F
+Perception Encoder
+Perception
+Train
+only
+M3F
+Figure 3: Overview of ManeuverFlow. Scene-conditioned M-GMP and the shared planning context drive one-step M3F gen-
+eration of base hypotheses, which Metric Prism pre-scores using trajectory-specific evidence from a shared future BEV field.
+ECFR refines the selected R hypotheses, which join the retained bases for evidence re-query and joint re-scoring.
+path-specific evidence. Extracting discriminative, trajectory-
+specific evidence from a shared forecast without repeated
+candidate-wise rollouts therefore remains a key challenge.
+2.3
+Trajectory Refinement and Selection
+Candidate-based planning requires both reliable discrimi-
+nation and local geometric improvement. VADv2 models
+a distribution over a discrete planning vocabulary, while
+Hydra-MDP distills human and rule-based teachers into
+metric-specific trajectory heads (Jiang et al. 2026; Li et al.
+2024b). DTPP learns context-dependent costs, Gen-Drive
+learns a candidate evaluator, and DriveSuprim improves
+hard-negative discrimination through coarse-to-fine filtering
+and self-distillation (Huang et al. 2024, 2025; Yao et al.
+2026). For trajectory refinement, ThinkTwice and ResWorld
+use predicted future information to update an initial plan (Jia
+et al. 2023; Zhang et al. 2026). These lines of work sepa-
+rately strengthen candidate evaluation and trajectory refine-
+ment, but their coordination within a common hypothesis
+pool remains less explored. Retaining unrefined alternatives
+and directly comparing retained and refined trajectories un-
+der the same future-conditioned evaluator thus remains an
+open design problem.
+3
+Method
+Figure 3 outlines ManeuverFlow. M-GMP allocates candi-
+dates across scene-relevant components, then M3F trans-
+ports their samples into bases in one step. Metric Prism
+pre-scores each base using path-specific current/future BEV
+evidence. ECFR replaces selected bases; refinements and re-
+tained bases re-query the field for joint scoring.
+3.1
+Problem Formulation
+Let χ ∈{TF, LTF} denote the perception configuration
+fixed for each model. At planning step n, the planner receives
+Oχ
+n =
+(In, Ln, sn, cnav
+n
+),
+χ = TF,
+(In, sn, cnav
+n
+),
+χ = LTF, ,
+(1)
+where In denotes the three camera views, Ln is a LiDAR
+BEV raster, and sn and cnav
+n
+are the ego state and naviga-
+tion command. Given Oχ
+n, the planner predicts a future ego
+trajectory τ ⋆
+n with Hτ waypoints.
+Each
+Hτ-waypoint
+trajectory
+hypothesis
+τn,i
+=
+{(xn,i,h, yn,i,h, ψn,i,h)}Hτ
+h=1 is represented in the current ego
+frame. M3F produces N bases T base
+n
+. Metric Prism pre-
+scores them; the Refiner replaces R selected bases with
+refinements and retains the other N −R in the fixed-size
+pool T final
+n
+. Metric Prism re-scores T final
+n
+with trajectory-
+conditioned evidence and returns τ ⋆
+n.
+3.2
+Planning Context and M-GMP
+Using Ln in TF and a learned Zlat in LTF, the encoder Eχ re-
+turns the BEV map Bn, agent/maneuver queries (QA
+n , qman
+n
+),
+and state–navigation context cSN
+n :
+(Bn, QA
+n , qman
+n
+, cSN
+n ) = Eχ(Oχ
+n).
+(2)
+The scene-conditioned maneuver weights are
+πman
+n
+= Softmax
+ Dman(qman
+n
+, cSN
+n )
+
+,
+(3)
+while all candidates share Cn = (Bn, QA
+n , cSN
+n ).
+Map and agent branches provide auxiliary supervision for
+BEV semantics and traffic-participant detection. M-GMP
+partitions expert trajectories into M motion families using
+
+
+𝑡𝑖𝑚𝑒 
+MLP
+𝑡−𝑟
+𝑡, 𝑟
+Agent Tokens
+MLP
+FFN
+BEV & egoFeature
+𝛽
+Shift
+𝛾
+Scale
+𝛼
+Gate
+IMF Decoder
+AdaLN modulation
+M-GMP 
+tokens
+𝑒
+ො𝑥
+−𝑢𝜃
+𝑢𝜃
+Γ−1(ො𝑥)
+Infer：𝑡−𝑟= 1
+K V
+K V
+Q
+Trajectories
+M-GMP 
+E1
+E2
+E8
+M-GMP 
+Tokenizer
+Multi-Head
+Cross-Attention
+Multi-Head
+Cross-Attention
+Figure 4: Architecture of M3F. Interpolated trajectory-state
+tokens first query BEV and ego features, then agent memo-
+ries. Time-conditioned AdaLN modulates each block, while
+maneuver-routed experts parameterize the interval-averaged
+field for one-step trajectory transport.
+displacement, mean heading, and speed trend, then fits a fixed
+factorized Gaussian to each family in normalized diff-space
+(Appendix). We use “maneuver” and “intention” to denote
+these trajectory-space motion components. At inference, the
+scene-dependent weights πman
+n
+allocate candidates among
+components; selected component samples initialize the M3F
+source states en,i. The auxiliary objective is
+Laux = Lmap + Lagent + Lman.
+(4)
+Its maneuver-classification term is
+Lman = CE(yman
+n
+, πman
+n
+) ,
+(5)
+where yman
+n
+= Softmax(−dn) and dn collects expert–
+component distances in normalized diff-space (Appendix).
+3.3
+M3F
+M3F adopts the boundary-field and JVP construction of
+Improved Mean Flows (iMF) (Geng et al. 2026); our
+driving-specific contributions are motion-structured M-
+GMP sources, scene-conditioned component allocation, and
+maneuver-routed experts. The Appendix defines the trajec-
+tory encoding, maneuver assignment, and component-wise
+source sampling. With expert code xgt
+n and source state en,i,
+define zt
+n,i = (1 −t)xgt
+n + ten,i and vc
+n,i = en,i −xgt
+n for
+0 ≤r ≤t ≤1. Let mn,i index the M-GMP maneuver
+component generating en,i and set wman
+n,i
+= OneHot(mn,i);
+routing for the M3F generation objective uses the expert’s
+distance-matched motion component.
+As shown in Fig. 4, the M-GMP tokenizer maps zt
+n,i to the
+query Q0
+n,i. The interval encoding φF(t, t −r) modulates
+the blocks, whose state queries sequentially attend to the
+BEV–ego and agent memories. The maneuver code selects
+the corresponding feed-forward expert. The decoded field is
+uθ,n,i ≡uθ(zt
+n,i, r, t | Cn, wman
+n,i )
+= Du
+
+FM3F
+θ
+ Q0
+n,i; φF(t, t −r), Cn, wman
+n,i
+
+.
+(6)
+Fixing (Cn, wman
+n,i ), the boundary velocity at (zt
+n,i, t, t)
+supplies the JVP tangent, while the (z, r, t)-JVP is evaluated
+at the state and time coordinates (zt
+n,i, r, t):
+vb
+θ,n,i = uθ(zt
+n,i, t, t | Cn, wman
+n,i ),
+(7)
+Jθ,n,i = JVP
+
+uθ; (zt
+n,i, r, t); (vb
+θ,n,i, 0, 1)
+
+,
+(8)
+evθ,n,i = uθ,n,i + (t −r) sg[Jθ,n,i],
+(9)
+where sg[·] denotes stop-gradient. The loss is
+LM3F = E
+hevθ,n,i −vc
+n,i
+
+1
+i
+.
+(10)
+3.4
+Future BEV Field and Metric Prism
+The world model predicts once per planning step a candidate-
+independent HB-step future BEV feature field, providing
+prospective evidence without candidate-wise rollouts. Write
+each state as bBn,j = ( bBabs
+n,j , bBres
+n,j), where the residual is
+computed from consecutive absolute features with bBabs
+n,0 =
+Bn:
+bFn = WϑW(Bn, cSN
+n ) = {bBn,j}HB
+j=1.
+(11)
+For each candidate τn,i, the learned Trajectory-Guided
+BEV Feature Probe projects its waypoints into the cur-
+rent BEV map and time-aligned predicted states, samples
+along the path, and aggregates trajectory-specific evidence.
+Thus, specificity comes from trajectory-conditioned retrieval
+over the shared forecast, not candidate-wise future predic-
+tion. Metric Prism encodes the candidates as score tokens
+QS
+n = [TS(τn,i)]N
+i=1, compares them through set-level self-
+attention, and lets each token cross-attend to its associated ev-
+idence memory, yielding qS
+n,i. Factor-specific heads produce
+sf
+n,i = Df(qS
+n,i) and collect them into sn,i. The evidence
+extraction and score composition are compactly written as
+En,i = Pζ
+
+τn,i; Bn, bFn
+
+,
+Sn,i = CPDM(sn,i),
+(12)
+where sn,i = {sf
+n,i}f∈JPDM contains the five predicted
+PDM factors in JPDM = {NC, DAC, EP, TTC, Comf}.
+The fixed log-PDM composition CPDM ranks candidates on
+both NAVSIM v1 and v2; v2-only factors remain evalua-
+tion metrics and do not enter selection. The score Sn,i ranks
+candidates, while En,i conditions the Refiner.
+During training, the shared perception backbone encodes
+current observations on the online path and is reused to en-
+code future observations in a stop-gradient target pass. After
+alignment to the current ego frame, the detached future fea-
+tures define ( ¯Babs
+n,j , ¯Bres
+n,j), with Ωn,j marking the valid spatial
+overlap. Under LTF, this target pass processes three future
+camera views with the learned latent tensor in place of Li-
+DAR. The Ωn,j-masked future-BEV loss combines Smooth-
+L1 and cosine alignment for absolute features with Smooth-
+L1 supervision for temporal residuals. For each navtrain
+scene, Metric Prism learns from N = 64 candidates and their
+NAVSIM v1 evaluator factor labels using weighted binary
+cross-entropy. Summing over j = 1, . . . , HB, i = 1, . . . , N,
+and f ∈JPDM, the overall verification objective is
+Lverify = LFBEV + Lscore
+=
+X
+j
+ ℓabs
+n,j + βℓres
+n,j
+
++
+X
+i,f
+ℓf
+
+sf
+n,i, yf
+n,i
+
+,
+(13)
+
+
+where β weights residual supervision, yf
+n,i is the evaluator
+label, and ℓf includes factor weighting, label smoothing, and
+logit regularization, detailed in the supplement.
+3.5
+ECFR
+Given a base candidate τn,i and its evidence memory En,i,
+the Refiner predicts a residual in the path-aligned Frenet
+frame and updates the trajectory as
+∆F
+n,i = Rη(τn,i, En,i) ,
+eτn,i = UF
+ τn,i, ∆F
+n,i
+
+. (14)
+During training, the same N = 64 set T base
+n
+supplies both
+score labels and refinement targets. For each base, the highest
+evaluator-scoring candidate with the same maneuver index
+defines its reference trajectory:
+τ †
+n,i = arg max
+τn,j∈T base
+n
+mn,j=mn,i
+Peval(τn,j),
+(15)
+Lref = αref
+P
+i ωn,i ℓF
+ ∆F
+n,i, ¯∆F
+n,i
+
+max(1, P
+i ωn,i)
+,
+(16)
+where Peval combines evaluator factor labels, ¯∆F
+n,i
+=
+RF(τn,i, τ †
+n,i) is the Frenet target, and ℓF is mean Smooth-
+L1. We use αref = 5 and binary validity weights ωn,i; invalid
+pairs use zero targets and weights.
+3.6
+Training Objectives and Inference
+Training proceeds in two stages. We first optimize the aux-
+iliary maneuver objective Laux and the M3F generation ob-
+jective LM3F. Stage 2 jointly optimizes all inference-time
+modules. At each training step, the current model generates
+64 candidates per scene for evaluator labeling and ECFR
+reference selection. Candidate construction and supervision
+targets are detached:
+Ljoint = λauxLaux + λM3FLM3F
++ λverifyLverify + λrefLref,
+(17)
+where the λ coefficients balance the four objectives, while
+Lverify combines future-BEV prediction and factor-score su-
+pervision as defined in Sec. 3.4.
+At inference, we retain the Top-3 maneuver components
+of πman
+n
+, renormalize their mixture weights, and distribute
+N candidates by largest-remainder allocation. For each se-
+lected component m, we sample en,i from its displacement–
+heading Gaussian, set en,i = g(en,i), and assign mn,i = m
+and wman
+n,i
+= OneHot(m). Each prior is transported into a
+trajectory through one full-interval M3F evaluation:
+τn,i = Γ−1 en,i −uθ(en,i, 0, 1 | Cn, wman
+n,i )
+
+,
+(18)
+where Γ−1 applies A−1, cumulatively sums displacements
+from the current ego origin, and decodes heading with atan2.
+Metric Prism first pre-scores the N base candidates.
+Guided by the preliminary ranking, selected bases are re-
+placed with Refiner outputs that inherit their maneuver in-
+dices as provenance, while the remaining candidates are re-
+tained. For the resulting fixed-size pool T final
+n
+, trajectory evi-
+dence is re-queried from the shared future field before Metric
+Prism jointly re-scores all candidates under the deployment
+log-PDM composition. The highest-scoring trajectory is re-
+turned as the final plan τ ⋆
+n.
+4
+Experiments
+4.1
+Experimental Setup
+Datasets and evaluation protocols.
+NAVSIM is a data-
+driven planning benchmark built from OpenScene/nuPlan
+driving logs (Karnchanachari et al. 2024) that evaluates pre-
+dicted ego trajectories against logged future scenes under
+a non-reactive simulator protocol (Dauner et al. 2024; Cao
+et al. 2025). We follow the official split: navtrain for
+training and navtest for evaluation. We estimate M-GMP
+motion families and distribution statistics using only expert
+trajectories from navtrain. NAVSIM v1 reports the Pre-
+dictive Driver Model Score (PDMS) with NC, DAC, TTC,
+EP, and Comfort, whereas v2 adopts the Extended Predic-
+tive Driver Model Score (EPDMS) and additionally reports
+DDC, TLC, LK, HC, and EC. We use the official evaluators;
+for v2, we reuse the v1 checkpoints, five-factor heads, and
+log-PDM rule—without v2-specific training or tuning.
+We complement NAVSIM’s non-reactive evaluation with
+the latest WorldEngine benchmark on all 288 publicly
+released high-risk scenarios reconstructed from NAVSIM
+navtest logs (Li et al. 2026). The logged replay (Log)
+setting replays background traffic, whereas the Intelligent
+Driver Model (IDM) setting updates surrounding agents re-
+actively (Treiber, Hennecke, and Helbing 2000); in both set-
+tings, the ego vehicle replans from updated rendered observa-
+tions. We report episode success rate (SR), closed-loop ego
+progress (EP), and PDMS∗: SR is the fraction of episodes
+without collisions or drivable-area violations, EP measures
+progress during closed-loop execution, and PDMS∗summa-
+rizes overall closed-loop driving quality, together assessing
+system-level replanning under replayed and reactive traffic.
+Implementation details.
+TF and LTF use a ResNet-34 im-
+age backbone and predict Hτ = 8 waypoints over 4 s. We
+conduct three independent training runs on four NVIDIA
+RTX 4090 GPUs with global batch size 32 using AdamW
+(weight decay 0.1). Stage one trains the perception net-
+work and M3F at 4 × 10−4; stage two jointly optimizes all
+inference-time modules at 2 × 10−4, with a 0.2× learning-
+rate multiplier for the perception network and M3F. The fu-
+ture field predicts HB = 4 BEV states at 1-s intervals; only
+the stop-gradient target branch uses future observations dur-
+ing training, while inference uses the current observation.
+The defaults k = 3, N = 64, and R = N/4 were fixed
+before navtest; all navtest sweeps are post-hoc sen-
+sitivity analyses using frozen checkpoints. Each checkpoint
+is evaluated five times, and the main tables report the mean
+across the three independent run averages; the corresponding
+sample standard deviations are provided in the supplemen-
+tary material.
+4.2
+Main Results
+Results on NAVSIM.
+ManeuverFlow-TF achieves the
+highest listed PDMS of 90.58 in Table 1, while the camera-
+only LTF variant obtains 89.98. Their EP values are 85.36
+and 84.87, respectively.
+Without v2 adaptation, ManeuverFlow-TF achieves the
+highest listed EPDMS and EP at 90.14 and 88.75.
+ManeuverFlow-LTF obtains 89.70 EPDMS and the highest
+
+
+Method
+Venue
+Backbone
+NC↑
+DAC↑TTC↑Comf.↑
+EP↑
+PDMS↑
+UniAD (Hu et al. 2023)
+CVPR 2023
+ResNet-34
+97.8
+91.9
+92.9
+100.0
+78.8
+83.4
+TransFuserTF (Chitta et al. 2023)
+TPAMI 2023 ResNet-34
+97.7
+92.8
+92.8
+100.0
+79.2
+84.0
+World4Drive (Zheng et al. 2025b)
+ICCV 2025
+ResNet-34
+97.4
+94.3
+92.8
+100.0
+79.9
+85.1
+GoalFlowTF (Xing et al. 2025)
+CVPR 2025
+ResNet-34
+98.3
+93.8
+94.3
+100.0
+79.8
+85.7
+DiffusionDriveTF (Liao et al. 2025) CVPR 2025
+ResNet-34
+98.2
+96.2
+94.7
+100.0
+82.2
+88.1
+WoTETF (Li et al. 2025b)
+ICCV 2025
+ResNet-34
+98.5
+96.8
+94.9
+99.9
+81.9
+88.3
+MeanFuserLTF (Wang et al. 2026)
+CVPR 2026
+ResNet-34
+98.6
+97.0
+95.0
+100.0
+82.8
+89.0
+VADv2 (Jiang et al. 2026)
+ICLR 2026
+ResNet-34
+98.3
+97.4
+95.7
+100.0
+82.3
+89.3
+DriveSuprim (Yao et al. 2026)
+AAAI 2026
+ResNet-34
+97.8
+97.3
+93.6
+100.0
+86.7
+89.9
+OursLTF
+–
+ResNet-34 98.49
+97.40
+95.13
+99.99
+84.87
+89.98
+OursTF
+–
+ResNet-34 98.42
+98.01
+95.19
+99.99
+85.36
+90.58
+Table 1: NAVSIM v1 navtest mean results under a single official benchmark version; baselines use official results. Standard
+deviations are reported in the supplementary material.
+Method
+NC↑DAC↑DDC↑TLC↑
+EP↑
+TTC↑LK↑
+HC↑
+EC↑EPDMS↑
+Ego Status MLP (Dauner et al. 2024)
+93.1
+77.9
+92.7
+99.6
+86.0
+91.5
+89.4
+98.3
+85.4
+64.0
+TransFuserTF (Chitta et al. 2023)
+96.9
+89.9
+97.8
+99.7
+87.1
+95.4
+92.7
+98.3
+87.2
+76.7
+DriveSuprim (Yao et al. 2026)
+97.5
+96.5
+99.4
+99.6
+88.4
+96.6
+95.5
+98.3
+77.0
+83.1
+DiffusionDriveTF (Liao et al. 2025)
+98.2
+96.3
+99.4
+99.8
+87.4
+97.4
+97.0
+98.3
+87.7
+88.3
+MeanFuserLTF (Wang et al. 2026)
+98.3
+97.2
+99.6
+99.8
+87.6
+97.4
+97.3
+98.3
+88.2
+89.5
+OursLTF
+98.61 98.13
+99.25
+99.80 87.27 97.96 96.13 98.26 85.17
+89.70
+OursTF
+98.38 97.94
+99.41
+99.76 88.75 97.75 96.86 98.32 86.54
+90.14
+Table 2: NAVSIM v2 navtest mean results under a single official benchmark version; baselines use official results. Standard
+deviations are reported in the supplementary material.
+Method
+Traffic SR↑
+EP↑PDMS∗↑
+VADv2 (Jiang et al. 2026)
+Log
+77.08 48.00
+63.81
+VADv2 (Jiang et al. 2026)
+IDM 73.66 46.71
+60.98
+DiffusionDrive (Liao et al. 2025)
+Log
+86.24 45.09
+69.83
+DiffusionDrive (Liao et al. 2025) IDM 85.85 43.88
+68.22
+MeanFuser (Wang et al. 2026)
+Log
+87.25 55.90
+73.81
+MeanFuser (Wang et al. 2026)
+IDM 87.15 55.60
+73.28
+ManeuverFlow
+Log
+87.48 60.68
+75.19
+ManeuverFlow
+IDM 87.92 60.89
+74.58
+Table 3: Closed-loop results on all WorldEngine scenarios.
+listed NC, DAC, and TTC at 98.61, 98.13, and 97.96 (Ta-
+ble 2). Thus, the v1-trained checkpoints remain competitive
+under v2’s broader metric suite without optimization for its
+additional v2 evaluation factors.
+Closed-loop results in WorldEngine.
+WorldEngine pro-
+vides 3DGS-rendered camera observations but no LiDAR
+input; Table 3 therefore evaluates only ManeuverFlow-LTF.
+Under Log and IDM, it obtains the highest listed PDMS∗
+values, 75.19 and 74.58, respectively. Its EP values of 60.68
+and 60.89 are also the highest listed, while SR reaches 87.48
+and 87.92. These results complement NAVSIM with closed-
+loop evidence for ego progress and composite performance
+under replayed and reactive traffic.
+4.3
+Ablation Studies
+Table
+4
+decomposes
+the
+Hypothesize–Verify–Improve
+pipeline under standard TF; MCur
+4
+removes the predicted-
+future branch, while MKM
+4
+changes only the prior.
+Hypothesize.
+Candidate-based
+MeanFlow
+improves
+PDMS by 2.13 points. M0 →M1 jointly adds M-GMP-8
+and the parameter-matched Dense-XL generator for another
+1.77 points; because both prior support and capacity change,
+this is stage-level evidence. With M-GMP-8 fixed, M3F adds
+0.44 PDMS over the parameter-count-matched Dense-XL
+control, so total parameter count alone does not explain the
+gain. In the complete pipeline, M-GMP-8 exceeds KMeans-
+8 by 0.54 PDMS and 0.83 EP, supporting maneuver-aligned
+prior organization. Appendix Figs. S1–S2 provide the corre-
+sponding prior visualizations.
+Verify. Before refinement, predicted-future evidence adds
+1.58 PDMS and 2.29 EP at a fixed candidate budget. The gain
+persists after ECFR: relative to MCur
+4
+, the complete model
+adds 0.55 PDMS and 0.86 EP under matched protocols for
+candidate generation and evaluator supervision.
+Improve. ECFR adds 0.65 PDMS and 0.95 EP to the future-
+aware pipeline, with NC decreasing by 0.10 points, and also
+improves the current-only variant. Future-aware verification
+and ECFR yield complementary but sub-additive gains.
+M-GMP recall and proposal-budget sensitivity.
+Table 5
+reports M-GMP recall@k, which measures whether the tar-
+get component appears among the top-k routed components.
+
+
+Model
+Components
+Prior
+Flow
+Evidence
+Refiner
+NC↑
+EP↑
+PDMS↑
+Base
+Direct planner
+–
+–
+–
+–
+97.73 79.24
+84.01
+M0
+Candidate-based MeanFlow
+Single
+Dense MF
+Cur.
+–
+97.21 81.05
+86.14
+M1
++ M-GMP and Dense-XL
+M-GMP-8
+Dense-XL
+Cur.
+–
+97.02 81.63
+87.91
+M2
++ maneuver-routed flow
+M-GMP-8
+M3F
+Cur.
+–
+97.64 82.12
+88.35
+M3
++ future evidence
+M-GMP-8
+M3F
+Cur.+Fut.
+–
+98.52 84.41
+89.93
+MCur
+4
+w/o future branch
+M-GMP-8
+M3F
+Cur.
+ECFR
+98.27 84.50
+90.03
+MKM
+4
+KMeans prior control
+KMeans-8
+M3F
+Cur.+Fut.
+ECFR
+98.42 84.53
+90.04
+M4
+Complete model
+M-GMP-8
+M3F
+Cur.+Fut.
+ECFR
+98.42 85.36
+90.58
+Table 4: Cumulative ablations with matched full-pipeline controls on NAVSIM v1 navtest (standard TF). Dense-XL is parameter-
+count matched to M3F; MCur
+4
+disables the predicted-future branch, while MKM
+4
+replaces M-GMP-8 with KMeans-8. Cur./Fut.
+= current/predicted-future BEV evidence.
+Figure 5: Six urban scenes with the top-three maneuver components shown in paired BEV and front-view projections.
+Component routing
+PDMS↑at proposal budget N
+k
+M-GMP target
+recall@k (%)
+8
+16
+32
+64
+128
+1
+87.20
+89.85
+90.04
+90.26
+90.33
+90.42
+2
+96.46
+90.04
+90.15
+90.43
+90.54
+90.59
+3
+98.30
+90.06
+90.28
+90.41
+90.58†
+90.56
+4
+99.21
+90.10
+90.27
+90.42
+90.57
+90.67
+M3F activ. bound (MB) ↓
+1.11
+2.07
+3.99
+7.82
+15.50
+Proposal FPS ↑
+66.46
+63.69
+58.62
+53.86
+47.12
+Table 5: M-GMP routing and proposal-budget sensitivity on
+NAVSIM v1 navtest; FPS: perception–M3F; †: default.
+Recall reaches 98.30% at k = 3 and changes marginally
+thereafter. With k = 3, PDMS saturates beyond N = 64 as
+the activation bound rises and Proposal FPS falls, supporting
+N = 64 as a balanced operating point.
+Taken together, these ablations support ManeuverFlow’s
+intended lifecycle: maneuver routing organizes a compact
+candidate set, shared-future evidence improves planning per-
+formance, and evidence-conditioned ECFR improves final-
+plan quality through maneuver-matched refinement.
+4.4
+Qualitative Analysis
+Maneuver-structured hypothesis generation.
+Figure 5
+shows M3F samples sharing a coherent motion tendency
+within each routed M-GMP component while spanning dis-
+tinct, road-aligned lane and intersection alternatives across
+components. In these examples, the hypotheses remain visu-
+ally consistent with drivable space and surrounding traffic, il-
+lustrating component-conditioned trajectory alternatives for
+downstream evaluation. Across the paired BEV and camera
+views, their separation remains legible around lane choices
+and intersections, making the routed maneuver structure di-
+rectly inspectable. See the appendix for additional cross-
+method comparisons and visualizations of the maneuver-
+component priors before trajectory transport.
+5
+Conclusion
+We present ManeuverFlow, an explicit Hypothesize–Verify–
+Improve planner that maintains maneuver-indexed hypothe-
+ses throughout generation, evaluation, and refinement.
+M-GMP allocates a fixed proposal budget across scene-
+relevant motion components, and M3F transports their sam-
+ples into scene-adaptive, maneuver-routed hypotheses in one
+step. A shared predicted future BEV field provides path-
+specific evidence for Metric Prism scoring and ECFR’s local
+Frenet refinement. Refined and retained hypotheses re-query
+the shared field and are jointly re-scored for final selection.
+Complementary non-reactive and closed-loop evaluations on
+NAVSIM and WorldEngine, respectively, demonstrate the
+effectiveness of the integrated planner.
+
+
+References
+Cao, W.; Hallgarten, M.; Li, T.; Dauner, D.; Gu, X.; Wang,
+C.; Miron, Y.; Aiello, M.; Li, H.; Gilitschenski, I.; Ivanovic,
+B.; Pavone, M.; Geiger, A.; and Chitta, K. 2025. Pseudo-
+Simulation for Autonomous Driving. In Proceedings of the
+9th Conference on Robot Learning, volume 305 of Proceed-
+ings of Machine Learning Research, 4709–4722.
+Chai, Y.; Sapp, B.; Bansal, M.; and Anguelov, D. 2020. Mul-
+tiPath: Multiple Probabilistic Anchor Trajectory Hypotheses
+for Behavior Prediction. In Proceedings of the Conference
+on Robot Learning, volume 100 of Proceedings of Machine
+Learning Research, 86–99. PMLR.
+Chitta, K.; Prakash, A.; Jaeger, B.; Yu, Z.; Renz, K.; and
+Geiger, A. 2023. TransFuser: Imitation with Transformer-
+Based Sensor Fusion for Autonomous Driving.
+IEEE
+Transactions on Pattern Analysis and Machine Intelligence,
+45(11): 12878–12895.
+Dauner, D.; Hallgarten, M.; Li, T.; Weng, X.; Huang, Z.;
+Yang, Z.; Li, H.; Gilitschenski, I.; Ivanovic, B.; Pavone, M.;
+Geiger, A.; and Chitta, K. 2024.
+NAVSIM: Data-Driven
+Non-Reactive Autonomous Vehicle Simulation and Bench-
+marking.
+In Advances in Neural Information Processing
+Systems, volume 37, 28706–28719.
+Geng, Z.; Deng, M.; Bai, X.; Kolter, J. Z.; and He, K. 2025.
+Mean Flows for One-Step Generative Modeling. In Advances
+in Neural Information Processing Systems, volume 38.
+Geng, Z.; Lu, Y.; Wu, Z.; Shechtman, E.; Kolter, J. Z.;
+and He, K. 2026.
+Improved Mean Flows: On the Chal-
+lenges of Fastforward Generative Models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 30467–30476.
+Hu, A.; Corrado, G.; Griffiths, N.; Murez, Z.; Gurau, C.; Yeo,
+H.; Kendall, A.; Cipolla, R.; and Shotton, J. 2022a. Model-
+Based Imitation Learning for Urban Driving. In Advances in
+Neural Information Processing Systems, volume 35, 20703–
+20716.
+Hu, S.; Chen, L.; Wu, P.; Li, H.; Yan, J.; and Tao, D. 2022b.
+ST-P3: End-to-End Vision-Based Autonomous Driving via
+Spatial-Temporal Feature Learning. In Computer Vision –
+ECCV 2022, volume 13698 of Lecture Notes in Computer
+Science, 533–549.
+Hu, Y.; Yang, J.; Chen, L.; Li, K.; Sima, C.; Zhu, X.; Chai,
+S.; Du, S.; Lin, T.; Wang, W.; Lu, L.; Jia, X.; Liu, Q.; Dai, J.;
+Qiao, Y.; and Li, H. 2023. Planning-Oriented Autonomous
+Driving. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 17853–
+17862.
+Huang, Z.; Karkus, P.; Ivanovic, B.; Chen, Y.; Pavone, M.;
+and Lv, C. 2024. DTPP: Differentiable Joint Conditional
+Prediction and Cost Evaluation for Tree Policy Planning in
+Autonomous Driving. In IEEE International Conference on
+Robotics and Automation, 6806–6812.
+Huang, Z.; Weng, X.; Igl, M.; Chen, Y.; Cao, Y.; Ivanovic, B.;
+Pavone, M.; and Lv, C. 2025. Gen-Drive: Enhancing Diffu-
+sion Generative Driving Policies with Reward Modeling and
+Reinforcement Learning Fine-Tuning. In IEEE International
+Conference on Robotics and Automation, 3445–3451.
+Jia, X.; Wu, P.; Chen, L.; Xie, J.; He, C.; Yan, J.; and Li,
+H. 2023. Think Twice Before Driving: Towards Scalable
+Decoders for End-to-End Autonomous Driving. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, 21983–21994.
+Jiang, B.; Chen, S.; Gao, H.; Liao, B.; Zhang, Q.; Liu, W.;
+and Wang, X. 2026. VADv2: End-to-End Vectorized Au-
+tonomous Driving via Probabilistic Planning. In The Four-
+teenth International Conference on Learning Representa-
+tions.
+Jiang, B.; Chen, S.; Xu, Q.; Liao, B.; Chen, J.; Zhou, H.;
+Zhang, Q.; Liu, W.; Huang, C.; and Wang, X. 2023. VAD:
+Vectorized Scene Representation for Efficient Autonomous
+Driving. In Proceedings of the IEEE/CVF International Con-
+ference on Computer Vision (ICCV), 8340–8350.
+Karnchanachari, N.; Geromichalos, D.; Tan, K. S.; Li, N.;
+Eriksen, C.; Yaghoubi, S.; Mehdipour, N.; Bernasconi, G.;
+Fong, W. K.; Guo, Y.; and Caesar, H. 2024.
+Towards
+Learning-Based Planning: The nuPlan Benchmark for Real-
+World Autonomous Driving. In IEEE International Confer-
+ence on Robotics and Automation, 629–636.
+Li, Q.; Jia, X.; Wang, S.; and Yan, J. 2024a. Think2Drive:
+Efficient Reinforcement Learning by Thinking with Latent
+World Model for Autonomous Driving (in CARLA-V2). In
+Computer Vision – ECCV 2024, volume 15103 of Lecture
+Notes in Computer Science, 142–158.
+Li, T.; Chen, L.; Wang, C.; Liu, H.; Chitta, K.; Yang, Z.;
+Lu, Y.; Ye, N.; Qiu, Y.; Wang, Y.; Zou, L.; Peng, J.; Pan, J.;
+Su, Z.; Bursuc, A.; Li, S. E.; Geiger, A.; Su, P.; and Li, H.
+2026. World Engine: Towards the Era of Post-Training for
+Autonomous Driving. arXiv:2606.19836.
+Li, Y.; Fan, L.; He, J.; Wang, Y.; Chen, Y.; Zhang, Z.; and
+Tan, T. 2025a. Enhancing End-to-End Autonomous Driving
+with Latent World Model. In International Conference on
+Learning Representations.
+Li, Y.; Wang, Y.; Liu, Y.; He, J.; Fan, L.; and Zhang, Z. 2025b.
+End-to-End Driving with Online Trajectory Evaluation via
+BEV World Model. In Proceedings of the IEEE/CVF In-
+ternational Conference on Computer Vision (ICCV), 27137–
+27146.
+Li, Z.; Li, K.; Wang, S.; Lan, S.; Yu, Z.; Ji, Y.; Li, Z.; Zhu,
+Z.; Kautz, J.; Wu, Z.; Jiang, Y.-G.; and Alvarez, J. M. 2024b.
+Hydra-MDP: End-to-End Multimodal Planning with Multi-
+Target Hydra-Distillation. arXiv:2406.06978.
+Liao, B.; Chen, S.; Yin, H.; Jiang, B.; Wang, C.; Yan, S.;
+Zhang, X.; Li, X.; Zhang, Y.; Zhang, Q.; and Wang, X. 2025.
+DiffusionDrive: Truncated Diffusion Model for End-to-End
+Autonomous Driving.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 12037–12047.
+Lipman, Y.; Chen, R. T. Q.; Ben-Hamu, H.; Nickel, M.; and
+Le, M. 2023. Flow Matching for Generative Modeling. In
+International Conference on Learning Representations.
+Liu, X.; Gong, C.; and Liu, Q. 2023. Flow Straight and Fast:
+Learning to Generate and Transfer Data with Rectified Flow.
+In International Conference on Learning Representations.
+
+
+Luo, G.; Cole, F.; Zhang, S.; Wan, Y.; Lu, Y.; and Sun, J.
+2026. Flow Matching for Multimodal Distributions. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), 23260–23271.
+Shi, S.; Jiang, L.; Dai, D.; and Schiele, B. 2022. Motion
+Transformer with Global Intention Localization and Local
+Movement Refinement. In Advances in Neural Information
+Processing Systems, volume 35, 6531–6543.
+Sun, W.; Lin, X.; Shi, Y.; Zhang, C.; Wu, H.; and Zheng,
+S. 2025. SparseDrive: End-to-End Autonomous Driving via
+Sparse Scene Representation. In 2025 IEEE International
+Conference on Robotics and Automation (ICRA), 8795–
+8801.
+Treiber, M.; Hennecke, A.; and Helbing, D. 2000. Congested
+Traffic States in Empirical Observations and Microscopic
+Simulations. Physical Review E, 62(2): 1805–1824.
+Wang, J.; Zheng, Y.; Liu, X.; Xing, Z.; Li, P.; Ma, K.; Ye,
+H.; Chen, G.; Li, G.; Chen, L.; Xia, Z.; and Zhang, Q. 2026.
+MeanFuser: Fast One-Step Multi-Modal Trajectory Genera-
+tion and Adaptive Reconstruction via MeanFlow for End-to-
+End Autonomous Driving. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 17884–17893.
+Wang, Y.; He, J.; Fan, L.; Li, H.; Chen, Y.; and Zhang, Z.
+2024. Driving into the Future: Multiview Visual Forecasting
+and Planning with World Model for Autonomous Driving.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), 14749–14759.
+Xing, Z.; Zhang, X.; Hu, Y.; Jiang, B.; He, T.; Zhang, Q.;
+Long, X.; and Yin, W. 2025. GoalFlow: Goal-Driven Flow
+Matching for Multimodal Trajectories Generation in End-to-
+End Autonomous Driving. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), 1602–1611.
+Yang, P.; Lu, B.; Xia, Z.; Han, C.; Gao, Y.; Zhang, T.; Zhan,
+K.; Lang, X.; Zheng, Y.; and Zhang, Q. 2026. WorldRFT: La-
+tent World Model Planning with Reinforcement Fine-Tuning
+for Autonomous Driving. Proceedings of the AAAI Confer-
+ence on Artificial Intelligence, 40(14): 11649–11657.
+Yang, Y.; Mei, J.; Ma, Y.; Du, S.; Chen, W.; Qian, Y.; Feng, Y.;
+and Liu, Y. 2025. Driving in the Occupancy World: Vision-
+Centric 4D Occupancy Forecasting and Planning via World
+Models for Autonomous Driving. Proceedings of the AAAI
+Conference on Artificial Intelligence, 39(9): 9327–9335.
+Yao, W.; Li, Z.; Lan, S.; Wang, Z.; Sun, X.; Alvarez, J. M.;
+and Wu, Z. 2026. DriveSuprim: Towards Precise Trajectory
+Selection for End-to-End Planning. Proceedings of the AAAI
+Conference on Artificial Intelligence, 40(14): 11910–11918.
+Zhang, J.; Fu, Z.; Xu, Z.; Dai, W.; Liu, Q.; and Wang, Y. 2026.
+ResWorld: Temporal Residual World Model for End-to-End
+Autonomous Driving. In The Fourteenth International Con-
+ference on Learning Representations.
+Zheng, W.; Song, R.; Guo, X.; Zhang, C.; and Chen, L. 2024.
+GenAD: Generative End-to-End Autonomous Driving. In
+Computer Vision – ECCV 2024, volume 15165 of Lecture
+Notes in Computer Science, 87–104.
+Zheng, Y.; Liang, R.; Zheng, K.; Zheng, J.; Mao, L.; Li,
+J.; Gu, W.; Ai, R.; Li, S. E.; Zhan, X.; and Liu, J. 2025a.
+Diffusion-Based Planning for Autonomous Driving with
+Flexible Guidance. In The Thirteenth International Con-
+ference on Learning Representations.
+Zheng, Y.; Yang, P.; Xing, Z.; Zhang, Q.; Zheng, Y.; Gao,
+Y.; Li, P.; Zhang, T.; Xia, Z.; Jia, P.; Lang, X.; and Zhao, D.
+2025b. World4Drive: End-to-End Autonomous Driving via
+Intention-aware Physical Latent World Model. In Proceed-
+ings of the IEEE/CVF International Conference on Computer
+Vision (ICCV), 28632–28642.
+
+
+Appendix
+1
+Hypothesize: Operational Maneuver Prior
+and Routed Transport
+1.1
+Diff-Space and Prior Construction
+For an expert trajectory anchored at planning step n, τn =
+{(pn,h, ψn,h)}Hτ
+h=1 in the current ego frame, let Hτ = 8,
+pn,h = (xn,h, yn,h)T ∈R2, and pn,0 = 0. We first express
+each waypoint as an incremental displacement,
+∆pn,h = pn,h −pn,h−1.
+(S1)
+The fixed affine calibration A then maps this displacement
+to the normalized space shared with the trajectory generator:
+∆epn,h = A(∆pn,h).
+(S2)
+Appending the raw heading to the normalized displacement
+gives the three-dimensional pre-embedding code
+eΓ(τn)h = [∆epT
+n,h, ψn,h]T.
+(S3)
+Finally, the cyclic heading embedding yields the four-
+dimensional M3F code
+Γ(τn)h = g
+
+eΓ(τn)h
+
+= [∆epT
+n,h, sin ψn,h, cos ψn,h].
+(S4)
+The calibration of A remains fixed throughout. M-GMP fits
+its factorized Gaussian in the normalized pre-embedding
+space eΓ(τn) ∈RHτ ×3; g yields the M3F code Γ(τn) ∈
+RHτ ×4. Thus the main-paper states are xgt
+n = Γ(τ gt
+n ) and
+en,i = g(en,i).
+For prior construction, the Maneuver Gaussian Mixture
+Prior (M-GMP) has M = 8 components, is fitted to expert
+trajectories from navtrain and assigns each trajectory to
+a rule-defined motion family mrule
+n
+= Ψ(ξn) using ξn =
+(Dn, ¯ψn, ∆¯sn). The first-to-last displacement magnitude is
+Dn = ∥pn,Hτ −pn,1∥2.
+(S5)
+We summarize the signed turning tendency by the horizon-
+mean heading in degrees,
+¯ψn = 180
+πHτ
+Hτ
+X
+h=1
+ψn,h.
+(S6)
+For the speed-trend proxy, the length of interval h is
+ℓn,h = ∥pn,h+1 −pn,h∥2,
+h = 0, . . . , 7.
+(S7)
+The difference between the late and early four-step mean
+interval lengths is defined as
+∆¯sn = 1
+4
+ 7
+X
+h=4
+ℓn,h −
+3
+X
+h=0
+ℓn,h
+!
+.
+(S8)
+Here, Dn is the first-to-last distance, ¯ψn is mean heading in
+degrees, and ℓn,0 includes the ego-to-first-waypoint interval.
+The symmetric ∆¯sn compares mean step lengths over equal
+early and late windows, so it is a speed-trend proxy rather
+than physical acceleration. We fix ηs = 0.25 m per interval;
+Table S1 gives the hierarchy, with Dn ≥5 m for every
+non-stop motion family in the prior.
+The thresholds in Table S1 use degrees. The Gaussian
+heading variables ψ, µψ, and σψ, together with wrap(·) be-
+low, use radians.
+The component names form the operational trajectory-
+space vocabulary for “maneuver” and “intention” in the
+main paper. Their meaning is grounded in measurable
+displacement, turning, and speed-trend tendencies rather
+than in a separate lane-topology annotation protocol. Thus,
+“intention-specific” denotes conditioning on a motion-level
+planning representation: “Accelerating”/“Decelerating” use
+∆¯sn, while lane-change/turn names use mean heading.
+For each family and horizon step, we estimate the displace-
+ment mean µp
+m,h, its diagonal positive standard deviation
+σp
+m,h, and the circular heading location and positive scale
+(µψ
+m,h, σψ
+m,h) from its assigned expert trajectories. A sample
+from component m has normalized displacement
+∆epi,m,h = µp
+m,h + σp
+m,h ⊙ϵp
+i,h.
+(S9)
+The corresponding heading sample is
+bψi,m,h = µψ
+m,h + σψ
+m,hϵψ
+i,h.
+(S10)
+Together they form the sampled pre-embedding state
+ei,m,h = [∆epT
+i,m,h, bψi,m,h]T.
+(S11)
+Applying the same cyclic map g gives the M3F source code
+ei,m,h = g(ei,m,h)
+= [∆epT
+i,m,h, sin bψi,m,h, cos bψi,m,h].
+(S12)
+Here, ϵp
+i,h ∼N(0, I2) and ϵψ
+i,h ∼N(0, 1); barred scales
+denote fixed positive component standard deviations. Rules
+fix component identity; their statistics are estimated from
+the assigned experts and then held fixed. For a scene-routed
+component m = mn,i, stacking the waypoint states over
+h = 1, . . . , Hτ gives the main-paper source tensors en,i =
+[ei,m,h]Hτ
+h=1 and en,i = [ei,m,h]Hτ
+h=1; g acts pointwise.
+Figures S1 and S2 visualize, on matched axes, the
+two source priors compared in the complete-pipeline ab-
+lation: the KMeans-8 control and the rule-aligned M-GMP-8
+used by ManeuverFlow. Both figures describe pre-transport
+source organization; the downstream M3F and the remaining
+pipeline are matched. Together, they are the two matched pre-
+transport prior visualizations referenced in the main paper as
+“Appendix Figs. S1–S2.”
+Evidence role of the overview schematic.
+Main-paper
+Fig. 1(a) is a mechanism-level schematic of the concentra-
+tion risk for query candidates without explicit mode structure,
+rather than a measured collapse rate for a particular baseline.
+The empirical evaluation does not infer an effect from the
+schematic. It evaluates the structured alternative through the
+stage-level M0 →M1 change, the parameter-count-matched
+M1 →M2 generator control, the matched MKM
+4
+→M4
+prior control, and the target-component Recall@k/proposal-
+budget analysis in the main paper. Figures S1–S2 show the
+
+
+matched source-prior organization, while the main-paper
+qualitative figure and Fig. S3 show routed post-transport be-
+havior. The schematic therefore motivates the failure mode;
+the quantitative controls and diagnostics test the proposed
+response to it.
+1.2
+Soft Component Association and Training
+Routes
+After fitting, the component-normalized diff-space distance
+for each expert–component pair is
+dn,m =
+1
+Hτ
+Hτ
+X
+h=1
+(∆epn,h −µp
+m,h) ⊘σp
+m,h
+
+2
+2
++
+wrap2(ψn,h −µψ
+m,h)
+(σψ
+m,h)2
+#
+,
+(S13)
+where ⊘is element-wise division and wrap(·) ∈(−π, π].
+Normalizing the component similarities gives the soft ma-
+neuver supervision target
+yman
+n,m =
+exp(−dn,m)
+PM−1
+ℓ=0 exp(−dn,ℓ)
+.
+(S14)
+Its highest-similarity component defines the discrete match
+used for routing:
+m⋆
+n = arg max
+m yman
+n,m = arg min
+m dn,m.
+(S15)
+The rule label mrule
+n
+only constructs and names the compo-
+nents. The distance-based component similarity target yman
+n
+supervises πman
+n
+; m⋆
+n defines the route used by the generation
+objective and the Recall@k target for the Maneuver-Mixture
+MeanFlow Field (M3F). The rule and matched labels serve
+distinct roles and are not assumed identical per trajectory.
+Stage-2 candidates are generated by the current model using
+its predicted πman
+n
+(Sec. 3); deployment allocation uses the
+final model’s prediction for the current scene. Accordingly,
+the Recall@k value in the main paper measures whether the
+distance-matched fitted component m⋆
+n is contained in the
+predicted top-k set. It therefore quantifies scene-conditioned
+support coverage for the operational intention representation;
+it does not measure classification accuracy against separate
+human-labeled semantic maneuver annotations.
+ID Motion family
+Condition
+Count (%)
+0 Stop/Crawl
+Dn < 5
+12,044 (11.66)
+1 Cruise
+| ¯ψn| ≤4.5◦, |∆¯sn| ≤ηs
+8,695 (8.42)
+2 Accelerating
+| ¯ψn| ≤4.5◦, ∆¯sn > ηs
+17,339 (16.79)
+3 Decelerating
+| ¯ψn| ≤4.5◦,
+∆¯sn < −ηs
+24,501 (23.72)
+4 Left lane
+change
+4.5◦< ¯ψn ≤13◦
+9,330 (9.03)
+5 Left turn
+¯ψn > 13◦
+18,174 (17.60)
+6 Right lane
+change
+−13◦≤¯ψn < −4.5◦
+5,422 (5.25)
+7 Right turn
+¯ψn < −13◦
+7,783 (7.54)
+Table S1: Rule-defined, trajectory-derived M-GMP maneu-
+ver families and their occupancy in the NAVSIM navtrain
+data used for prior construction.
+M3F interval sampling.
+The distance-matched compo-
+nent m⋆
+n also determines the M3F training route. For each
+scene, we independently sample six source proposals with
+mn,i = m⋆
+n; all six share one interval pair (r, t). We sample
+this pair from three regimes:
+(r, t) =
+
+
+
+(0, 1),
+with probability 0.25,
+(q, q),
+with probability 0.375,
+(q(1), q(2)),
+with probability 0.375.
+(S16)
+Here, q = sigmoid(ξ), ξ ∼N(−0.4, 1), and q1, q2 are
+independent draws, with q(1) = min(q1, q2) and q(2) =
+max(q1, q2). The FP32 JVP uses the boundary-field tangent
+and stop-gradient JVP correction defined in the main paper.
+2
+Verify: Shared-Future Evidence and
+Factorized Ranking
+Notation bridge.
+The main paper uses Bn as an abstract
+shared BEV-map interface. Here we expose its implemen-
+tation views: F hi
+n is the high-resolution current map, F lo
+n is
+the low-resolution grid consumed by the world model, and
+Btok
+n
+(defined explicitly in Eq. (S33)) is its projected token
+view used by the scene/agent decoder and M3F. These are
+encoder views derived from the same current observation,
+not additional sensor inputs.
+2.1
+Future-Feature Targets
+Given F lo
+n
+and cSN
+n , the world model predicts absolute
+and residual features at 1–4 s. At 2 Hz, the detached
+targets use offsets +2, +4, +6, +8; each is inverse-SE(2)
+warped from its local ego frame to the current frame using
+recorded poses. Bilinear grid_sample uses zero padding,
+align_corners=True, and an overlap mask for missing
+or out-of-view cells. The first residual is relative to F lo
+n and
+later residuals are between consecutive aligned targets. Fu-
+ture observations remain confined to this stop-gradient path
+and are unavailable at deployment.
+2.2
+Trajectory-Guided Evidence Queries
+For current evidence, F hi
+n is pooled to the future-field grid
+and projected into reader space:
+F
+cur
+n
+= Conv1×1
+ Pool(F hi
+n )
+
+.
+(S17)
+Let (pn,i,h, ψn,i,h) be a candidate waypoint and δa a vehicle-
+frame footprint anchor from the corresponding current or
+future query set. Its location in the current ego frame is
+qn,i,h,a = pn,i,h + R2D(ψn,i,h)δa,
+(S18)
+where R2D(ψ) is the planar rotation matrix. The map
+Π : R2 →[−1, 1]2 converts this location to normalized
+BEV coordinates. Current evidence is obtained by bilinear
+sampling at the projected BEV coordinates,
+ecur
+n,i,h,a = Bil
+
+F
+cur
+n , Π(qn,i,h,a)
+
+.
+(S19)
+At waypoint h ∈{2, 4, 6, 8}, future evidence queries abso-
+lute/residual state j = h/2 (1–4 s); out-of-support samples
+are masked to zero. The reader fuses these path-aligned fea-
+tures with trajectory, ego-state, and route embeddings to form
+En,i. Candidates therefore share one predicted future field
+while retrieving path-specific evidence.
+
+
+−0.5
+0.0
+0.5
+Mean normalized Δx
+−0.25
+0.00
+0.25
+Mean normalized Δy
+a
+Diff-space distribution
+b
+Decoded physical trajectories
+−10
+10
+C0
+C1
+C2
+−10
+10
+C3
+C4
+C5
+0
+40
+−10
+10
+C6
+0
+40
+C7
+Line style
+draw
+mean
+Forward x (m)
+Lateral y (m)
+Figure S1: KMeans-8 control prior before M3F transport.
+(a) KMeans components in mean normalized displacement
+space; crosses mark component centers. (b) Decoded source
+trajectories for components C0–C7.
+−0.5
+0.0
+0.5
+Mean normalized Δx
+−0.25
+0.00
+0.25
+Mean normalized Δy
+a
+Diff-space distribution
+b
+Decoded physical trajectories
+−10
+10
+Stop
+Cruise
+Accel.
+−10
+10
+Decel.
+L lane
+L turn
+0
+40
+−10
+10
+R lane
+0
+40
+R turn
+Line style
+draw
+mean
+Forward x (m)
+Lateral y (m)
+Figure S2: Rule-aligned M-GMP-8 prior used by Maneu-
+verFlow before M3F transport. (a) Expert trajectories orga-
+nized by the trajectory-derived maneuver families in Table S1;
+crosses mark component means. (b) Decoded source trajec-
+tories for the eight components.
+2.3
+Factor-Wise Metric Prediction and Ranking
+For a deployment-sized set of N = 64 candidates, Metric
+Prism forms one 512-D score token per trajectory. A shared
+four-layer set-scoring stack jointly updates the N tokens, and
+token i cross-attends to its associated trajectory evidence
+En,i. Denote the resulting token by qS
+n,i. Five factor-specific
+scalar heads, shared across candidate positions, operate over
+the factor index set
+JPDM = {NC, DAC, EP, TTC, Comf}.
+(S20)
+For each f ∈JPDM, the corresponding head predicts
+sf
+n,i = Df(qS
+n,i) ∈(0, 1).
+(S21)
+Here Df includes its terminal sigmoid. The heads are factor-
+specific; the candidate representation remains shared across
+factor heads and set-contextualized.
+During Stage 2, NAVSIM v1 evaluator targets yn,i ∈
+[0, 1]5 supervise factor predictions for the N = 64 candi-
+dates in each training set (Sec. 3):
+Lscore =
+N
+X
+i=1
+X
+f∈JPDM
+ℓf
+
+sf
+n,i, yf
+n,i
+
+.
+(S22)
+The weighted binary cross-entropy (BCE) and logit regular-
+ization included in ℓf are
+ℓf(s, y) = 10
+N
+
+αfwf(y) BCE(s, eyf) + 10−5
+5
+logit(s)2
+
+,
+(S23)
+where BCE(s, t) = −t log s−(1−t) log(1−s). In the factor
+order of Eq. (S20), α = (5, 5, 5, 5, 2). The smoothed target
+is eyf = (1 −εf)uf(y) + εf/2, with uNC(y) = 1[y > 0.5]
+and uf(y) = y for the other factors; εNC = 0.02 and
+εf = 0.01 otherwise. NC sample weights are 1.7, 3.1,
+and 1.0 for raw labels 0, 0.5, and 1, respectively. The re-
+maining weights are wDAC(y) = 1.8 −0.8y, wEP(y) = 1,
+wTTC(y) = 1.75 −0.75y, and wComf(y) = 4.5 −3.5y. The
+factor weights are summed, and the loss is averaged over
+candidates and the mini-batch. The leading factor 10 is the
+score-loss scale within Lverify.
+At inference, the five predictions define a scalar ranking
+score through the fixed log-PDM composition:
+Sn,i = log(sNC
+n,i + ϵ) + log(sDAC
+n,i
++ ϵ)
++ log
+ 5sEP
+n,i + 5sTTC
+n,i
++ 2sComf
+n,i
++ ϵ
+
+,
+(S24)
+
+
+with ϵ = 10−6. The conventional 1/12 normalization is
+omitted because its candidate-independent log offset pre-
+serves the ranking.
+The same trajectory evidence conditions ECFR, whose
+supervision is defined next.
+3
+Improve: Candidate Supervision and
+Frenet Refinement
+3.1
+Stage-2 Candidates and Supervision
+During Stage 2, all inference-time modules are jointly opti-
+mized. The current model generates a fresh N = 64 candi-
+date set for each training scene. Metric Prism and ECFR learn
+from this same set, using evidence extracted by the trainable
+current/future BEV branches. For each navtrain scene, let
+Kn = Top3(πman
+n
+) and renormalize the selected component
+weights within this set:
+eπn,m =
+πman
+n,m
+P
+q∈Kn πman
+n,q
+,
+m ∈Kn.
+(S25)
+Let eπn = (eπn,m)m∈Kn. The route indices are sampled as
+mn,i
+i.i.d.
+∼Cat(eπn),
+i = 1, . . . , N,
+N = 64. (S26)
+Each draw selects an M-GMP source and its M3F expert.
+One-step transport produces T base
+n
+= {τn,i}64
+i=1, with each
+candidate retaining its generating index mn,i. The NAVSIM
+v1 evaluator supplies the corresponding five-factor labels.
+These labels supervise Metric Prism and determine ECFR
+reference trajectories within the same set.
+3.2
+Evaluator Labels and Refinement References
+For each candidate τn,i ∈T base
+n
+, the evaluator returns the
+normalized factor vector
+yn,i = (yNC, yDAC, yEP, yTTC, yComf)n,i ∈[0, 1]5.
+(S27)
+The raw factor labels define the reference-selection score
+Peval(τn,i) := yNC
+n,i yDAC
+n,i
+× 5yEP
+n,i + 5yTTC
+n,i
++ 2yComf
+n,i
+12
+.
+(S28)
+For each base candidate i, the same-maneuver maximizer in
+the current 64-candidate set provides its reference trajectory
+for Frenet refinement:
+τ †
+n,i = arg max
+τn,j∈T base
+n
+mn,j=mn,i
+Peval(τn,j).
+(S29)
+Reference selection considers candidates with finite trajecto-
+ries and scores. The base itself is eligible, so a best-scoring
+base may have a zero residual target. Invalid base–reference
+pairs use zero residual targets and weights.
+3.3
+Base-Local Frenet Targets
+Write the selected reference as τ †
+n,i = {(p†
+n,i,h, ψ†
+n,i,h)}Hτ
+h=1.
+For base waypoint (pn,i,h, ψn,i,h), we compute a centered
+path difference at interior waypoints and a one-sided differ-
+ence at each endpoint, then normalize it to obtain tn,i,h. At
+a degenerate tangent, we use (cos ψn,i,h, sin ψn,i,h); the cor-
+responding normal is nn,i,h = (−ty
+n,i,h, tx
+n,i,h). Projecting
+the reference–base position difference onto the tangent gives
+the longitudinal target
+∆
+s
+n,i,h = (p†
+n,i,h −pn,i,h)Ttn,i,h.
+(S30)
+The projection onto the corresponding normal gives the per-
+waypoint lateral displacement target
+∆
+l
+n,i,h = (p†
+n,i,h −pn,i,h)Tnn,i,h.
+(S31)
+Finally, the wrapped reference–base heading difference de-
+fines the angular target
+∆
+ψ
+n,i,h = wrap(ψ†
+n,i,h −ψn,i,h).
+(S32)
+The inverse map UF applies ep = p+∆st+∆ln and eψ =
+wrap(ψ + ∆ψ) pointwise. Stacking (∆
+s
+n,i,h, ∆
+l
+n,i,h, ∆
+ψ
+n,i,h)
+over h = 1, . . . , Hτ gives the main-paper target ∆
+F
+n,i =
+RF(τn,i, τ †
+n,i) ∈RHτ ×3. The residual loss ℓF is Smooth-L1
+with unit transition, averaged over all Hτ waypoints and the
+longitudinal, lateral, and heading coordinates. The validity
+mask ωn,i is 1 for a finite base–reference pair and 0 other-
+wise. The main-paper Lref averages over valid supervised
+candidates and applies αref = 5; the same normalization is
+used across the mini-batch. Reference selection and residual
+targets are detached.
+Table S2 consolidates the module interfaces and the two-
+stage training protocol before Sec. 4 expands the input, opti-
+mization, and deployment details.
+4
+Reproducibility: Interfaces, Optimization,
+and Deployment
+Table S2(a) summarizes the lifecycle modules and their inter-
+faces, while panel (b) summarizes the two-stage optimiza-
+tion. The following subsections unpack the inputs, shared
+representation, training protocol, and deployment lifecycle
+for both TF and LTF.
+4.1
+Input Construction
+The LiDAR-assisted TransFuser (TF) and camera-only La-
+tent TransFuser (LTF) use current left, front, and right views.
+All are cropped by 28 pixels vertically; the lateral views are
+also cropped by 416 pixels per horizontal side before con-
+catenation and resizing to 256 × 1024. TF rasterizes one
+LiDAR scan over [−32, 32]2 m at 0.25 m per pixel, re-
+tains z > 0.2 m, and clips then divides pixel counts by
+five. LTF replaces LiDAR with a learnable latent template
+Zlat ∈R1×4×256×256, where the leading singleton dimen-
+sion indexes one shared template, the four channels are latent
+features, and the 256 × 256 grid spans the BEV. At runtime,
+the template is broadcast along the batch dimension, yielding
+the actual encoder input shape [B, 4, 256, 256]. Accordingly,
+the LTF ResNet stem uses a convolution-weight tensor of
+shape [64, 4, 7, 7]. Both receive a 4-D command code, 2-D
+velocity, and 2-D acceleration.
+4.2
+Multi-Resolution Perception Interface
+The shared encoder exposes F hi
+n ∈Rb×64×64×64 and a low-
+resolution dynamic map F lo
+n . The former supports auxiliary
+
+
+(a)
+Module architecture
+Lifecycle
+Module
+Structure
+Config. (d, h, dff)
+Output
+Shared
+Perception encoder
+ResNet-34; 4-stage TransFuser; 4 GPT/stage
+h = 8; dff = 4d; dropout 0.1
+F hi
+n , F lo
+n
+Scene/agent decoder
+Two-layer Transformer decoder
+(256, 8, 1024); dropout 0
+–
+Hypothesize
+M3F
+6 DiT–MoE; 8 FFN experts/block
+(256, 4, 1024); attn./FFN 0/0.1
+R8×4
+Verify
+World model
+Recurrent predictor; causal refinement
+–
+4 abs. / 4 res.
+Evidence reader
+Trajectory-guided BEV sampling; SlotPool
+Token 512; h = 8; dropout 0.1
+En,i
+Metric Prism
+4-layer set scorer; 5 factor heads
+(512, 1, 1024); proj./path 0.1/0.2
+5 factors
+Improve
+ECFR
+2-layer Frenet Transformer
+(512, 8, 1024); dropout 0.1
+R8×3
+(b)
+Two-stage optimization
+Setting
+Stage 1
+Stage 2
+Trainable modules
+Perception, auxiliary heads, and M3F
+All inference-time modules under one Stage-2
+objective
+Training candidate source
+–
+Current encoder, maneuver predictor, and M3F; 64
+candidates per scene
+Supervision
+Laux + LM3F only
+Detached future field (1–4 s); NAVSIM v1 factor
+labels and Frenet targets from the same
+64-candidate set
+Loss weights
+1 / 4 / – / –
+1 / 4 / 2 / 2
+Base learning rate
+4×10−4
+2×10−4
+Perception/M3F LR scale
+1.0
+0.2
+Optimizer / weight decay
+AdamW / 0.1
+AdamW / 0.1
+Training data
+NAVSIM navtrain
+NAVSIM navtrain
+Iterations / epoch
+2,660
+2,660
+Training epochs
+60
+10
+Total optimizer updates
+159,600
+26,600
+Global batch / precision
+32 / FP32
+32 / FP32
+Clipping / hardware
+Global norm 1.0 / 4× RTX 4090
+Global norm 1.0 / 4× RTX 4090
+Table S2: Reproducibility overview. (a) Module architecture; outputs omit the batch dimension (interfaces: Sec. 4.2). (b) Two-
+stage optimization; loss weights follow auxiliary / generation / verification / refinement. The score and residual losses include
+their internal scales of 10 and 5, respectively. Stage 2 initializes from Stage 1 and jointly optimizes all inference-time modules;
+the current model generates candidates for evaluator labeling.
+(a)
+NAVSIM v1 navtest
+Metric
+LTF
+TF
+NC
+98.49±0.02 98.42±0.02
+DAC
+97.40±0.03 98.01±0.03
+TTC
+95.13±0.05 95.19±0.05
+Comf. 99.99±0.00 99.99±0.01
+EP
+84.87±0.04 85.36±0.04
+PDMS 89.98±0.06 90.58±0.05
+(b)
+NAVSIM v2 navtest
+Metric
+LTF
+TF
+NC
+98.61±0.02 98.38±0.03
+DAC
+98.13±0.05 97.94±0.03
+DDC
+99.25±0.02 99.41±0.02
+TLC
+99.80±0.01 99.76±0.00
+EP
+87.27±0.01 88.75±0.01
+TTC
+97.96±0.03 97.75±0.02
+LK
+96.13±0.03 96.86±0.06
+HC
+98.26±0.02 98.32±0.02
+EC
+85.17±0.14 86.54±0.07
+EPDMS 89.70±0.06 90.14±0.04
+(c)
+WorldEngine
+Traffic Metric
+ManeuverFlow-LTF
+Log
+SR
+87.48±0.92
+Log
+EP
+60.68±0.91
+Log
+PDMS∗
+75.19±0.85
+IDM
+SR
+87.92±0.87
+IDM
+EP
+60.89±0.81
+IDM
+PDMS∗
+74.58±0.64
+Table S3: Main-result variation, reported as mean ± sample standard deviation across three independently trained checkpoints,
+each averaged over five evaluations. WorldEngine uses log replay (Log) or reactive IDM traffic.
+BEV semantics and pooled current evidence; a 1 × 1 projec-
+tion maps the latter to
+Btok
+n
+:= Flat
+ Conv1×1(F lo
+n )
+
+∈Rb×64×256.
+(S33)
+Here, b is the batch size. Btok
+n
+conditions the scene/agent
+decoder and M3F; F lo
+n drives future prediction, and the reader
+projects pooled current and predicted-future features into its
+query space. The main paper uses Bn as a compact symbol
+for this multi-resolution BEV interface rather than for the
+projected token sequence Btok
+n
+alone.
+4.3
+Two-Stage Optimization
+Table S2(b) summarizes the two stages. Stage 2 initializes the
+trainable model from Stage 1 and uses the 64-candidate su-
+pervision defined in Sec. 3. Perception and M3F continue
+to receive the auxiliary and generation objectives, while
+the shared BEV features support future prediction, scoring,
+
+
+Top-κ
+Exact oracle
+Within 1 pt
+1
+40.14
+75.28
+3
+45.61
+79.57
+5
+48.14
+81.16
+10
+52.69
+83.18
+Table S4: Within-pool Top-κ retrieval (%) of Metric Prism on
+the unrefined Base64 pool. “Within 1 pt” allows one evaluator
+PDMS point relative to that pool’s oracle.
+N Best Top-3 Top-6 Top-12
+8 92.20 90.90 89.18
+–
+16 92.92 91.98 91.00 89.19
+32 93.57 92.81 92.06 91.05
+64 94.25 93.54 92.92 92.14
+128 94.61 94.03 93.55 92.93
+256 94.85 94.47 94.08 93.58
+512 95.02 94.79 94.47 94.08
+Table S5: Frozen-generator OracleTopκ(N) diagnostic on
+NAVSIM v1 navtest, using nested prefixes of one fixed
+per-scene A512 draw on the 0–100 PDMS scale.
+and refinement. All inference-time modules are jointly op-
+timized. Candidate construction, evaluator labels, reference
+selection, Frenet targets, and future-feature targets are de-
+tached from gradient computation.
+4.4
+Deployment Lifecycle
+At each planning step, the final model generates 64 base can-
+didates using Top-3 largest-remainder allocation and predicts
+one shared future BEV field from the current observation.
+Metric Prism first ranks the bases using their trajectory ev-
+idence. ECFR refines 16 selected bases and replaces their
+slots, retaining the other 48. All 64 final hypotheses re-query
+the same BEV field and are jointly re-scored by Metric Prism.
+The candidate with the highest predicted log-PDM score is
+returned as the final plan.
+Table S3 reports the run-to-run variation across indepen-
+dently trained checkpoints analyzed in Sec. 5.
+5
+Statistical Reliability and Scoring
+Diagnostics
+5.1
+Main-Result Variation
+Across three independently trained checkpoints, the largest
+observed standard deviation is 0.14 on NAVSIM and 0.92
+in WorldEngine. These values describe run-to-run disper-
+sion under the stated protocol; with three training runs, they
+should not be interpreted as formal confidence intervals. Ta-
+ble S3 provides the corresponding dispersion for every Ma-
+neuverFlow row in the three main-result tables. It does not
+provide matched-seed uncertainty for the component abla-
+tions in the main paper.
+5.2
+Within-Pool Top-κ Retrieval of Metric Prism
+We evaluate Metric Prism’s preliminary ordering on the same
+12,146 NAVSIM v1 navtest scene tokens used by the
+frozen-pool analysis. For every trajectory in the unrefined
+Base64 pool, Metric Prism predicts the five PDM factors
+and applies Eq. (S24). Here Base64 is shorthand for the un-
+refined 64-candidate pool used by this retrieval diagnostic;
+all percentages are relative to its own evaluator oracle. The
+main paper’s k denotes the number of routed components,
+whereas κ here denotes ranking depth. The diagnostic asks
+whether the first κ positions contain the evaluator-best tra-
+jectory in that particular pool, either exactly or within one
+PDMS point of its oracle score.
+As Table S4 shows, at rank one, Metric Prism retrieves a
+trajectory within one PDMS point of the Base64 oracle in
+75.28% of scenes and misses this tolerance in 24.72%; by
+rank ten, coverage reaches 83.18%. These are pool-relative
+retrieval statistics, not a budget-matched cross-method scorer
+comparison. This diagnostic characterizes the learned scorer
+on the evaluated unrefined Base64 pool; it does not isolate the
+future branch or compare Metric Prism with another scorer.
+5.3
+Fixed Selector Transfer to NAVSIM v2
+Table S3(b) evaluates the complete v1-trained checkpoints
+under NAVSIM v2 while retaining the same five factor heads
+and log-PDM selector. The v2-only factors contribute to
+EPDMS evaluation but are not added to the selector. The
+resulting EPDMS therefore provides an empirical feasibility
+check for transferring the fixed selector to the extended eval-
+uator, rather than a claim that v1 PDMS and v2 EPDMS are
+directly comparable across evaluator versions.
+5.4
+Frozen-Pool Headroom Diagnostic
+For each scene in navtest, we construct a separate post-
+hoc analysis draw of 512 candidates, denoted A512, using
+the Top-3 categorical sampling distribution in Eq. (S26),
+extended to 512 draws for this diagnostic. This analysis
+uses frozen checkpoints after training and model selec-
+tion. Across the 12,146 scenes in D = navtest, the
+frozen M3F generator produces one fixed, ordered A512
+draw per scene. Its nested prefixes T ana
+N
+(ν) use N
+∈
+{8, 16, 32, 64, 128, 256, 512}. Let Seval
+ν
+(τ) denote evaluator
+PDMS on the 0–100 scale, computed with the same factor
+aggregation as Eq. (S28). For κ ≤N, we compute
+OracleTopκ(N) =
+1
+|D|
+X
+ν∈D
+1
+κ
+κ
+X
+a=1
+Seval
+ν,(a).
+(S34)
+Here, Seval
+ν,(a) is the a-th largest prefix score; κ = 1 is best-of-
+N, whereas κ > 1 averages the top-ranked region. Nested
+prefixes measure headroom within the same draw, not scaling
+under independent resampling or generator changes.
+Table S5 quantifies candidate-quality headroom in a frozen
+pool. It is not an end-to-end budget sweep, an ECFR recov-
+ery measurement, or deployed performance. Although the
+main-paper plot overlays the 94.8 HumanAgent reference,
+its comparison with the A512 best-of-512 value 95.02 is
+an unpaired aggregate order statistic; it establishes neither
+per-scene nor human-level superiority.
+
+
+Figure S3: Controlled expert sweep and final-plan provenance. (a,b) Paired BEV/front views of two NAVSIM scenes. Thin
+E0–E7 trajectories are controlled responses sharing a fixed M-GMP source state, scene context, and transport interval; the
+source is omitted, dashed green is the logged reference, and thick red is the final trajectory τ ⋆
+n. The final plan comes from the full
+N = 64 base/refined pool after ECFR, evidence re-query, and Metric Prism re-scoring rather than from the displayed sweep,
+with provenance E6→ECFR in (a) and E7→ECFR in (b). These examples expose route-conditioned response separation and
+final-plan provenance; dataset-level support is supplied by the quantitative component-support and matched-ablation results.
+6
+Qualitative Evidence and Claim
+Boundaries
+6.1
+Controlled Expert Responses and Final-Plan
+Provenance
+Figure S3 holds the M-GMP source state, scene context,
+and transport interval fixed while varying the routed expert.
+It therefore provides a controlled mechanism check of the
+route-conditioned response separation underlying intention-
+specific generation, and also traces the final-plan provenance
+in two selected scenes. The figure complements rather than
+substitutes for the dataset-level target-component Recall@k
+and matched prior/generator controls reported in the main
+paper’s quantitative evaluation.
+The right-lane-change example shows lateral and terminal-
+position variation, while the right-turn example shows vari-
+ation in turn onset, radius, and exit alignment. The panel-
+title shorthand “specialization” denotes only this operational,
+route-conditioned response separation under matched source
+and context. The panels visualize the mechanism and are not
+themselves the deployed candidate pool or a separate seman-
+tic labeling of the experts.
+6.2
+Descriptive, Non-Budget-Matched Candidate
+Gallery
+Figure S4 compares candidate organization on the same six
+scenes using each method’s display convention. Candidate
+counts, ranking or filtering, and fused-output presentation
+differ across methods, so the gallery is descriptive rather
+than budget-matched; no quantitative metric is derived from
+it, and no random-sampling claim is made for the displayed
+per-method candidate sets.
+6.3
+Interpretation and Evidence Scope
+Interpretation scope.
+The paper operationalizes each in-
+tention as a trajectory-derived motion hypothesis whose dis-
+placement, turning, or speed-trend tendency directly affects
+planning behavior; it does not claim a separate map-semantic
+annotation task. The quantitative claims concern scene-
+conditioned component support and downstream planning
+gains, while the prior views and controlled expert sweeps
+expose source organization and routed response separation.
+Top-three routing may still miss rare or compositional behav-
+ior, and the qualitative examples and learned PDM factors
+establish neither cross-method superiority nor safety. The
+candidate-independent future field also does not model in-
+teractive responses to alternative ego plans.
+Experimental scope.
+The cumulative ablations evalu-
+ate the Hypothesize–Verify–Improve stages. The Dense-XL
+control matches total generator parameter count, and Pro-
+posal FPS measures perception through M3F. Table S5 re-
+ports post-hoc candidate-quality headroom within fixed anal-
+ysis draws. Table S3 reports sample standard deviations
+across independently trained checkpoints under the stated
+training and evaluation protocol.
+Transfer scope.
+NAVSIM v2 applies the v1-trained check-
+points, five-factor heads, and selector without v2-specific
+training or tuning, while WorldEngine reconstructs driv-
+ing scenarios from navtest logs. These protocols test
+fixed-selector transfer and closed-loop replanning, not
+independent-domain or real-vehicle generalization.
+
+
+Figure S4: Descriptive, non-budget-matched gallery on six shared scenes with paired BEV/front views. (a) ManeuverFlow: a
+qualitative N = 32 M3F draw, routed 16/8/8 and colored by component; reported quantitative and deployment results use
+N = 64. (b) WoTE: the top 64 of 256 predictions by final reward. (c) DiffusionDrive: all 20 candidates ordered by logits.
+(d) MeanFuser: eight native proposal heads plus the fused output. Counts and selection are method-specific; no quantitative
+comparison is implied.

@@ -1,0 +1,1738 @@
+OccWAM: Occupancy World-Action Models with Joint Scene-to-Ego
+Flow Matching
+Qihang Huang1∗
+Wenhui Huang1∗†
+Collister Chua1
+Shiyu Fang2
+Zhan Chen1
+Songyan Zhang1
+Zhidong Wang1
+Daiying Tian3
+Chen Lv1‡
+1 Nanyang Technological University, Singapore
+2 Tongji University, Shanghai, China
+3 Agency for Science, Technology and Research (A*STAR), Singapore
+Abstract
+Occupancy world models provide a structured, metric repre-
+sentation of future driving scenes, making them a promising
+basis for end-to-end autonomous driving. However, exist-
+ing occupancy-aware planners typically couple occupancy
+prediction and action generation through either hierarchical
+coupling or parallel multi-task learning. Hierarchical methods
+use occupancy either as a fully predicted future preceding
+action generation or as an action-conditioned rollout for trajec-
+tory evaluation, whereas parallel multi-task methods predict
+occupancy alongside planning through a separate branch or
+auxiliary objective. These interfaces retain either an explicit
+generation order or a role asymmetry, limiting reciprocal inter-
+action between world prediction and action generation during
+trajectory formation. We propose OccWAM, an occupancy-
+native world–action model that jointly generates dense future
+occupancy and continuous ego trajectories via flow matching
+conditioned on scene representations. Building on this joint
+formulation, we introduce scene-to-ego world–action flow
+matching, a two-stage formulation. The first stage predicts
+scene-centric occupancy together with an absolute ego trajec-
+tory, providing a stable representation of future scene evolu-
+tion. The same predicted world is then re-indexed into the
+future ego frames induced by the initial trajectory, where ego
+motion is represented through adjacent pose increments and a
+second joint flow refines ego-centric occupancy and motion
+for action-aligned planning. Unlike video-based world–action
+models, OccWAM preserves explicit semantic geometry for
+direct planning reasoning without pixel synthesis. Extensive
+experiments on Bench2Drive and nuScenes demonstrate state-
+of-the-art performance in closed-loop driving, open-loop plan-
+ning, and future occupancy prediction.
+*Equal contribution.
+†Project Lead.
+‡Corresponding author.
+Figure 1: Comparison of occupancy–action interfaces. Hierarchical
+methods impose an action-first or world-first order, while parallel
+methods retain separate prediction pathways. OccWAM instead
+jointly generates occupancy and action through coupled conditional
+flows. Multi M. Traj: multimodal trajectory candidates.
+1
+Introduction
+End-to-end autonomous driving has progressed from direct
+waypoint regression toward planning-oriented structured sys-
+tems, multimodal generative planners, and vision–language–
+action models [1–5]. These advances have substantially im-
+proved trajectory generation, task integration, and semantic
+reasoning. Yet a fundamental question remains unresolved:
+how should an explicitly modeled future participate in action
+generation?
+A growing line of world-model-based policies and world–
+action models (WAMs) incorporates predictive futures into
+policy computation. Existing systems range from latent fea-
+ture alignment and chained world-to-policy architectures to
+joint video–action generation [6–9]. These systems show that
+predicted futures benefit action generation but leave open a
+representation question: what form should the predicted future
+take to provide structured and directly usable information for
+planning?
+1
+arXiv:2610.17688v1  [cs.RO]  13 Oct 2026
+
+
+Existing occupancy-based driving systems instantiate sev-
+eral recurring world–action interfaces. In the action-to-world
+formulation, candidate actions or intentions are generated,
+then their future worlds rolled out and evaluated [10, 11]. In
+the world-to-action formulation, a predictive occupancy repre-
+sentation is constructed before being passed to a downstream
+planner [12, 13]. Others reduce the sequential dependency via
+parallel multi-task decoding or ordered discrete world–action
+token sequences [14–16]. These formulations retain an ex-
+plicit generation order, separate output pathways, or discrete
+prediction sequences. They do not instantiate the interface
+studied here: dense metric occupancy and continuous ego
+motion jointly generated through a coupled conditional flow.
+Joint occupancy–action generation also introduces a
+coordinate-representation challenge. Stable world forecasting
+benefits from a scene-centric frame, where environmental evo-
+lution is not entangled with coordinate changes caused by ego
+motion. Planning, in contrast, benefits from an ego-centric
+representation that expresses occupied regions relative to the
+vehicle’s intended local motion. Scene-centric prediction has
+been shown to separate world evolution from ego-induced
+perspective changes [17]. World formation and action-aligned
+reasoning therefore favor complementary rather than identical
+occupancy representations.
+We introduce OccWAM, an occupancy-native world–action
+model that jointly generates latent future occupancy and con-
+tinuous ego motion through conditional flow matching. World
+and Action Experts exchange their evolving states at every
+transformer layer, allowing predicted occupancy to influence
+action formation while the current action hypothesis informs
+future-world prediction. Occupancy therefore participates di-
+rectly in the generative planning process rather than serving
+only as a completed planning condition, auxiliary objective,
+or post-hoc trajectory cost. Unlike video-based WAMs, the
+generated world retains explicit semantic geometry, support-
+ing direct occupancy supervision and metric planning queries
+without pixel-space synthesis.
+Building on this joint formulation, we propose scene-to-
+ego world–action flow matching. Stage I jointly generates
+scene-centric occupancy and an absolute ego trajectory in a
+fixed current-ego-anchored frame. The predicted world is then
+re-indexed into the future ego charts induced by the Stage-
+I trajectory, while the trajectory is converted into adjacent
+motion increments. This transformed pair forms the structured
+source of Stage II, which applies a second joint conditional
+flow in an action-aligned ego-centric representation. Stage
+I thus models how the world and ego evolve within a stable
+scene frame, whereas Stage II models how the same predicted
+world relates to local ego motion.
+Both stages share a three-expert Mixture-of-Transformers
+comprising Understanding, World, and Action Experts. The
+Understanding Expert provides a frozen semantic context
+stream, while the World and Action Experts interact bidirec-
+tionally throughout both flows. Sharing the backbone across
+both stages keeps occupancy and action within one unified
+model.
+We evaluate OccWAM on complementary closed- and open-
+loop benchmarks. Bench2Drive evaluates closed-loop driving
+under repeated interaction, while nuScenes separately mea-
+sures open-loop planning and future volumetric occupancy,
+testing both the generated motion and the fidelity of the pre-
+dicted metric world.
+Our contributions are threefold: (i) We introduce OccWAM,
+an occupancy-native world–action model that jointly gener-
+ates dense metric future occupancy and continuous ego motion
+through a coupled conditional flow, enabling direct bidirec-
+tional interaction between world prediction and action genera-
+tion; (ii) We propose scene-to-ego world–action flow match-
+ing. A scene-centric flow first generates future occupancy
+together with an absolute ego trajectory; the predicted world
+is then re-indexed into trajectory-induced ego coordinates and
+jointly transported with ego pose increments by a second con-
+ditional flow; (iii) We instantiate a concrete WAM through
+layer-wise bidirectional interaction with a shared three-expert
+Mixture-of-Transformers, following the proposed scene-to-
+ego world–action flow matching. OccWAM achieves state-
+of-the-art closed-loop driving performance on Bench2Drive
+and state-of-the-art open-loop planning and future-occupancy
+prediction on nuScenes.
+2
+Related Work
+World models and world–action models.
+World models
+predict future observations or scene dynamics for simula-
+tion, representation learning, and decision-making: recent
+work moves toward joint world–action generation in robotics
+[6, 7, 18]. In driving, predicted futures enter action generation:
+future volumetric features are forecast to inform planning
+[12], intention-conditioned latent futures are scored to rank
+trajectory candidates [11], video-generator latents condition a
+diffusion planner [8], and perception and planning variables
+are denoised in a shared diffusion space [19]. Closest to our
+formulation, DriveWAM trains video and action streams under
+a joint flow-matching objective over an autoregressive tempo-
+ral sequence [9], while generative planners model multimodal
+trajectory distributions without an explicit future world [3, 20].
+OccWAM retains the joint objective but replaces pixel-space
+futures with dense metric occupancy, so the generated world
+is independently measurable and geometrically aligned with
+the action it conditions.
+Occupancy prediction and planning.
+Occupancy repre-
+sents the future scene on a metric grid, so predictions are
+evaluated directly in the space where planning constraints
+live. OccWorld tokenizes semantic occupancy and autoregres-
+sively generates future scene and ego tokens [15], OccLLaMA
+extends this to a unified occupancy–language–action vocab-
+ulary [16], and later work improves fidelity and efficiency
+through dynamic–static factorization [21], rendering supervi-
+sion [22], and next-scale temporal prediction [23]. Connecting
+the predicted world to action, a few interfaces recur (Figure 1):
+2
+
+
+rolling out action-conditioned futures and selecting by oc-
+cupancy cost (a) [10], conditioning a diffusion planner on a
+forecast world (b) [13], decoding occupancy and trajectory
+in parallel from shared sparse queries (c) [14], or serializing
+scene and ego variables into one discrete autoregressive se-
+quence [15, 16]. Each imposes an ordering, separate decoders,
+or a discretization. Most relevant to us, COME separates envi-
+ronmental evolution from ego-induced coordinate change via
+ego-invariant scene-centric control features [17]. OccWAM
+resolves this separation generatively: dense occupancy and
+continuous ego motion emerge from a single coupled velocity
+field (d), with the predicted world re-indexed into the frames
+its own trajectory induces, then refined jointly with the ego
+motion defining them.
+Mixture-of-Transformers.
+Mixture-of-Transformers as-
+signs modality-specific parameters while preserving cross-
+modal exchange through joint attention [24], and couples
+understanding and action experts in embodied models [25].
+Closest to our backbone, AutoMoT connects Understanding
+and Action Experts through layer-wise joint attention for driv-
+ing [4], and UniDriveVLA adds a third expert for perception
+[5]. OccWAM instead makes the third expert a World Expert,
+which generates the future occupancy rather than parsing the
+present scene. World and Action Experts jointly parameterize
+the conditional flows of both stages on a shared three-expert
+backbone.
+3
+Method
+3.1
+Overview
+Given the current driving context c, including sensor observa-
+tions, ego-motion history, navigation inputs, and benchmark-
+specific scene context, OccWAM generates a paired future
+world and ego trajectory.
+Let T denote the benchmark-
+specific number of future horizons. The Stage-I supervision is
+represented in a fixed scene frame as (OS,⋆, aS,⋆), where
+OS,⋆= {[OS,⋆]k}T
+k=1 is a dense semantic occupancy se-
+quence and aS,⋆∈RT ×3 is a cumulative planar ego-pose
+trajectory. Bench2Drive represents the future world as tempo-
+ral BEV occupancy, whereas nuScenes uses future volumet-
+ric occupancy. A frozen frame-wise occupancy autoencoder
+maps occupancy to a compact latent space; for a sequence
+O, Eocc(O) and Docc(zo) denote applying the encoder or de-
+coder independently at every horizon and stacking the result-
+ing frames.
+As illustrated in Fig. 2, OccWAM combines an occupancy-
+native world–action generator with scene-to-ego two-stage
+flow matching. The generator uses a three-expert Mixture-
+of-Transformers backbone comprising Understanding, World,
+and Action Experts. The frozen Understanding Expert sup-
+plies semantic driving context, while the trainable World and
+Action Experts receive the current occupancy and trajectory
+flow states and exchange their hidden representations at ev-
+ery transformer layer. The two stages reuse the same expert
+backbone but employ representation-specific occupancy and
+action velocity heads.
+Stage I transports independent Gaussian sources toward
+scene-centric occupancy and an absolute ego trajectory in a
+fixed frame anchored at the current ego pose. The resulting tra-
+jectory defines the future ego frames used to warp the decoded
+occupancy and is converted into adjacent pose increments.
+This transformed pair becomes the structured source of Stage
+II. The Stage-II occupancy target is instead the dataset’s native
+future occupancy expressed in the ground-truth ego frame at
+every future horizon. Stage II then transports a model-induced
+source containing occupancy prediction errors, warp-induced
+uncovered regions, and pose misalignment toward a complete
+ego-centric world–action target without introducing new Gaus-
+sian noise.
+Throughout, r ∈{S, E} indexes the scene-centric and ego-
+centric flow representations, respectively. In the S representa-
+tion, occupancy and cumulative ego poses are expressed in a
+fixed current-ego-anchored scene frame. In the E representa-
+tion, each occupancy slice is expressed in its corresponding
+future ego frame, while each action element is the adjacent
+pose increment, whose translational components are expressed
+along the fixed axes of a canonical sensor-aligned chart. We
+reserve t ∈[0, 1] for flow time and k ∈{1, . . . , T} for the
+physical future horizon. The symbol ⋆denotes supervision
+targets,˜· the Stage-I output,¯· the transformed Stage-II source,
+and ˆ· the final Stage-II output. The operator sg(·) denotes
+stop-gradient.
+3.2
+Occupancy-Native World–Action Model
+For representation r ∈{S, E}, let sr = (sr
+o, sr
+a) denote the
+source and let xr,⋆= (zr,⋆
+o , ar,⋆) denote the target world–
+action state. We follow the standard source-to-target conven-
+tion in which t = 0 denotes the source and t = 1 denotes the
+target. Both stages use the same shifted flow-time schedule.
+We first draw a uniform variable and transform it into the flow
+time as
+τ ∼U(0, 1),
+t = γρ(τ) =
+τ
+ρ −(ρ −1)τ ,
+ρ = 5.
+(1)
+The shift preserves the two endpoints while allocating more
+training samples near the source. We set the shift factor to 5
+to strengthen learning in the early transport region, enabling
+accurate generation with fewer inference steps.
+Given a paired source and target, the analytic conditional
+path used for training is
+xr
+t = (1 −t)sr + txr,⋆,
+ur,⋆= dxr
+t
+dt = xr,⋆−sr.
+(2)
+Here, xr
+t = (zr
+o,t, ar
+t) is the intermediate world–action state
+and ur,⋆= (ur,⋆
+o , ur,⋆
+a ) is its exact conditional velocity. The
+World and Action streams share the same t within each stage,
+while the two stages sample their flow times independently.
+Let Hu
+l , Hw,r
+l
+, and Ha,r
+l
+denote the Understanding, World,
+and Action hidden representations at transformer layer l ∈
+3
+
+
+Figure 2: Overall architecture of OccWAM. A frozen Understanding Expert provides semantic driving context, while the World and Action
+Experts interact through layer-wise joint attention to parameterize a coupled occupancy–action vector field. Stage I jointly generates scene-
+centric occupancy and an absolute ego trajectory from Gaussian sources. The predicted trajectory then defines future ego frames for warping
+the occupancy and is converted into ego-motion increments; together, they form the source of Stage II. Using the same three-expert backbone,
+Stage II applies a second joint flow in ego-centric coordinates to produce the final occupancy and trajectory.
+{0, . . . , L −1}. Their asymmetric layer-wise interaction is
+Hu
+l+1 = Ul (Hu
+l ) ,
+Hw,r
+l+1 = Wl (Hw,r
+l
+; Ha,r
+l
+, Hu
+l ) ,
+Ha,r
+l+1 = Al (Ha,r
+l
+; Hw,r
+l
+, Hu
+l ) .
+(3)
+The Understanding stream does not read the generated world
+or action states. In contrast, the World and Action Experts
+read both the semantic context and one another at every layer.
+A flow-time embedding is supplied to both generated streams
+before the shared expert backbone.
+The expert blocks {Ul, Wl, Al}L−1
+l=0 are reused across the
+two stages.
+The Understanding Expert remains frozen,
+whereas the World and Action Experts form the shared
+trainable backbone. Because the two stages use different
+occupancy and action representations, they employ four
+representation-specific velocity heads:
+vr
+o,θ (xr
+t, t; c) = Ψr
+o (Hw,r
+L
+) ,
+vr
+a,θ (xr
+t, t; c) = Ψr
+a (Ha,r
+L ) ,
+r ∈{S, E}.
+(4)
+The core world–action generator is parameterized by the
+shared World–Action backbone θMoT and the four readouts
+{ΨS
+o , ΨS
+a, ΨE
+o , ΨE
+a }. We write the coupled vector field as
+vr
+θ = (vr
+o,θ, vr
+a,θ). Although the final velocity components are
+read out separately, each head receives a hidden representa-
+tion that has repeatedly interacted with the other generated
+stream. For r = E, the conditioning c additionally includes
+the coverage pair defined below; we keep it implicit in c to
+avoid overloading the notation.
+Following conditional flow matching and rectified flow [26,
+27], the objective for representation r is
+Lr
+FM = Eτ
+h
+λr
+o
+vr
+o,θ(xr
+t, t; c) −ur,⋆
+o
+2
+2
++ λr
+a
+vr
+a,θ(xr
+t, t; c) −ur,⋆
+a
+2
+2
+i
+,
+(5)
+The expectation is taken over the training sample, its stage-
+specific source–target coupling, and τ
+∼U(0, 1).
+The
+representation-specific weights balance the occupancy and
+action objectives under the two different parameterizations.
+For r = E, the occupancy flow term is supervised wherever
+valid native future-ego occupancy targets are available, includ-
+ing regions that are not covered by the transformed Stage-I
+source. The warp-coverage mask M E and token-wise cover-
+age µ describe the source and are used for conditioning, not
+to suppress the Stage-II loss. Uncovered source cells use a
+free-space placeholder only to form a categorical input; this
+placeholder is not treated as ground-truth free-space supervi-
+sion.
+At inference, we distinguish the numerical solver state Xr
+n
+from the analytic interpolation xr
+t used for flow-matching
+supervision. For an N-step solver, we discretize the shifted
+time schedule as
+τn = n
+N ,
+tn = γρ(τn),
+n = 0, . . . , N.
+(6)
+Starting from Xr
+0 = sr, for n = 0, . . . , N −1 we apply the
+Euler update
+Xr
+n+1 = Xr
+n + (tn+1 −tn) vr
+θ(Xr
+n, tn; c).
+(7)
+4
+
+
+The intermediate numerical states Xr
+n are not assumed to
+coincide with the analytic interpolation states xr
+tn.
+3.3
+Scene-to-Ego World–Action Flow Match-
+ing
+Stage I: Scene-centric joint flow matching.
+Let FS denote
+a fixed scene frame anchored at the current ego pose and
+held constant over the prediction horizon. The scene-centric
+target consists of future occupancy OS,⋆and an absolute ego
+trajectory aS,⋆, where absolute means that all future poses are
+represented cumulatively in the same current-ego-anchored
+frame rather than in global-map coordinates. We encode the
+occupancy target and form the paired Stage-I target as
+zS,⋆
+o
+= Eocc
+ OS,⋆
+,
+xS,⋆=
+ zS,⋆
+o
+, aS,⋆
+.
+(8)
+The Stage-I source consists of independent dimension-
+matched Gaussian variables:
+sS = (ϵS
+o , ϵS
+a),
+ϵS
+m ∼N(0, Im),
+m ∈{o, a}.
+(9)
+Stage I applies Eqs. (1)–(5) with r = S.
+We use NI = 1 solver step for Stage I. Its scene-centric
+world–action output is
+˜xS := XS
+NI =
+ ˜zS
+o , ˜aS
+.
+(10)
+The corresponding occupancy is decoded as ˜OS = Docc(˜zS
+o ).
+The trajectory ˜aS = {(˜pk, ˜ψk)}T
+k=1 contains cumulative pla-
+nar poses in FS. Stage I is kept to one solver evaluation
+because its output serves as a structured scene-centric world–
+action hypothesis and defines the future ego frames used by
+Stage II. The final occupancy completion and ego-centric
+transport are performed by the second flow.
+Scene-to-ego transformation.
+Let Π denote the fixed pla-
+nar chart change that expresses a cumulative ego trajectory
+in the canonical sensor-aligned frame used by the Action Ex-
+pert; it is a constant rigid transformation determined by the
+sensor extrinsics and does not depend on the trajectory. Writ-
+ing Π(a) = {(pk, ψk)}T
+k=1 with p0 = 0 and ψ0 = 0, the
+adjacent pose increments are
+[∆(a)]k =
+ pk −pk−1, wrap(ψk −ψk−1)
+
+,
+(11)
+for k = 1, . . . , T, where wrap(·) maps an angle to (−π, π].
+The translational increments are differences taken along the
+fixed axes of the canonical chart rather than in the instanta-
+neous body frame. The inverse operator ∆−1 accumulates
+the increments component-wise and applies Π−1 to recover a
+cumulative trajectory in FS.
+Let W(O, a) re-index every scene-centric occupancy slice
+into the future ego frame induced by the corresponding cumu-
+lative pose in a, returning the re-indexed occupancy together
+with a binary validity mask. Only the detached Stage-I predic-
+tion is geometrically transformed:
+  ¯OE, M E
+= W
+ sg( ˜OS), sg(˜aS)
+
+.
+(12)
+For every destination cell, W inverse-samples the correspond-
+ing location in the scene-centric prediction using nearest-
+neighbour sampling, and the binary mask M E records whether
+that location falls inside the valid scene-centric extent. Be-
+cause the future ego frames advance along the predicted tra-
+jectory, part of every destination grid necessarily lies beyond
+that extent, so ¯OE contains uncovered regions that grow with
+the prediction horizon. Such cells are assigned the free-space
+class solely to provide the frozen autoencoder with a valid
+categorical input; M E is evaluated before this filling, so their
+identity as uncovered is carried by the mask rather than in-
+ferred from the filled value.
+Averaging M E over the voxel footprint of each latent token
+yields a visible fraction µ ∈[0, 1], and the pair [µ, 1 −µ] is
+injected twice: before the World Expert, so that occupancy-
+flow tokens carry their own coverage, and again before the
+occupancy readout. The Stage-II source is
+¯zE
+o = Eocc( ¯OE),
+¯aE = ∆
+ sg(˜aS)
+
+,
+sE = (¯zE
+o , ¯aE).
+(13)
+with µ supplied as an additional deterministic condition along-
+side c.
+Native future-ego target.
+The Stage-II occupancy target
+OE,⋆= {OE,⋆
+k
+}T
+k=1 is the dataset’s native future occupancy
+expressed in the ground-truth ego frame at each horizon. It
+is not obtained by warping OS,⋆and therefore carries real
+content in the regions left uncovered when constructing ¯OE.
+The paired target is xE,⋆= (zE,⋆
+o
+, aE,⋆) with
+zE,⋆
+o
+= Eocc(OE,⋆),
+aE,⋆= ∆(aS,⋆).
+(14)
+No ground-truth future pose is used to transform a model
+prediction; ground-truth ego poses enter only through the
+native occupancy supervision and the action target. Here
+native specifies that supervision is defined in each ground-
+truth future ego frame rather than produced by warping the
+Stage-I scene-centric target. It does not denote an inference-
+time input or require ground-truth future occupancy to be
+provided to the deployed policy. The Stage-II warp-coverage
+mask tracks source support, not target-label availability.
+Source and target share the same canonical layouts but are
+induced by different pose sequences: the source occupancy
+follows the future ego frames predicted by Stage I, whereas the
+target occupancy follows the ground-truth ones. Stage-I pose
+error therefore appears simultaneously as spatial misalignment
+in the occupancy stream and as error in the pose increments,
+while the source additionally carries occupancy prediction
+errors and uncovered regions. These discrepancies share a
+single origin, and the World and Action Experts transport
+them jointly toward the paired ego-centric target.
+Stage II: Ego-centric joint flow matching.
+Stage II applies
+Eqs. (1)–(5) with source sE and target xE,⋆. It introduces
+no independent Gaussian source. Although the source dis-
+tribution is model-induced and generally non-Gaussian, the
+paired Stage-I output and dataset supervision define a valid
+5
+
+
+Table 1: Closed-loop driving performance on Bench2Drive. Expert denotes the expert policy used for collecting training data, while WM
+denotes an explicit learned future-world model. Best and second-best results are shown in bold and underlined, respectively.
+Method
+Venue
+Expert
+WM
+DS ↑
+SR (%) ↑
+UniAD-Base [1]
+CVPR’23
+Think2Drive
+×
+45.81
+16.36
+DiffusionDrive [3]
+CVPR’25
+PDM-Lite
+×
+77.68
+57.72
+ORION [28]
+ICCV’25
+Think2Drive
+×
+77.74
+54.62
+AutoVLA [29]
+NeurIPS’25
+PDM-Lite
+×
+78.84
+57.73
+TransFuser++ [30]
+ICCV’23
+PDM-Lite
+×
+84.21
+67.27
+SimLingo [31]
+CVPR’25
+PDM-Lite
+×
+85.07
+67.27
+AutoMoT+ [4]
+ICML’26
+PDM-Lite
+×
+89.42
+74.09
+WoTE [32]
+ICCV’25
+Think2Drive
+✓
+61.71
+31.36
+UniDrive-WM [33]
+ECCV’26
+Think2Drive
+✓
+79.31
+56.42
+DeepSight [34]
+ICML’26
+Think2Drive
+✓
+86.23
+71.36
+KnowVal-SimLingo [35]
+CVPR’26
+PDM-Lite
+✓
+88.42
+69.03
+OccWAM
+–
+PDM-Lite
+✓
+90.45
+77.27
+conditional source–target coupling under the same affine flow
+path.
+Using NII Euler steps, Stage II returns
+ˆxE := XE
+NII =
+ ˆzE
+o , ˆaE
+.
+(15)
+The final occupancy is decoded as ˆOE = Docc(ˆzE
+o ). It fol-
+lows the dataset’s native ego-centric output layout, and no
+additional geometric warp is applied after Stage II. The cumu-
+lative trajectory is recovered as ˆaS = ∆−1(ˆaE).
+Training and inference.
+The occupancy autoencoder and
+Understanding Expert remain frozen during world–action
+training. Stage I is trained from independent Gaussian sources
+through LS
+FM. During every training iteration, its one-step
+output is detached, decoded, transformed through W, and
+re-encoded to construct the Stage-II source. Stage II inde-
+pendently samples τ, uses the same shifted time map, and is
+trained through LE
+FM.
+Beyond the two flow-matching objectives, we introduce an
+auxiliary world–action coupling loss that evaluates the pre-
+dicted trajectory against the predicted occupancy field. Let
+Φ(P, a) denote an occupancy-based trajectory cost that sam-
+ples the per-class probability field P along the ego footprint
+induced by trajectory a.
+In Stage I, the cost is evaluated in the fixed scene-centric
+frame, penalizing departure from drivable regions and overlap
+with static and dynamic obstacles. In Stage II, the adjacent
+pose increments are accumulated to recover the trajectory in
+the fixed current-ego coordinate frame. For coupling-cost eval-
+uation, the occupancy probability field and the reconstructed
+trajectory are expressed in the same coordinate frame, and the
+same penalties are applied.
+Both coupling terms are evaluated as Φ(sg(P), a), where
+sg denotes stop-gradient. This prevents the coupling loss from
+directly back-propagating through the predicted occupancy
+probabilities, avoiding the degenerate solution of reducing
+collision penalties by removing obstacles from the predicted
+world.
+The common world–action objective is
+L = LS
+FM + LS
+couple + λII
+ LE
+FM + LE
+couple
+
+.
+(16)
+Additional benchmark-specific auxiliary objectives are in-
+corporated during training, as detailed in Appendix B.2.
+The Stage-II loss does not back-propagate through the
+Stage-I solver output or the geometric warp. Both losses
+nevertheless update the shared World and Action Expert back-
+bone through their respective invocations, while each stage
+updates its own occupancy and action velocity heads.
+At inference, the frozen Understanding Expert is evaluated
+once, and its context is reused across both stages. Each stage
+uses a single World–Action backbone pass for all reported
+results.
+4
+Experiments
+4.1
+Experimental Setup
+Benchmarks and metrics.
+Bench2Drive is our primary
+closed-loop benchmark, where we report Driving Score (DS)
+and Success Rate (SR) [40]. On nuScenes [41], we evalu-
+ate open-loop planning using average L2 displacement error
+and collision rate. We additionally evaluate future volumetric
+occupancy on Occ3D using semantic mIoU and geometric
+IoU [42, 43]. All results follow the official validation splits
+and evaluation protocols. For nuScenes, open-loop planning
+uses camera observations, whereas future-occupancy predic-
+tion uses four historical 3D occupancy frames; these are task-
+specific evaluation configurations, not outputs of one identical
+raw-input forward pass (Appendix B.1). Bench2Drive uses
+front RGB and LiDAR BEV observations at inference and
+does not use ground-truth occupancy as a runtime input.
+Understanding-Expert adaptation.
+Before world–action
+training, we adapt Qwen3-VL-2B-Instruct to driving visual
+question answering using LoRA. The Bench2Drive expert
+6
+
+
+Table 2: Open-loop planning and future-occupancy evaluation on nuScenes.
+(a) Open-loop planning.
+L2 (m) ↓
+Collision (%) ↓
+Method
+Ego status
+1s
+2s
+3s
+Avg.
+1s
+2s
+3s
+Avg.
+UniAD [1]
+Vector
+0.44
+0.67
+0.96
+0.69
+0.04
+0.08
+0.23
+0.12
+VAD [2]
+Vector
+0.17
+0.34
+0.60
+0.37
+0.07
+0.10
+0.24
+0.14
+DriveTransformer-Large [36]
+Vector
+0.16
+0.30
+0.55
+0.33
+0.01
+0.06
+0.15
+0.07
+AutoVLA [29]
+Text
+0.21
+0.38
+0.60
+0.40
+0.13
+0.18
+0.28
+0.20
+OmniDrive [37]
+Vector
+0.14
+0.29
+0.55
+0.33
+0.00
+0.13
+0.78
+0.30
+SpaceDrive [38]
+Vector
+0.15
+0.29
+0.51
+0.32
+0.04
+0.18
+0.49
+0.23
+AutoMoT [4]
+Vector
+0.14
+0.29
+0.54
+0.32
+0.01
+0.06
+0.15
+0.07
+DriveVLM-Dual [39]
+Vector
+0.15
+0.29
+0.48
+0.31
+0.05
+0.08
+0.17
+0.10
+OccWAM
+Vector
+0.14
+0.27
+0.50
+0.30
+0.02
+0.05
+0.14
+0.07
+(b) Future semantic occupancy.
+mIoU (%) ↑
+IoU (%) ↑
+Method
+Input
+Ego traj.
+1s
+2s
+3s
+Avg.
+1s
+2s
+3s
+Avg.
+Copy & Paste [15]
+3D-Occ
+Pred.
+14.91
+10.54
+8.52
+11.33
+24.47
+19.77
+17.31
+20.52
+OccWorld [15]
+3D-Occ
+Pred.
+25.78
+15.14
+10.51
+17.14
+34.63
+25.07
+20.18
+26.63
+OccLLaMA [16]
+3D-Occ
+Pred.
+25.05
+19.49
+15.26
+19.93
+34.56
+28.53
+24.41
+29.17
+OccTENS [23]
+3D-Occ
+Pred.
+27.96
+21.75
+16.47
+22.06
+38.73
+29.50
+24.86
+31.03
+RenderWorld [22]
+3D-Occ
+Pred.
+28.69
+18.89
+14.83
+20.80
+37.74
+28.41
+24.08
+30.08
+DFIT-OccWorld [21]
+3D-Occ
+Pred.
+31.68
+21.29
+15.18
+22.71
+40.28
+31.24
+25.29
+32.27
+COME [17]
+3D-Occ
+Pred.
+30.57
+19.91
+13.38
+21.29
+36.96
+28.26
+21.86
+29.03
+OccWAM
+3D-Occ
+Pred.
+34.02
+23.12
+15.55
+24.23
+43.76
+32.30
+25.57
+33.88
+receives the current front-camera frame together with three
+history frames and is trained on 56,004 Chat-B2D front-
+view question–answer examples [28]. The nuScenes expert
+is trained on 50,008 examples from nuScenes-QA and Om-
+niDrive [37, 44]. The adapters are merged into benchmark-
+specific checkpoints and remain frozen throughout world–
+action training.
+4.2
+Closed-Loop Driving on Bench2Drive
+We first evaluate OccWAM on the Bench2Drive closed-loop
+benchmark and report the quantitative results in Table 1. Oc-
+cWAM achieves the best performance in both Driving Score
+and Success Rate, reaching 90.45 and 77.27%, respectively.
+It surpasses AutoMoT+ [4], the strongest expert-only base-
+line with diffusion-based action refinement (DS 89.42, SR
+74.09%), and KnowVal-SimLingo [35], the strongest prior
+world-model-based system (DS 88.42, SR 69.03%).
+The improvement highlights the benefit of the occupancy-
+native world–action formulation. By representing future oc-
+cupancy and ego motion within a shared generative state, Oc-
+cWAM provides planning with an explicit, metric description
+of the evolving scene. This unified representation preserves
+the spatial structure of the predicted future throughout action
+generation, providing a structured basis for accurate and safe
+planning.
+4.3
+Open-Loop Planning and Future Occu-
+pancy on nuScenes
+Table 2 evaluates the action and world components under a
+fixed driving log. The planning metrics measure trajectory
+imitation and geometric collision, while the occupancy met-
+rics verify that the World Expert produces an independently
+meaningful metric future rather than an unconstrained hid-
+den feature optimized only for action prediction. OccWAM
+achieves the best average planning L2 and collision rate, to-
+gether with the best average mIoU and IoU.
+The two evaluations are reported together to examine both
+sides of the generated world–action state. Strong planning
+without a measurable future world would reduce occupancy to
+an opaque internal representation, whereas accurate occupancy
+without a planning gain would not establish an action-facing
+predictive state. The results show that OccWAM improves
+planning while preserving a high-quality explicit future world.
+4.4
+Ablation Studies
+We investigate two key components of OccWAM: the scene-
+to-ego two-stage joint flow and bidirectional information ex-
+change between the World and Action Experts. We first ex-
+amine their effects on planning performance, followed by
+complementary analyses of Action-to-World information flow
+and joint world–action refinement on nuScenes.
+Effect of the two-stage joint flow.
+Using the final Stage-
+II trajectory improves DS from 88.21 to 90.45 and SR from
+7
+
+
+Table 3: Ablation of the second joint flow and World-to-Action
+information flow.
+(a) Contribution of two-stage flow on Bench2Drive.
+Control output
+DS ↑
+SR (%) ↑
+Stage-I trajectory
+88.21
+73.63
+Stage-II trajectory
+90.45
+77.27
+(b) Effect of World-to-Action information flow.
+Configuration
+L2 (m) ↓
+Collision (%) ↓
+Without World information flow
+0.64
+0.23
+Full OccWAM
+0.30
+0.07
+73.63% to 77.27% on Bench2Drive. This gain is consistent
+with the complementary roles of the two stages. Stage I es-
+tablishes a globally coherent scene-centric world–action hy-
+pothesis, whereas Stage II re-expresses the joint future in
+trajectory-induced ego coordinates, bringing the predicted
+world into closer alignment with the geometry relevant to exe-
+cution. The second flow thus bridges the representation gap
+between scene-level future modeling and ego-centric action
+generation, enabling more action-aligned reasoning over both
+occupancy and motion. These results support the effectiveness
+of the proposed scene-to-ego decomposition for closed-loop
+planning.
+Effect of World-to-Action information flow.
+We disable
+the Action Expert’s access to the World Expert during infer-
+ence while keeping the trained model and all other inputs
+unchanged. Removing this information pathway increases the
+planning L2 error from 0.30 to 0.64 m and the collision rate
+from 0.07% to 0.23% on nuScenes. The substantial degra-
+dation indicates that access to the evolving occupancy repre-
+sentation is important for trajectory generation. In particular,
+the larger relative increase in collision rate suggests that the
+predicted future world provides spatial information relevant
+to safe motion. This inference-time intervention demonstrates
+the functional importance of World-to-Action information
+exchange in the joint generation process.
+Table 4: Complementary ablations on nuScenes. Planning met-
+rics (L2 and collision) use camera observations, whereas occupancy
+metrics (mIoU and IoU) use four historical 3D occupancy frames.
+Comparisons within each metric group follow the same task-specific
+input and evaluation protocol.
+(c) Effect of Action-to-World information flow.
+Configuration
+L2 ↓
+Coll. ↓
+mIoU ↑
+IoU ↑
+Without Action-to-World
+0.32
+0.10
+23.11
+32.59
+Full OccWAM
+0.30
+0.07
+24.23
+33.88
+(d) Source-to-output refinement in Stage II.
+Readout
+L2 ↓
+Coll. ↓
+mIoU ↑
+IoU ↑
+Stage-II source
+0.32
+0.13
+23.12
+31.78
+Stage-II output
+0.30
+0.07
+24.23
+33.88
+Effect of Action-to-World information flow.
+To comple-
+ment the World-to-Action analysis, we examine the reverse
+information pathway by preventing the World Expert from
+attending to the Action Expert during inference. Within each
+task-specific nuScenes protocol, the trained configuration,
+flow states, and evaluation procedure remain unchanged, with
+the cross-expert information pathway being the only interven-
+tion.
+As shown in Table 4(c), disabling Action-to-World informa-
+tion flow increases the planning L2 error from 0.30 to 0.32 m
+and the collision rate from 0.07% to 0.10%. Meanwhile, occu-
+pancy mIoU decreases from 24.23 to 23.11, and IoU decreases
+from 33.88 to 32.59.
+These results indicate that the evolving action representa-
+tion also provides useful information for future-world genera-
+tion. Together with the World-to-Action analysis, they support
+the functional importance of bidirectional interaction between
+the two experts. Since the information pathway is disabled
+only during inference, this experiment is interpreted as an
+information-flow diagnostic rather than a separately retrained
+architectural ablation.
+Joint world–action refinement in Stage II.
+Beyond the
+closed-loop improvement on Bench2Drive, we further exam-
+ine whether the second joint flow refines both components of
+the generated world–action state on nuScenes.
+We compare the transformed Stage-II source (¯zE
+o , ¯aE) with
+the final Stage-II output (ˆzE
+o , ˆaE). For planning evaluation,
+the source action ¯aE is reconstructed from adjacent ego-pose
+increments into an absolute trajectory and evaluated under
+the camera-based planning protocol. For occupancy evalua-
+tion, the source occupancy latent ¯zE
+o is decoded and evalu-
+ated against the same native future-ego occupancy target used
+for the final Stage-II output, under the four-frame historical-
+occupancy protocol. Within each metric group, the source and
+output share identical inputs and evaluation settings.
+Table 4(d) shows that the second joint flow reduces the plan-
+ning L2 error from 0.32 to 0.30 m and the collision rate from
+0.13% to 0.07%. Concurrently, occupancy mIoU increases
+from 23.12 to 24.23, while IoU improves from 31.78 to 33.88,
+corresponding to absolute gains of 1.11 and 2.10 percentage
+points, respectively.
+These improvements demonstrate that Stage II refines both
+the trajectory and the ego-centric future occupancy, rather
+than acting merely as an action-only post-processing mod-
+ule. By transforming the scene-centric joint hypothesis into
+trajectory-induced ego coordinates, the second flow operates
+on a representation aligned with future ego motion, allowing
+the world and action states to be refined jointly. The occu-
+pancy improvement is also consistent with the ability of Stage
+II to correct transformed world predictions and infer content
+in regions not covered by the Stage-I source.
+Overall, these results support the complementary roles of
+the two stages: Stage I constructs a scene-centric joint future
+hypothesis, while Stage II re-indexes and jointly refines the
+world–action state in future ego-centric coordinates. Com-
+8
+
+
+bined with the bidirectional information-flow analyses, they
+provide additional evidence for the proposed joint scene-to-
+ego generation framework.
+5
+Conclusion
+We presented OccWAM, an occupancy-native world–action
+model that jointly generates dense metric occupancy and con-
+tinuous ego motion through coupled flow matching. A shared
+three-expert Mixture-of-Transformers enables direct World–
+Action interaction, making occupancy an explicit and measur-
+able future representation that participates in action generation.
+Our scene-to-ego design first predicts scene-centric occupancy
+and an absolute trajectory, then transports the transformed hy-
+pothesis toward an ego-centric occupancy–motion endpoint
+through a second joint flow. Experiments on Bench2Drive and
+nuScenes demonstrate state-of-the-art performance in closed-
+loop driving, open-loop planning, and future-occupancy pre-
+diction.
+References
+[1] Yihan Hu, Jiazhi Yang, Li Chen, Keyu Li, Chonghao Sima,
+Xizhou Zhu, Siqi Chai, Senyao Du, Tianwei Lin, Wenhai Wang,
+Lewei Lu, Xiaosong Jia, Qiang Liu, Jifeng Dai, Yu Qiao, and
+Hongyang Li. Planning-oriented autonomous driving. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 17853–17862, 2023.
+[2] Bo Jiang, Shaoyu Chen, Qing Xu, Bencheng Liao, Jiajie Chen,
+Helong Zhou, Qian Zhang, Wenyu Liu, Chang Huang, and
+Xinggang Wang. VAD: Vectorized scene representation for
+efficient autonomous driving. In Proceedings of the IEEE/CVF
+International Conference on Computer Vision, pages 8340–
+8350, 2023.
+[3] Bencheng Liao, Shaoyu Chen, Haoran Yin, Bo Jiang, Cheng
+Wang, Sixu Yan, Xinbang Zhang, Xiangyu Li, Ying Zhang,
+Qian Zhang, and Xinggang Wang.
+DiffusionDrive: Trun-
+cated diffusion model for end-to-end autonomous driving. In
+Proceedings of the IEEE/CVF Conference on Computer Vi-
+sion and Pattern Recognition, pages 12037–12047, 2025. doi:
+10.1109/CVPR52734.2025.01124.
+[4] Wenhui Huang, Songyan Zhang, Qihang Huang, Zhidong
+Wang, Zhiqi Mao, Collister Chua, Zhan Chen, Long Chen,
+and Chen Lv. AutoMoT: A unified vision-language-action
+model with asynchronous mixture-of-transformers for end-to-
+end autonomous driving. In Proceedings of the 43rd Inter-
+national Conference on Machine Learning, volume 306 of
+Proceedings of Machine Learning Research, pages 48312–
+48326. PMLR, 2026. URL https://proceedings.mlr.
+press/v306/huang26cb.html.
+[5] Yongkang Li, Lijun Zhou, Sixu Yan, Bencheng Liao, Tianyi
+Yan, Kaixin Xiong, Long Chen, Hongwei Xie, Bing Wang,
+Guang Chen, Hangjun Ye, Wenyu Liu, Haiyang Sun, and
+Xinggang Wang. UniDriveVLA: Unifying understanding, per-
+ception, and action planning for autonomous driving. arXiv
+preprint arXiv:2604.02190, 2026.
+[6] Ruijie Zheng, Jing Wang, Scott Reed, Johan Bjorck, Yu Fang,
+Fengyuan Hu, Joel Jang, Kaushil Kundalia, Zongyu Lin, Loïc
+Magne, Avnish Narayan, You Liang Tan, Guanzhi Wang,
+Qi Wang, Jiannan Xiang, Yinzhen Xu, Seonghyeon Ye, Jan
+Kautz, Furong Huang, Yuke Zhu, and Linxi Fan. FLARE:
+Robot learning with implicit world modeling. In Proceedings
+of the 9th Conference on Robot Learning, volume 305 of Pro-
+ceedings of Machine Learning Research, pages 3952–3971.
+PMLR, 2025.
+[7] Seonghyeon Ye, Yunhao Ge, Kaiyuan Zheng, Shenyuan Gao,
+Sihyun Yu, George Kurian, Suneel Indupuru, You Liang Tan,
+Chuning Zhu, Jiannan Xiang, Ayaan Malik, Kyungmin Lee,
+William Liang, Nadun Ranawaka, Jiasheng Gu, Yinzhen Xu,
+Guanzhi Wang, Fengyuan Hu, Avnish Narayan, Johan Bjorck,
+Jing Wang, Gwanghyun Kim, Dantong Niu, Ruijie Zheng, Yuqi
+Xie, Jimmy Wu, Qi Wang, Ryan Julian, Danfei Xu, Yilun Du,
+Yevgen Chebotar, Scott Reed, Jan Kautz, Yuke Zhu, Linxi “Jim”
+Fan, and Joel Jang. World action models are zero-shot policies.
+arXiv preprint arXiv:2602.15922, 2026.
+[8] Tianze Xia, Yongkang Li, Lijun Zhou, Jingfeng Yao, Kaixin
+Xiong, Haiyang Sun, Bing Wang, Kun Ma, Guang Chen,
+Hangjun Ye, Wenyu Liu, and Xinggang Wang. DriveLaW: Uni-
+fying planning and video generation in a latent driving world. In
+Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 39701–39712, 2026.
+[9] Chen Shi, Jinrui Xu, Shaoshuai Shi, Kehua Sheng, Bo Zhang,
+and Li Jiang. DriveWAM: Video generative priors enable scal-
+able world-action modeling for autonomous driving. arXiv
+preprint arXiv:2605.28544, 2026.
+[10] Yu Yang, Jianbiao Mei, Yukai Ma, Siliang Du, Wenqing Chen,
+Yijie Qian, Yuxiang Feng, and Yong Liu. Driving in the oc-
+cupancy world: Vision-centric 4d occupancy forecasting and
+planning via world models for autonomous driving. Proceed-
+ings of the AAAI Conference on Artificial Intelligence, 39(9):
+9327–9335, 2025. doi: 10.1609/aaai.v39i9.33010.
+[11] Yupeng Zheng, Pengxuan Yang, Zebin Xing, Qichao Zhang,
+Yuhang Zheng, Yinfeng Gao, Pengfei Li, Teng Zhang,
+Zhongpu Xia, Peng Jia, Xianpeng Lang, and Dongbin Zhao.
+World4Drive: End-to-end autonomous driving via intention-
+aware physical latent world model.
+In Proceedings of the
+IEEE/CVF International Conference on Computer Vision,
+pages 28632–28642, 2025.
+[12] Zanming Huang, Jimuyang Zhang, and Eshed Ohn-Bar. Neural
+volumetric world models for autonomous driving. In Proceed-
+ings of the European Conference on Computer Vision, pages
+195–213, 2024. doi: 10.1007/978-3-031-72643-9_12.
+[13] Junjie Cheng, Ruiqi Song, Ye Wu, Nanxing Zeng, Ximiao Li,
+and Yunfeng Ai. OWMDrive: Causality-aware end-to-end
+autonomous driving via 4d occupancy world model. arXiv
+preprint arXiv:2606.30421, 2026. Accepted to IROS 2026.
+[14] Chenxu Dang, Haiyan Liu, Jason Bao, Pei An, Xinyue Tang,
+An Pan, Jie Ma, Bingchuan Sun, and Yan Wang. SparseWorld:
+A flexible, adaptive, and efficient 4d occupancy world model
+powered by sparse and dynamic queries. Proceedings of the
+AAAI Conference on Artificial Intelligence, 40(5):3497–3505,
+2026. doi: 10.1609/aaai.v40i5.37347.
+[15] Wenzhao Zheng, Weiliang Chen, Yuanhui Huang, Borui Zhang,
+Yueqi Duan, and Jiwen Lu. OccWorld: Learning a 3d occu-
+pancy world model for autonomous driving. In Proceedings of
+the European Conference on Computer Vision, pages 55–72,
+2024. doi: 10.1007/978-3-031-72624-8_4.
+[16] Julong Wei, Shanshuai Yuan, Pengfei Li, Qingda Hu, Zhongxue
+Gan, and Wenchao Ding. OccLLaMA: An occupancy-language-
+action generative world model for autonomous driving. arXiv
+9
+
+
+preprint arXiv:2409.03272, 2024.
+[17] Yining Shi, Kun Jiang, Qiang Meng, Ke Wang, Jiabao Wang,
+Wenchao Sun, Tuopu Wen, Mengmeng Yang, and Diange Yang.
+COME: Adding scene-centric forecasting control to occupancy
+world model. In Advances in Neural Information Processing
+Systems, volume 38, 2025.
+[18] Haoyu Zhen, Xiaowen Qiu, Peihao Chen, Jincheng Yang, Xin
+Yan, Yilun Du, Yining Hong, and Chuang Gan. 3D-VLA: A 3d
+vision-language-action generative world model. In Proceedings
+of the 41st International Conference on Machine Learning,
+volume 235 of Proceedings of Machine Learning Research,
+pages 61229–61245. PMLR, 2024.
+[19] Bo Zhao, Xinting Zhao, Naifan Li, Erkang Cheng, and Haibin
+Ling. UniTeD: Unified temporal diffusion for joint percep-
+tion and planning in autonomous driving.
+arXiv preprint
+arXiv:2606.25736, 2026. Accepted to ECCV 2026.
+[20] Yifang Xu, Jiahao Cui, Zhihao Zhu, Hanlin Shang, Shan Luan,
+Mingwang Xu, Feipeng Cai, Neng Zhang, Yaoyi Li, Jia Cai,
+and Siyu Zhu. WAM-Flow: Parallel coarse-to-fine motion
+planning via discrete flow matching for autonomous driving. In
+Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 24918–24928, 2026.
+[21] Haiming Zhang, Ying Xue, Xu Yan, Jiacheng Zhang, We-
+ichao Qiu, Dongfeng Bai, Bingbing Liu, Shuguang Cui, and
+Zhen Li. An efficient occupancy world model via decoupled
+dynamic flow and image-assisted training.
+arXiv preprint
+arXiv:2412.13772, 2024.
+[22] Ziyang Yan, Wenzhen Dong, Yihua Shao, Yuhang Lu, Haiyang
+Liu, Jingwen Liu, Haozhe Wang, Zhe Wang, Yan Wang, Fabio
+Remondino, and Yuexin Ma. RenderWorld: World model
+with self-supervised 3d label. In 2025 IEEE International
+Conference on Robotics and Automation (ICRA), pages 6063–
+6070, 2025. doi: 10.1109/ICRA55743.2025.11127609.
+[23] Bu Jin, Songen Gu, Xiaotao Hu, Yupeng Zheng, Xiaoyang
+Guo, Qian Zhang, Xiaoxiao Long, and Wei Yin. OccTENS:
+3d occupancy world model via temporal next-scale prediction.
+IEEE Robotics and Automation Letters, 11(3):3566–3573, 2026.
+doi: 10.1109/LRA.2026.3655202.
+[24] Weixin Liang, Lili Yu, Liang Luo, Srini Iyer, Ning Dong, Chunt-
+ing Zhou, Gargi Ghosh, Mike Lewis, Wen-tau Yih, Luke Zettle-
+moyer, and Xi Victoria Lin. Mixture-of-Transformers: A sparse
+and scalable architecture for multi-modal foundation models.
+Transactions on Machine Learning Research, 2025. ISSN
+2835-8856.
+[25] Bin Yu, Shijie Lian, Xiaopeng Lin, Yuliang Wei, Zhaolong
+Shen, Changti Wu, Yuzhuo Miao, Xinming Wang, Bail-
+ing Wang, Cong Huang, and Kai Chen.
+TwinBrainVLA:
+Unleashing the potential of generalist vlms for embodied
+tasks via asymmetric mixture-of-transformers. arXiv preprint
+arXiv:2601.14133, 2026.
+[26] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximilian
+Nickel, and Matthew Le. Flow matching for generative model-
+ing. In International Conference on Learning Representations,
+2023.
+[27] Xingchao Liu, Chengyue Gong, and Qiang Liu. Flow straight
+and fast: Learning to generate and transfer data with rectified
+flow. In International Conference on Learning Representations,
+2023.
+[28] Haoyu Fu, Diankun Zhang, Zongchuang Zhao, Jianfeng Cui,
+Dingkang Liang, Chong Zhang, Dingyuan Zhang, Hongwei
+Xie, Bing Wang, and Xiang Bai. ORION: A holistic end-to-end
+autonomous driving framework by vision-language instructed
+action generation. In Proceedings of the IEEE/CVF Interna-
+tional Conference on Computer Vision, pages 24823–24834,
+2025.
+[29] Zewei Zhou, Tianhui Cai, Seth Z. Zhao, Yun Zhang, Zhiyu
+Huang, Bolei Zhou, and Jiaqi Ma.
+AutoVLA: A vision-
+language-action model for end-to-end autonomous driving with
+adaptive reasoning and reinforcement fine-tuning. In Advances
+in Neural Information Processing Systems, volume 38, 2025.
+[30] Bernhard Jaeger, Kashyap Chitta, and Andreas Geiger. Hid-
+den biases of end-to-end driving models.
+In Proceedings
+of the IEEE/CVF International Conference on Computer Vi-
+sion, pages 8206–8215, 2023. doi: 10.1109/ICCV51070.2023.
+00757.
+[31] Katrin Renz, Long Chen, Elahe Arani, and Oleg Sinavski.
+SimLingo: Vision-only closed-loop autonomous driving with
+language-action alignment. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition, pages
+11993–12003, 2025.
+[32] Yingyan Li, Yuqi Wang, Yang Liu, Jiawei He, Lue Fan, and
+Zhaoxiang Zhang.
+End-to-end driving with online trajec-
+tory evaluation via BEV world model.
+In Proceedings of
+the IEEE/CVF International Conference on Computer Vision,
+pages 27137–27146, 2025. doi: 10.1109/ICCV51701.2025.
+02519.
+[33] Zhexiao Xiong, Xin Ye, Burhan Yaman, Sheng Cheng, Yiren
+Lu, Jingru Luo, Nathan Jacobs, and Liu Ren. UniDrive-WM:
+Unified understanding, planning and generation world model
+for autonomous driving. arXiv preprint arXiv:2601.04453,
+2026. Accepted to ECCV 2026.
+[34] Lingjun Zhang, Changjie Wu, Linzhe Shi, Jiangyang Li, Ji-
+axin Liu, Lei Yang, Hang Zhang, Mu Xu, and Hong Wang.
+DeepSight: Long-horizon world modeling via latent states pre-
+diction for end-to-end autonomous driving. arXiv preprint
+arXiv:2605.10564, 2026. Accepted to ICML 2026.
+[35] Zhongyu Xia, Wenhao Chen, Yongtao Wang, and Ming-Hsuan
+Yang. KnowVal: A knowledge-augmented and value-guided
+autonomous driving system. arXiv preprint arXiv:2512.20299,
+2026. Accepted to CVPR 2026.
+[36] Xiaosong Jia, Junqi You, Zhiyuan Zhang, and Junchi Yan. Driv-
+eTransformer: Unified transformer for scalable end-to-end au-
+tonomous driving. In International Conference on Learning
+Representations, 2025.
+[37] Shihao Wang, Zhiding Yu, Xiaohui Jiang, Shiyi Lan, Min
+Shi, Nadine Chang, Jan Kautz, Ying Li, and Jose M. Al-
+varez.
+OmniDrive: A holistic vision-language dataset for
+autonomous driving with counterfactual reasoning. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 22442–22452, 2025.
+doi:
+10.1109/CVPR52734.2025.02090.
+[38] Peizheng Li, Zhenghao Zhang, David Holtz, Hang Yu, Yu-
+tong Yang, Yuzhi Lai, Rui Song, Andreas Geiger, and Andreas
+Zell. SpaceDrive: Infusing spatial awareness into vlm-based
+autonomous driving. In Proceedings of the IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, pages
+40096–40107, 2026.
+[39] Xiaoyu Tian, Junru Gu, Bailin Li, Yicheng Liu, Yang Wang,
+Zhiyong Zhao, Kun Zhan, Peng Jia, Xianpeng Lang, and Hang
+Zhao. DriveVLM: The convergence of autonomous driving
+and large vision-language models. In Proceedings of The 8th
+10
+
+
+Conference on Robot Learning, volume 270 of Proceedings of
+Machine Learning Research, pages 4698–4726. PMLR, 2025.
+[40] Xiaosong Jia, Zhenjie Yang, Qifeng Li, Zhiyuan Zhang, and
+Junchi Yan. Bench2Drive: Towards multi-ability benchmarking
+of closed-loop end-to-end autonomous driving. In Advances
+in Neural Information Processing Systems, volume 37, pages
+819–844, 2024. doi: 10.52202/079017-0025.
+[41] Holger Caesar, Varun Bankiti, Alex H. Lang, Sourabh Vora,
+Venice Erin Liong, Qiang Xu, Anush Krishnan, Yu Pan, Gi-
+ancarlo Baldan, and Oscar Beijbom.
+nuScenes: A multi-
+modal dataset for autonomous driving. In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition, pages 11621–11631, 2020.
+[42] Shengchao Hu, Li Chen, Penghao Wu, Hongyang Li, Junchi
+Yan, and Dacheng Tao. ST-P3: End-to-end vision-based au-
+tonomous driving via spatial-temporal feature learning. In
+Proceedings of the European Conference on Computer Vision,
+pages 533–549, 2022. doi: 10.1007/978-3-031-19839-7_31.
+[43] Xiaoyu Tian, Tao Jiang, Longfei Yun, Yucheng Mao, Huitong
+Yang, Yue Wang, Yilun Wang, and Hang Zhao. Occ3D: A
+large-scale 3d occupancy prediction benchmark for autonomous
+driving. In Advances in Neural Information Processing Systems,
+volume 36, pages 64318–64330, 2023. doi: 10.52202/075280-
+2809.
+[44] Tianwen Qian, Jingjing Chen, Linhai Zhuo, Yang Jiao, and
+Yu-Gang Jiang. Nuscenes-qa: A multi-modal visual question
+answering benchmark for autonomous driving scenario. Pro-
+ceedings of the AAAI Conference on Artificial Intelligence, 38
+(5):4542–4550, 2024. doi: 10.1609/aaai.v38i5.28253.
+11
+
+
+Supplementary Material
+A
+Overview
+This appendix accompanies the main paper in the same PDF.
+It details benchmark-specific occupancy modules, world-state
+representations, and training procedures, including the dis-
+tinct nuScenes input protocols for planning and occupancy
+prediction. We further clarify the coverage conditioning and
+supervision used in Stage II, together with the auxiliary world–
+action coupling objectives.
+B
+Additional Implementation Details
+B.1
+Benchmark-Specific Occupancy Modules
+We use the term benchmark-specific Occ Encoder to refer to
+the complete occupancy module associated with each bench-
+mark. It connects the observations available under the corre-
+sponding task protocol to the World Expert and also contains
+the mappings between metric occupancy and latent occupancy
+states. Depending on the benchmark and evaluation task, its
+input-processing pathway converts sensor observations or his-
+torical occupancy states into a compact world representation
+supplied to the World Expert.
+Within this module, Eocc and Docc map semantic occupancy
+between the metric grid and the latent flow space. Specifically,
+Eocc encodes semantic occupancy targets or transformed oc-
+cupancy states into latent representations, while Docc decodes
+predicted occupancy latents back into the metric semantic
+grid.
+Bench2Drive neither provides nor uses historical or current
+ground-truth occupancy as model input. Its Occ Encoder takes
+one front-view RGB image and one LiDAR BEV represen-
+tation and produces the latent world features supplied to the
+World Expert. The model predicts six future BEV occupancy
+frames at 2 Hz over a 64 m × 64 m ego-centered region with a
+spatial resolution of 1 m. Each predicted frame is represented
+as a 64 × 64 semantic grid with 11 categorical classes, includ-
+ing free space. In the latent flow space, the complete future
+occupancy sequence has shape 6×8×8×8 (T ×H ×W ×C),
+corresponding to 384 occupancy tokens of dimension 8.
+nuScenes uses two task-specific input protocols. For the
+planning benchmark, the model receives camera observations,
+and L2 and collision are evaluated under this camera-based
+planning protocol. For occupancy prediction, the benchmark-
+specific Occ Encoder jointly processes four historical 3D oc-
+cupancy frames and compresses their temporal information
+into a compact set of 625 history tokens. The four-frame his-
+tory is therefore represented by 625 temporally condensed
+tokens in total, rather than by four separate sets of 625 tokens.
+Only these condensed history tokens are supplied to the World
+Expert, preventing the Mixture-of-Transformers from directly
+processing separate token sets for all four historical frames.
+The nuScenes occupancy-prediction target consists of six
+future volumetric occupancy frames indexed by (t, x, y, z).
+Each frame covers the spatial range [−40, 40] × [−40, 40] ×
+[−1, 5.4] m at a voxel resolution of 0.4 m and is decoded into
+a dense 200 × 200 × 16 grid with 17 semantic classes plus
+free space. The reported mIoU and IoU are computed under
+this four-frame historical-occupancy protocol.
+Accordingly, planning and occupancy numbers shown in
+the same result row should be interpreted as evaluations of
+the corresponding task-specific configurations of the same
+method under their respective benchmark protocols, rather
+than as outputs produced by the same raw-input forward pass.
+Within each metric group, all compared configurations use the
+same input protocol and evaluation procedure.
+The Understanding Expert follows the same training proto-
+col on both benchmarks. It is first adapted using benchmark-
+specific question–answering supervision and is subsequently
+frozen throughout World–Action training.
+Bench2Drive spatial route prediction.
+Bench2Drive ad-
+ditionally requires the prediction of 20 spatial route points
+representing the reference-path geometry. These points are
+distinct from the temporal ego trajectory generated by the joint
+occupancy–action flows. We append a dedicated learnable
+route query after the occupancy and action tokens and decode
+its final representation directly into the route-point sequence.
+The route query is supervised by the benchmark-provided
+route points and remains outside the joint flow. It receives
+no Gaussian source, flow-time interpolation, or velocity-
+matching objective. This benchmark-specific route branch
+is used only on Bench2Drive.
+B.2
+Model and Training Configuration
+World–Action training optimizes the World and Action Ex-
+perts, four representation-specific output decoders, and the
+benchmark-specific prediction modules. The four output de-
+coders correspond to the occupancy and action outputs of
+the scene-centric and ego-centric flows. They implement the
+representation-specific velocity readouts in the main formu-
+lation and are distinct from the occupancy decoder Docc con-
+tained in the Occ Encoder.
+The benchmark-specific trainable modules include the
+Bench2Drive route branch, the associated action and trajectory
+modules, newly introduced projection layers, and the scene-
+prior module used by the Bench2Drive configuration. The
+Understanding-Expert context is computed once and reused
+across both stages, and each stage requires one World–Action
+backbone pass.
+Stage I and Stage II are optimized jointly rather than trained
+as separate models. In the notation of Eq. (16), we set λII =
+0.5, so the aggregate Stage-II objective receives one half of
+the weight assigned to its Stage-I counterpart. Equivalently,
+the Stage-I and Stage-II aggregate losses are weighted at a
+ratio of 2:1. The same weighting is used for both Bench2Drive
+and nuScenes.
+Bench2Drive uses two training phases. Phase 1 adapts
+the Understanding Expert using benchmark-specific question–
+12
+
+
+Figure S1: Qualitative comparison of future 4D occupancy predictions and ground truth across future time steps. Each frame shows the
+predicted 3D semantic occupancy of OccWAM and its corresponding ground truth.
+answering supervision. Phase 2 freezes the Understanding
+Expert and jointly trains Stage I and Stage II with the weight-
+ing described above.
+nuScenes uses three training phases. Phases 1 and 2 follow
+the same high-level procedure: question–answering adaptation
+is followed by joint Stage-I and Stage-II training with the same
+2:1 weighting. In Phase 3, all other components are frozen,
+and only the Stage-II occupancy and action output decoders
+are fine-tuned.
+Benchmark-specific auxiliary objectives.
+Equation (16)
+specifies the joint flow-matching and World–Action coupling
+objective shared by both benchmarks. In addition to these com-
+mon terms, Bench2Drive uses decoded occupancy reconstruc-
+tion and trajectory-consistency objectives, while nuScenes
+uses an ego-future prediction objective.
+The decoded occupancy reconstruction objective supervises
+semantic occupancy after the predicted occupancy latent has
+been passed through Docc. This decoded semantic supervi-
+sion is propagated to the World Expert and occupancy output
+decoder.
+The trajectory-consistency objective provides additional su-
+pervision for the Bench2Drive trajectory-related modules. The
+ego-future prediction objective provides benchmark-specific
+supervision for the nuScenes future-ego representation. These
+auxiliary terms complement the latent flow supervision with-
+out changing the scene-to-ego formulation or the inference
+procedure.
+Table S1 summarizes the principal benchmark-specific con-
+figurations.
+Both benchmark configurations use a flow-time shift of
+ρ = 5 and are trained with bfloat16 precision on eight A100
+80GB GPUs.
+B.3
+Stage-II Occupancy Modeling
+For both benchmarks, the scene-to-ego transformation pro-
+duces the re-indexed occupancy ¯OE together with a validity
+mask M E. The mask indicates whether each destination
+location is supported by the spatial extent of the Stage-I scene-
+centric prediction. Unsupported locations are filled with the
+free-space class to form a valid categorical input for Eocc.
+We downsample M E to the occupancy-token resolution
+and obtain a token-wise coverage ratio µ ∈[0, 1]. The pair
+[µ, 1 −µ] is supplied as an additional condition to the World
+13
+
+
+Table S1: Benchmark-specific model and training configurations. The planning and occupancy-prediction rows distinguish the task-specific
+nuScenes input protocols.
+Setting
+Bench2Drive
+nuScenes
+Planning input
+Front-view RGB image and one LiDAR BEV representation
+Camera observations
+Occupancy-prediction input
+The same front-view RGB and LiDAR BEV observations; no
+historical or current ground-truth occupancy is used
+Four historical 3D occupancy frames
+Predicted occupancy
+Temporal BEV occupancy over (t, x, y), without an explicit
+vertical dimension
+Future volumetric occupancy over (t, x, y, z)
+Temporal configuration
+6 future steps at 2 Hz
+4 historical and 6 future occupancy frames for occupancy
+prediction
+Spatial discretization
+64 m × 64 m ego-centered BEV; 1 m per cell
+[−40, 40] × [−40, 40] × [−1, 5.4] m; 0.4 m voxels
+Semantic output
+64 × 64 grid with 11 categorical classes, including free space
+200 × 200 × 16 grid with 17 semantic classes plus free space
+World-state representation
+Latent shape 6 × 8 × 8 × 8 (T × H × W × C); 384
+occupancy tokens of dimension 8
+625 history tokens jointly summarizing four historical 3D
+occupancy frames
+Spatial route prediction
+Dedicated learnable route query decoded into 20 spatial route
+points outside the joint flow; supervised directly
+Not used
+Training procedure
+QA adaptation followed by joint Stage-I/II training with
+λII = 0.5
+QA adaptation followed by joint Stage-I/II training with
+λII = 0.5, followed by Stage-II output-decoder fine-tuning
+Training objectives
+Latent flow matching, decoded occupancy reconstruction,
+trajectory consistency, and World–Action coupling
+Latent flow matching, ego-future prediction, and
+World–Action coupling
+Expert and the ego-centric occupancy output decoder, i.e.,
+the velocity readout ΨE
+o . This condition allows the model to
+distinguish valid transformed content from uncovered source
+regions whose categorical values have been filled with free
+space.
+Supervision of uncovered source regions.
+The coverage
+pair characterizes the Stage-II source, not the validity of its
+supervision. In particular, M E is not a loss mask and does not
+turn uncovered cells into unlabeled targets. The ego-centric
+occupancy objective in Eq. (5) uses all available valid na-
+tive future-ego occupancy targets, including targets in regions
+uncovered by ¯OE. Source coverage and target-label availabil-
+ity are separate notions: the same flow-matching objective
+applies to covered and uncovered source regions whenever
+corresponding supervision is valid. No distinct hole-filling
+loss or unobserved-as-free target is introduced.
+At an uncovered source location, the free-space value is a
+categorical encoding placeholder, not a claim that the future
+world is free or that the target label is unknown. A valid future-
+ego target, if available, supplies the supervision independently
+of the source coverage. Thus Stage II can infer content absent
+from the Stage-I transformed source and also correct predic-
+tion errors and pose-induced spatial misalignment where the
+source is covered. Where the native annotation has no valid
+semantic target, the placeholder must not be interpreted as an
+additional free-space training label.
+Evaluation protocol.
+Occupancy evaluation follows the
+standard benchmark protocol and does not use M E as an
+evaluation mask. The reported mIoU and IoU are computed
+over the standard native future-ego occupancy target rather
+than only over regions covered by the transformed Stage-I
+source.
+B.4
+World–Action Coupling Objectives
+Both stages employ an auxiliary coupling objective between
+the generated occupancy and trajectory. In Stage I, the abso-
+lute trajectory is evaluated against the scene-centric occupancy.
+In Stage II, the accumulated ego-pose increments are evalu-
+ated against the completed ego-centric occupancy.
+In both stages, the coupling objective penalizes trajectory
+regions that depart from the drivable surface or overlap with
+static and dynamic occupancy. The occupancy probabilities
+are detached when these terms are computed. Consequently,
+the coupling objectives update the Action Expert without di-
+rectly encouraging the World Expert to remove obstacles from
+its predicted future.
+14

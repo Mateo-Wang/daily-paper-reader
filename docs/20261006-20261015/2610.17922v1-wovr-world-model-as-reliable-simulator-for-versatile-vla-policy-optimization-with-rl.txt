@@ -1,0 +1,3203 @@
+1
+WoVR+: World Model as Reliable Simulator for
+Versatile VLA Policy Optimization with RL
+Shangqing Zhou1,2,†, Zhennan Jiang1,2,3,†, Ning Ma4, Xin Fu2, Yupeng Zheng1,2, Shuai Tian1,2, Huangrui Li1,2,
+Jiahao Liu1, Chao Yu5, Zhongpu Xia1,6, Haoran Li1,*, Dongbin Zhao1
+Abstract—Action-conditioned world models can reduce costly
+real-robot interaction in reinforcement learning for Vision-
+Language-Action models (VLA-RL), but hallucinations can mis-
+lead policy optimization. Extending them to richer VLA inter-
+faces and long-horizon tasks raises challenges in spatiotemporal
+and cross-modal consistency, exploration–reliability balance in
+RL, and compounding rollout errors. We present WoVR+,
+extending WoVR’s hallucination-aware WM-RL framework by
+redesigning the learned environment and imagined interaction
+protocol: A VLA-interface-aligned world model provides multi-
+view prediction and proprioceptive updates while mitigating
+hallucinations. Chunk-wise noise preserves flow-based policy
+exploration while limiting prediction-degrading action jitter. For
+long-horizon tasks, stage-local imagined training combines stage-
+entry resets, stage-specific rewards, local horizons, and control-
+lable sampling to shorten generated prefixes and balance training
+across stages. WoVR+ improves success over SFT by 21.09% and
+16.7% on RoboTwin and 6 real-robot tasks. Long-horizon phone-
+packaging success rises from 30% to 75%. Videos are available
+at https://youmo445.github.io/WoVR Plus.github.io/.
+Index Terms—Multi-View World Model, Vision-Language-
+Action Model, Reinforcement Learning, Robot Learning
+I. INTRODUCTION
+V
+ISION-Language-Action (VLA) models [1], [2] are play-
+ing an increasingly important role in robotic manipu-
+lation [3], where actions are generated end-to-end by con-
+ditioning on language instructions and visual observations.
+Most existing VLA systems are trained via supervised fine-
+tuning (SFT). Although effective in many downstream tasks,
+this paradigm fundamentally limits the performance ceiling of
+VLA policies, as it is tightly constrained by the quality and
+coverage of demonstration data.
+Reinforcement Learning (RL) [4] can further improve VLA
+policies [5], [6] obtained through SFT. However, off-policy
+methods are generally more sample-efficient but often suffer
+from distribution shift and training instability [7], whereas
+on-policy updates [8], [9] require massive parallel environ-
+ment interaction for stable and efficient training [10], making
+them impractical for real robots due to costly data collec-
+tion [11]. Although simulation-based alternatives have been
+1 Institute of Automation, Chinese Academy of Sciences.
+2 School of Artificial Intelligence, University of Chinese Academy of
+Sciences.
+3 Zhongguancun Academy.
+4 Xi’an Jiaotong-Liverpool University.
+5 Tsinghua University.
+6 Anyverse Dynamics.
+† Shangqing Zhou and Zhennan Jiang contributed equally to this work.
+* Haoran Li is the corresponding author.
+explored [12]–[14], aligning simulators with real-world dy-
+namics remains highly challenging.
+Meanwhile,
+Action-conditioned
+world
+models
+(ACWMs) [15]–[17] based on video generation models [18],
+[19] offer the possibility of supporting large-scale imagined
+interaction with limited robot data. Several works directly
+treat them as learned environments [20]–[22] to optimize VLA
+policies through RL [23], [24], using imagined interactions
+to reduce additional online robot interaction.
+However, learned ACWMs are not faithful simulators [25],
+[26]. Here, hallucination refers to a systematic mismatch
+between imagined and real outcomes in closed-loop interac-
+tion. ACWMs may generate visually plausible yet physically
+incorrect rollouts, resulting in spurious success signals under
+the policy’s actions. If hallucinated trajectories are directly
+used for policy optimization, RL is incentivized to exploit
+systematic model errors rather than true task progress. This
+leads to a critical question:
+If world models inevitably hallucinate, how can RL remain
+reliable under imperfect imagined dynamics?
+WoVR [25] argues that using world models for RL is
+not primarily a modeling problem, but a reliability prob-
+lem, and controls hallucination at three interconnected levels:
+controllable simulator design, reliable imagined interaction,
+and policy–model alignment. Related efforts have also sought
+to mitigate the impact of unreliable imagination by down-
+weighting rewards from hallucinated rollouts [27], ground-
+ing synthetic experience in real trajectories and regulating
+its use [28], and shortening imagined trajectories through
+branched rollouts initialized from recorded states [26].
+Despite these efforts, extending reliable WM-RL to mod-
+ern VLA policies and long-horizon tasks introduces addi-
+tional challenges. First, unlike the predominantly single-view
+ACWMs [20], [25], modern VLA policies [1], [2] rely on
+multi-view observations and robot proprioception for fine-
+grained manipulation, requiring world models to maintain
+temporal, spatial, and cross-modal consistency. Second, during
+WM-RL training of flow-based action-chunk policies, overly
+stochastic action exploration can disrupt action smoothness
+and exacerbate world-model hallucinations. Maintaining ef-
+fective exploration while suppressing exploration-induced ac-
+tion jitter is therefore essential to preserving the reliability
+of imagined interaction. Finally, world-model generalization
+errors can accumulate over autoregressive rollouts, limiting
+the performance of existing WM-RL frameworks on long-
+horizon, multi-stage tasks, making reliable policy optimization
+increasingly challenging.
+arXiv:2610.17922v1  [cs.RO]  13 Oct 2026
+
+
+2
+(B) Extended Scope
+VLA-aligned 
+interface
+VLA
+EEF
+VLA
+joint
+Long-horizon task
+Video Generation Quality 
+WM-RL (success rate ↑) 
+6-task WM-RL
+4-stage long-horizon WM-RL
+(C) Simulator results
+(D) Real-world results
+Hallucination in world model
+Rollout in real world
+(A) Shared Core Problem
+Success in world model, 
+fail in reality? 
+ How to mitigate the 
+hallucination?
+Base
+Full-start+
+traj reward
+Full-start+
+stage reward WoVR+
+0
+25
+50
+75
+100
+30
+50
+55
+75
+Phone-Packing Success Rate (%)
+Adjust Bottle
+Click Bell
+0
+25
+50
+75
+100
+70.7
+72.7
+68.8
+79.3
+83.2
+90.6
+76.6
+78.5
+91.8
+93.8
+SFT
+GRPO
+WoVR
+Ctrl-World
+WoVR+
+Button
+Pressing
+Bottle
+Righting
+Test-Tube
+Transfer
+Flower
+Insertion
+Cup
+Stacking
+Towel
+Folding
+0
+20
+40
+60
+80
+100
+Success rate (%)
+15
+60
+35
+55
+55
+15
+45
+70
+55
+70
+60
+35
+Single-arm
+Bimanual
+SFT
+WoVR+
+LPIPS
+FID
+FVD
+SSIM
+PSNR
+Head View
+LPIPS
+FID
+FVD
+SSIM
+PSNR
+Wrist Views
+LPIPS, FID and FVD 
+are inverse-scaled;
+outward is better on all axes.
+WoVR
+EVAC
+Ctrl-World
+WoVR+
+Single view observation!
+Multi-view observations 
+and proprioception 
+aligned with complete
+VLA interface 
+Long-horizon multi-stage 
+task
+Only solve short-horizon task!
+Fig. 1.
+Overview of motivation, extensions, and evaluation of WoVR+. (A) Shared core problem. World-model hallucinations can produce spurious
+imagined successes that fail to transfer to real execution, motivating hallucination-aware WM-RL. (B) Extended scope. WoVR+ extends WoVR’s reliability-
+oriented framework to complete VLA interfaces with multi-view observations and proprioceptive feedback, as well as long-horizon, multi-stage manipulation.
+(C) Simulator results. WoVR+ improves multi-view video-generation fidelity and enables effective policy optimization through WM-RL. (D) Real-world
+results. The resulting policies improve performance across six real-robot manipulation tasks and support end-to-end optimization of a 4-stage long-horizon
+task.
+We therefore propose WoVR+, a VLA-Interface-Aligned
+World-model-based
+framework
+for
+post-training
+Vision–
+Language–Action policies with Reinforcement Learning, pre-
+serving WoVR’s overall WM-RL framework while redesigning
+its learned environment and imagined interaction protocol
+(Fig. 1). We construct a geometry-grounded world model that
+provides multi-view prediction and proprioceptive feedback,
+aligning the learned environment with the VLA interface
+while mitigating hallucinations. To support reliable imagined
+interaction under exploration, we adopt chunk-wise noise,
+promoting meaningful, temporally coherent exploration while
+suppressing jitter. For long-horizon tasks, we introduce stage-
+local imagined training, using short rollouts from stage-entry
+states and localized supervision to provide direct, balanced
+training opportunities across stages while avoiding long gen-
+erated prefixes.
+Our contributions are summarized as follows:
+• Extending hallucination-aware WM-RL framework
+across richer settings. Building on WoVR’s central
+premise that reliable policy optimization requires ex-
+plicitly controlling hallucination in imagined interaction,
+we extend the same WM-RL framework to richer VLA
+interfaces and long-horizon, multi-stage manipulation.
+The present work broadens the reliability problem to
+include interface completeness, exploration-induced pre-
+diction degradation, and stage-wise learning over long
+horizons.
+• Substantial redesigns for the extended WM-RL set-
+ting. Rather than directly reusing WoVR’s original com-
+ponents, we redesign the learned environment around
+geometry-grounded multi-view prediction and proprio-
+ceptive feedback to align with VLA interface while mit-
+igating hallucinations; introduce chunk-wise Flow-SDE
+exploration to suppress exploration-induced jitter that can
+degrade world-model predictions; and develop stage-local
+imagined training with stage-entry resets, stage-specific
+rewards, local horizons, and controllable sampling to bal-
+ance training opportunities across stages while avoiding
+long generated prefixes for long-horizon tasks.
+• Systematic evaluation in simulation and on real
+robots. Experiments validate resulting framework from
+WM prediction to downstream policy improvement. Be-
+yond performance gains, analyses demonstrate the ben-
+efits of temporally coherent exploration and stage-local
+long-horizon training. WoVR+ improves average success
+over SFT by 21.09% on 2 RoboTwin tasks and 16.7%
+across 6 real-robot tasks, and increases success on 4-stage
+phone packaging from 30% to 75%.
+This work substantially extends the hallucination-aware
+WM-RL framework of WoVR [25] to align with modern
+multi-view VLA interfaces, including proprioceptive feedback,
+and support long-horizon multi-stage manipulation. Section III
+summarizes the shared framework and clarifies the compo-
+nents retained, redesigned, and introduced in the present work.
+II. RELATED WORK
+A. Multi-View World Models
+Recent ACWMs increasingly support closed-loop inter-
+action with multi-view VLAs. Ctrl-World [29] alternates
+chunk-wise multi-view prediction with VLA inference, while
+WEAVER [30] combines multi-view latent dynamics, mem-
+ory, and reward prediction for policy evaluation, synthetic-data
+
+
+3
+augmentation, and test-time planning. GE-Sim2.0 [31] further
+predicts multi-view observations together with robot proprio-
+ception and success signals, and accelerates generation through
+DMD2 [32]. Beyond individual architectures, some studies
+have systematically investigated design choices for ACWMs:
+GigaWorld-1 [33] analyzes pretraining, action representation,
+memory, and evaluator-oriented post-training; GeniWorld [34]
+studies URDF-rendered visual action representations. Despite
+these advances, existing multi-view ACWMs mainly empha-
+size prediction and evaluation, while their use as closed-
+loop environments for VLA-RL places stricter requirements
+on interface consistency across observations, actions, camera
+motion, and proprioceptive transitions [35].
+B. World-Model-Based VLA Reinforcement Learning
+Recent works directly optimize VLA policies through in-
+teractions with ACWMs. World-Env [21] and WMPO [20]
+construct learned environments for VLA policy optimization
+through pixel-space rollouts, with World-Env building on
+EVAC’s [36] world model design. ProphRL [24] extends imag-
+ined policy optimization to flow-based action policies [37].
+WoVR [25] mitigates hallucination through shortened roll-
+outs and policy-model adaptation and World-VLA-Loop [23]
+alternates policy improvement with world-model refinement.
+VLA-MBPO [26] further combines a world model with short
+branched rollouts to reduce compounding prediction errors.
+Despite these advances, existing WM-RL methods either do
+not explicitly address the reliability of world-model-based
+policy optimization or focus on individual reliability issues in
+isolation. How to jointly construct a VLA-aligned learned en-
+vironment, support effective policy exploration, and organize
+reliable imagined policy optimization remains insufficiently
+studied.
+III. WOVR FRAMEWORK AND EXTENSIONS
+Building on the same core premise that controlling hallu-
+cination enables reliable policy optimization in imagination,
+we retain WoVR’s overall WM-RL framework and reliability-
+driven design principles. Within this framework, we system-
+atically redesign the world model, exploration noise, and
+imagined interaction protocol to support RL post-training
+of multi-view VLA policies for long-horizon manipulation.
+This section first reviews WoVR and the shared WM-RL
+framework, then clarifies the components retained and the
+extensions introduced in this work.
+A. WM-RL framework in WoVR
+WoVR mitigates hallucination in WM-RL through three
+complementary mechanisms (Fig. 2): a controllable simulator,
+reliable interaction, and policy–model alignment.
+1) Simulator-level control: WoVR constructs an ACWM
+by injecting actions into a pretrained video generator through
+AdaLN and Cross-Attention, while using first-frame-anchored
+context to stabilize autoregressive rollouts.
+Flow-based VLA
+I.I.D. noise
+Interface
+Dual-channel vectorized
+action projection
+First-frame-anchored 
+context
+DIT
+(A) Controllable Simulator (ACWM)
+Exploratory
+actions
+…
+GRPO Update
+Calculate Reward
+Calculate Advantage
+Update VLA Policy
+Rollout trajectories
+(B) Reliable Interaction (KIR)
+task-critical states
+Keyframe-
+Initialized 
+Rollout
+Full-Start 
+Rollout
+Execution Process
+Success Rate
+(C) Policy-Model Alignment (PACE)
+VLA
+Real  Environment
+ACWM
+ACWM
+VLA
+GRPO Update
+Base policy rollout
+Evolving policy rollout
+RL with
+WMBase
+RL with
+WMEvo
+WMBase
+WMEvo
+KIR
+Group
+Full-Start
+Group
+Fig. 2.
+WM-RL framework in WoVR, redrawn based on [25]. WoVR
+treats the world model as a generative simulator and controls hallucination
+across three levels.
+Before WM-RL, a base VLA policy πθ0, obtained through
+SFT on robot demonstrations, is executed in the real environ-
+ment to collect transition data. The world model Wϕ is then
+trained on these recorded transitions:
+DACWM = {(Oιt, At, Ot+1:t+Hw)} ,
+ϕ0 = arg min
+ϕ
+EDACWM [LACWM(Wϕ)] .
+(1)
+Here, Oιt combines the first-frame anchor with recent ob-
+servations, At denotes the executed action sequence, and
+Ot+1:t+Hw provides the recorded future observations over
+ACWM prediction horizon Hw. The loss LACWM is the flow-
+matching objective for action-conditioned video prediction.
+2) Interaction-Level Reshaping: Once trained, the world
+model is frozen during each policy-optimization phase and
+serves as a learned interaction environment. The VLA policy
+interacts with it in a closed loop to generate groups of
+imagined rollouts from shared reset contexts. A reward model
+evaluates these rollouts, and the policy is updated using the
+clipped GRPO objective:
+JGRPO(θ) = E
+"
+1
+G
+G
+X
+i=1
+1
+T valid
+i
+T valid
+iX
+t=1
+min
+
+ρ(i)
+t (θ) ˆA(i),
+clip
+ ρ(i)
+t (θ), 1 −ϵ, 1 + ϵ
+ ˆA(i)#
+.
+(2)
+The valid length T valid
+i
+extends to the first detected success,
+or to the rollout horizon if no success is detected; subsequent
+steps are masked from optimization.
+This objective complements Keyframe-Initialized Rollout
+(KIR), which initializes a portion of imagined rollouts from
+recorded contexts near task-critical intermediate states. By
+avoiding long generated prefixes, KIR reduces the effective
+prediction depth and the associated accumulation of model
+errors. Trajectory-length normalization assigns greater per-
+timestep weight to shorter rollouts, allowing their task-critical
+segments to contribute.
+3) Alignment-Level Regulation: As WM-RL progresses, the
+policy’s action distribution can drift away from the distribution
+
+
+4
+Success Rate
+First-frame-anchored context with sparse history
+DIT
+DIT
+Action map and raymap encoding
+Interface
+Proprioception Update
+(B) Temporally Coherent Exploration VLA
+(A) VLA-Aligned World Model
+(C) Stage-Local Imagined Optimization
+Stage1
+Stage-balanced reset pool
+Reward 
+Model 1
+Reward 
+Model 2
+Reward 
+Model 3
+Reward 
+Model 4
+Stage reward model
+Stage4
+Stage3
+Stage2
+Controllable Sampling
+Coherent actions
+Flow-based VLA
+Chunk-wise noise  injection
+shared across  chunk timesteps
+VLA-Interface Aligned 
+Observation
+Coherent Actions
+Calculate Advantage
+Update VLA Policy
+Rollout with Stage reset
+Calculate Stage reward
+GRPO Optimization Loop
+Fig. 3.
+Overview of WoVR+. WoVR+ extends the reliability-oriented framework with a VLA-aligned multi-view world model with proprioceptive feedback,
+chunk-wise Flow-SDE exploration and stage-balanced reset-based local rollouts for long-horizon policy optimization.
+represented in the world-model training data, degrading the re-
+liability of imagined transitions and aggravating hallucination.
+WoVR addresses this mismatch through Policy-Aligned Co-
+Evolution (PACE). After an initial phase of imagined policy
+optimization, the evolved VLA policy is executed in the real
+environment to collect a limited set of additional trajectories.
+These trajectories are combined with the original base-policy
+rollouts to further fine-tune the world model using the same
+objective. The refined world model is then frozen, and policy
+optimization resumes through imagined interaction within the
+updated environment. This low-frequency recalibration mit-
+igates policy–model mismatch without requiring continuous
+real-environment interaction or world-model updates during
+each policy-optimization phase.
+B. Extensions and Scope of the Present Work
+Building on the WM-RL framework described above,
+WoVR+ extend WoVR’s hallucination-aware design to sup-
+port multi-view VLA policies and long-horizon, multi-stage
+manipulation (Fig. 3).
+The following summarizes the components retained, re-
+designed, or newly introduced, and clarifies the scope of the
+present study:
+• Extended and Redesigned. We retain WoVR’s first-
+frame anchoring principle and extend its temporal context
+to an anchored sparse history that combines the persistent
+scene anchor with fixed-stride recent observations. We
+redesign the interaction interface and action-conditioning
+mechanism. The single-view, delta-EEF formulation with
+vector action conditioning in WoVR is replaced by a
+VLA-aligned multi-view interface with absolute joint-
+and-gripper commands, geometry-grounded action and
+camera conditioning, and command-based proprioceptive
+updates.
+• New. We introduce chunk-wise Flow-SDE exploration for
+absolute-action chunks, preserving the marginal explo-
+ration scale while enforcing temporal coherence across
+neighboring action targets.
+• Broadened in scope. KIR in WoVR uses intermediate-
+state initialization around a task-critical region to reduce
+effective prediction depth. In the present work, we carry
+this reset-based principle into long-horizon multi-stage
+optimization, combining data-supported stage-entry resets
+with stage-specific rewards, local rollout horizons, and
+controllable stage sampling to organize training opportu-
+nities across task stages.
+IV. METHODS
+As summarized in Fig. 3, WoVR+ consists of three coupled
+components: a VLA-Aligned World Model (Sec. IV-A),
+Temporally Coherent Exploration (Sec. IV-B), and Stage-
+Local Imagined Optimization (Sec. IV-C).
+A. A VLA-Aligned Multi-View World Model for Reliable Local
+Dynamics
+We instantiate the visual transition model as Wϕ. For
+WM-RL, reliability requires more than visual fidelity: the
+model must respond to robot actions faithfully and provide
+observations and proprioception needed for subsequent policy
+decisions. We therefore construct a multi-view model with
+explicit action and camera geometry, an anchored temporal
+context, and a command-based proprioceptive update. Given
+an absolute-joint action chunk At, the visual transition is
+bOt+1:t+Hw ∼Wϕ (· | Oιt, At; K, E) ,
+(3)
+
+
+5
+where Oιt is the sparsely sampled multi-view history, K and
+E denote camera intrinsics and extrinsics. Hw is the prediction
+horizon of one ACWM call. Fig 4 summarizes the ACWM,
+which uses Wan2.2-TI2V-5B [18] as the video backbone and a
+VACE parallel control branch [38] for geometric conditioning.
+𝑶𝟎
+𝑶𝒕
+𝑶𝒕−𝟏−𝒉:𝒕−𝟏
+C
++
++
+…
+…
+Wan
+Encoder
+Wan
+Decoder
+𝑹𝒂𝒚𝑴𝒂𝒑𝒅
+𝑹𝒂𝒚𝑴𝒂𝒑𝒐
+𝑽𝑰𝑬𝑾𝒆𝒎𝒃
+Action projection
+1 Geometry-Grounded Action and Camera Conditioning
+2 Latent-Aligned Control Injection
+3 Closed Loop Context
+Command-based 
+proprioception
+3 Proprioception Update
+4 Robust Training and Efficient Generation
+…
+…
+…
+Temporal-stride sampling
+Flow-matching objective 
+& 
+DMD2 acceleration
+Local corruption
+Stride={1,2,3,4}
++
+Control tokens
+Fig. 4. Architecture of the VLA-aligned world model. Action maps and
+camera ray maps are explicitly encoded as geometric conditions and injected
+into the backbone through a parallel DiT control branch, enabling multi-view
+video prediction.
+1) Geometry-Grounded Action and Camera Conditioning:
+a) Spatial action maps: WoVR injects action condi-
+tions through Cross-Attention and AdaLN, which provides
+action conditioning but does not explicitly encode the view-
+dependent geometric consequences of robot motion. To sup-
+port prediction across head and wrist views and improve
+responsiveness to action perturbations, we replace this vector
+conditioning with view-specific geometric control. To estab-
+lish an explicit correspondence between joint commands and
+image-space motion, we convert absolute-joint targets into
+end-effector (EEF) poses through forward kinematics and
+project them into view-specific action maps [24], [36], [39].
+EEF is represented by a circle and three projected local
+coordinate axes: the axes encode orientation, while the center
+of the circle represents the projection position of EEF, the
+diameter encodes the projection depth, and the color of the
+circle encodes the degree of the gripper’s opening. Given arm
+b and target time t, EEF pose in camera v is
+cvT(b)
+˜e,t = (wTcv,t)−1 FKb
+
+q(b)
+t
+
+eT˜e.
+(4)
+where q(b)
+t
+is the absolute-joint target, wTcv,t is the camera-
+to-world pose and eT˜e is a fixed local visualization offset. The
+projected circle radius is computed as
+ρ(b)
+v,t = clip
+ 
+ρref
+zref
+z(b)
+v,t
+, ρmin, ρmax
+!
+,
+(5)
+where ρref is the pixel radius at reference depth zref. Its color
+cb(ˆg(b)
+t ) encodes the normalized gripper value.
+We adapt this representation to multi-view bimanual in-
+teraction by compositing the circles semi-transparently. The
+resulting maps retain perspective cues and overlapping signals
+from multiple arms, as illustrated in Fig 5. Repeating this
+construction along the action horizon gives one action-map
+sequence per view. The sequences are arranged identically to
+the multi-view observations before VAE encoding.
+Fig. 5. Construction of Action Map in Fig. 4. Projected EEF axes encode
+orientation, circle color indicates gripper openness, and depth-dependent circle
+size supplies perspective information. Semi-transparent compositing retains
+overlapping bimanual control cues.
+b) Camera Raymaps: Action map specifies where EEF
+projects, but the head and wrist views differ in camera pose
+and motion. We therefore encode per-view ray origins and
+directions as continuous geometric conditions [31], [36].
+Rather than rasterizing signed ray coordinates as quantized
+RGB images, we construct them directly on the spatial grid
+of the video latent, avoiding an additional VAE encoding
+path. For a latent-grid location (x, y), let the camera-to-world
+transform be (Rv,u, tv,u) and let Kz
+v be the intrinsic matrix
+scaled to the latent resolution. The corresponding ray is
+oz
+v,u(x, y) = tv,u,
+dz
+v,u(x, y) =
+Rv,u(Kz
+v)−1p(x, y)
+∥Rv,u(Kzv)−1p(x, y)∥2
+,
+(6)
+where p(x, y) = [x+ 1
+2, y + 1
+2, 1]⊤. Camera poses are updated
+at each frame using forward kinematics and fixed hand–eye
+calibration. Thus, the geometric condition describes both the
+commanded manipulation and the camera configuration from
+which it is observed.
+2) Latent-Aligned Control Injection: The action map and
+raymap representations must align with the video latent in
+both time and space. Let Zact = EVAE(M) denote the
+latent of the assembled action-map sequence M. The Wan
+VAE retains a separate first-frame latent slot and compresses
+subsequent frames in groups of four. We accordingly associate
+each latent slot with four ray origins and four ray directions,
+concatenating their coordinates along the channel dimension.
+The first-frame rays are repeated four times for the initial slot.
+Per-view tensors are then assembled using the same spatial
+layout as the video and action maps.
+Denote the resulting tensors by Ro and Rd. They are fused
+with the action latent and projected to the control hidden space:
+F geo = Concatch
+ Zact, Ro, Rd
+,
+gℓ,x,y = [P(F geo)]ℓ,x,y + e v(x,y),
+(7)
+where P is a 3D patch embedding and e v(x,y) is a learned
+embedding identifying the camera view occupying the corre-
+sponding spatial region. Fig. 6 illustrates this construction.
+We inject this view-aware condition through a parallel
+DiT control stream rather than replacing the pretrained video
+
+
+6
+Wan
+Encoder
+[𝟑, 𝑻, 𝑯, 𝑾]
+t=0
+C
+t=1,2,3,4
+t=0
+repeat × 4
+t=1,2,3,4
+[𝑻′, 𝑯𝒛,𝑾𝒛, 𝑫𝒛= 𝟒𝟖]
+[𝑻′, 𝑯𝒛, 𝑾𝒛, 𝑫𝑹= 𝟏𝟐]
+repeat × 4
+[𝑻′, 𝑯𝒛,𝑾𝒛, 𝑫𝒄= 𝑫𝒛+ 𝑫𝑹+ 𝑫𝑹]
+[𝑻′, 𝑯𝒑, 𝑾𝒑, 𝑫𝑫𝑰𝑻= 𝟑𝟎𝟕𝟐]
+Conv3d
++
+view embedding
+[𝑻′, 𝑯𝒛, 𝑾𝒛, 𝑫𝑹= 𝟏𝟐]
+Control tokens
+𝒁𝒂𝒄𝒕
+𝑹𝒐
+𝑹𝒅
+𝑭𝒈𝒆𝒐
+Fig. 6. Construction of latent-aligned geometric condition in Fig. 4. The
+VAE-encoded action map is concatenated with temporally grouped ray origins
+and directions, projected into the VACE hidden space, and augmented with
+view embeddings. Hz, Wz denote the assembled video-latent size; the patch
+projection produces Hp, Wp.
+backbone. Let Bj and Cj denote the jth backbone and control
+blocks, respectively. Their features are updated as
+cj+1 = Cj(cj, g),
+hj+1 = Bj(hj) + 1[j ∈S] Pj(cj+1),
+(8)
+where S specifies the backbone blocks with control injection
+and Pj is a learnable projection. The control branch learns
+the incremental effects of robot actions and camera geometry
+while retaining the backbone architecture and its pretrained
+initialization. Both the main DiT and the control branch are
+trainable; the VAE and text encoder remain frozen.
+3) Closed Loop Context and Proprioception Update:
+a) Anchored sparse history: During autoregressive in-
+teraction, generated observations become the context for
+subsequent ACWM calls. Recent observations describe task
+progress but may gradually lose initial scene information;
+conversely, the first frame alone does not describe the current
+state. Therefore, based on WoVR, we combine a persistent
+first-frame anchor with fixed-stride recent history [25], [31]:
+ιt = (0, [t −(C −2)s]+, . . . , [t −s]+, t) ,
+(9)
+where [x]+ = max(0, x), C = 5 is the context length, and s =
+4 is the history stride. Clipping early indices to zero supplies a
+valid context near initialization, while the fixed context budget
+retains both the scene anchor and recent task information.
+b) Command-based proprioception: The policy also re-
+quires the joint and gripper state at its proprioception input.
+Under the absolute-position interface, we approximate this
+sequence by shifting the commanded targets by one step:
+bst+1:t+H = ajoint
+t:t+H−1,
+(10)
+where ajoint includes absolute joint and gripper targets.
+This command-following approximation avoids an additional
+learned proprioception model. This is enabled by the absolute-
+joint interface: unlike delta-EEF commands, the policy output
+directly specifies the joint target required by the next VLA
+query. We evaluate this approximation with learned transition
+model in Appendix A.
+4) Robust Training and Efficient Generation:
+a) Training for recursive prediction: The ACWM is
+trained on real observations but receives its own generated
+observations during WM-RL. To reduce this context gap,
+we apply geometry-aware local corruption to manipulation-
+relevant regions of non-anchor context frames. A 3D region
+near a selected EEF is projected into the context frames
+of one selected camera and blurred, while the first-frame
+anchor and all other views remain unchanged. We also sample
+temporal strides from {1, 2, 3, 4}, synchronizing the selected
+observations, actions, action maps, and camera conditions.
+This exposes the model to different motion magnitudes and
+prediction intervals without collecting additional trajectories.
+b) Flow-matching objective and inference: Let z0 denote
+the clean target video latent and let ε ∼N(0, I). We form
+zτ = (1−τ)z0 +τε and train a velocity predictor conditioned
+on the sparse history and geometric control:
+LFM = E
+h
+∥vϕ(zτ, τ | Oιt, g) −(ε −z0)∥2
+2
+i
+.
+(11)
+We use five integration steps for the standard ACWM and
+further apply DMD2 [32] to obtain a one-step generator for
+higher-throughput imagined interaction.
+B. WM-RL with Temporally Coherent Exploration
+We optimize flow-based VLA policies in the learned
+environment using the Flow-SDE sampling formulation of
+πRL [10] and GRPO [9]. We first describe the stochastic
+sampling procedure, then introduce chunk-wise noise for tem-
+porally coherent exploration.
+1) From Flow-ODE to Flow-SDE: For one policy query,
+let c denote the current multi-view observations, propriocep-
+tion, and task instruction. A flow-based policy generates an
+action chunk by transporting Gaussian initial noise through
+an ordinary differential equation (ODE):
+dxτ
+dτ = vθ(xτ, τ | c),
+(12)
+where xτ ∈RHa×D is the intermediate action chunk, Ha is
+the action horizon, and D is the action dimension. The inte-
+gration is deterministic given the initial noise and conditioning
+input.
+To introduce stochastic transitions with tractable condi-
+tional likelihoods, we adopt the ODE-to-SDE conversion of
+πRL [10]. At a selected integration step, the discretized update
+is
+xk+1,h = µθ,k,h + σkϵiid
+k,h,
+ϵiid
+k,h
+iid
+∼N(0, ID),
+(13)
+where k indexes flow integration steps and h ∈{1, . . . , Ha}
+indexes temporal positions within the action chunk. Here,
+µθ,k,h is the drift-corrected Flow-SDE transition mean, rather
+than the original ODE update, and σk is the discretized
+
+
+7
+noise standard deviation, including the integration-step scaling.
+These Gaussian transitions provide tractable scores for policy
+optimization. During training, we use one randomly selected
+SDE step per action chunk and ODE updates at the remaining
+steps.
+I.I.D. noise
+Chunk-wise noise
+Flow steps
+I.I.D. noise
+Chunk-wise noise
+(A)
+(B)
+Fig. 7. Action-space exploration for flow-based action-chunk policies. (A)
+I.I.D. SDE applies independent noise to each action token, whereas chunk-
+wise SDE shares one noise vector across the horizon. (B) I.I.D. noise causes
+high-frequency action fluctuations, while chunk-wise noise preserves per-
+token exploration with temporally coherent deviations from ODE.
+2) Chunk-Wise Exploration Noise: Unlike the delta-EEF
+interface used in WoVR, each token in our absolute-joint
+action chunk directly specifies a target robot configuration.
+Consequently, applying independent Flow-SDE innovations to
+neighboring tokens perturbs consecutive targets in different
+directions, producing high-frequency variations along the pre-
+dicted action sequence.
+Simply reducing the noise scale suppresses these fluctua-
+tions, but at the cost of weaker exploratory perturbations and
+substantially larger gradient magnitudes, which can destabilize
+policy optimization.
+We instead preserve the marginal innovation scale at each
+action token while reshaping its temporal covariance. At the
+selected Flow-SDE step, we replace the I.I.D. innovation in
+Equation 13 with
+ϵcw
+k,h = zk,
+zk ∼N(0, ID),
+Cov
+ ϵiid
+k,h, ϵiid
+k,h′
+
+= 0,
+h̸ = h′,
+Cov
+ ϵcw
+k,h, ϵcw
+k,h′
+
+= ID,
+h̸ = h′.
+(14)
+Noise sharing is restricted to temporal positions within the
+sampled action chunk. The initial Gaussian noise, transition
+mean, and noise schedule remain unchanged.
+Thus, each temporal position retains the same Gaussian
+innovation marginal, while neighboring action tokens receive
+a coherent perturbation rather than independent deviations.
+Chunk-wise noise therefore reallocates exploration toward
+temporally coherent directions instead of merely reducing its
+per-token magnitude, as illustrated in Fig. 7.
+The sampled action chunks drive closed-loop interaction
+with the world model, and grouped imagined returns provide
+the advantages for GRPO. We retain the per-token Gaussian
+transition log-scores to construct surrogate policy ratios. Be-
+cause chunk-wise noise changes the cross-token dependence,
+these ratios are not exact joint likelihood ratios of the corre-
+lated action-chunk transition.
+C. Stage-Local Imagination for Long-Horizon Manipulation
+1) Limitations of Full-Start WM-RL: Long-horizon WM-
+RL using GRPO with full-start rollouts faces three coupled
+MASK
+MASK
+MASK
+MASK
+Direct access to 
+later stage
+Limited later-stage 
+coverage!
+Stage1
+Stage4
+Stage3
+Stage2
+Full-start 
+rollouts
+Stage-reset 
+rollouts
+Long generated 
+prefixes!
+Short local rollouts
+Fig. 8. Stage-balanced imagined interaction. Stage resets directly initialize
+GRPO rollout groups from data-supported stage-entry states, improving late-
+stage coverage while avoiding long model-generated prefixes.
+limitations: insufficient coverage of later-stage states, sparse
+optimization signals from trajectory-level binary rewards, and
+compounding world-model errors over long autoregressive
+rollouts.
+Consider a task comprising M causally ordered stages
+{Gm}M
+m=1, where pπ
+m is the probability that policy π completes
+stage m after reaching it, and Lm is its local horizon. Under
+full-task imagination, the probability of reaching stage m and
+the world-model-generated prefix preceding it are
+qπ
+m =
+m−1
+Y
+j=1
+pπ
+j ,
+T pre
+m
+=
+m−1
+X
+j=1
+Lj.
+(15)
+Consequently, among N full-task rollouts, only Nqπ
+m are
+expected to reach stage m, causing later-stage training op-
+portunities to decay multiplicatively.
+Let T valid
+i
+denote the number of valid rollout steps, defined
+as the first-success timestep for successful trajectories and the
+rollout horizon otherwise, with frames after success or beyond
+the horizon masked. Under trajectory-level binary supervision,
+the reward is assigned only at the terminal valid step:
+r(i)
+t
+= yi 1
+
+t = T valid
+i
+
+,
+yi ∈{0, 1},
+where yi indicates full-task success. For a group of G rollouts
+from the same initial state, the clipped GRPO objective is
+JGRPO(θ) = E
+"
+1
+G
+G
+X
+i=1
+1
+T valid
+i
+T valid
+iX
+t=1
+min
+
+ρ(i)
+t (θ) ˆA(i),
+clip
+ ρ(i)
+t (θ), 1 −ϵ, 1 + ϵ
+ ˆA(i)#
+,
+(16)
+where ρ(i)
+t (θ) is the surrogate policy ratio, ϵ is the clipping
+threshold, and ˆA(i) is obtained by normalizing the trajectory
+return R(i) = P
+t r(i)
+t
+= yi within the group. Thus, all valid
+steps share the same outcome-based advantage, while failed
+rollouts receive the same return regardless of their intermediate
+progress.
+Moreover, the rollouts that do reach later stages are condi-
+tioned on increasingly long generated prefixes T valid
+i
+, making
+their imagined states more susceptible to accumulated world-
+model errors.
+
+
+8
+2) KIR
+and
+Its
+Limitations:
+WoVR
+[25]
+introduces
+Keyframe-Initialized Rollouts (KIR), initializing a portion of
+WM–VLA rollouts from task-critical states to reduce pre-
+diction errors accumulated over long generated prefixes. Its
+implementation selects a single task-level keyframe near the
+earliest common failure region.
+For the keyframe-initialized component, let k denote the
+reset index and T KIR
+i
+the valid length of the generated suffix.
+Using the notation above, its GRPO contribution can be
+written as
+JKIR(θ) = E
+"
+1
+G
+G
+X
+i=1
+1
+T KIR
+i
+k+T KIR
+i
+X
+t=k+1
+min
+
+ρ(i)
+t (θ) ˆA(i)
+KIR,
+clip
+ ρ(i)
+t (θ), 1 −ϵ, 1 + ϵ
+ ˆA(i)
+KIR
+#
+,
+(17)
+where the expectation is over keyframe contexts and grouped
+suffix rollouts.
+KIR therefore establishes the usefulness of intermediate-
+state initialization for reducing effective prediction depth.
+However,
+it
+treats
+initialization
+primarily
+as
+a
+rollout-
+shortening mechanism around a task-level critical state, rather
+than as a way to organize policy learning across different task
+stages.
+3) Stage-Local Imagined Policy Optimization: We general-
+ize this intermediate-state initialization principle into a stage-
+organized training protocol, using intermediate-state resets
+not only to shorten generated prefixes but also to reorga-
+nize long-horizon policy optimization. Instead of selecting a
+single task-level critical region, we construct data-supported
+entry distributions for all task stages and couple them with
+stage-specific rewards, local horizons, and controllable stage-
+sampling probabilities, thereby jointly changing the rollout
+initialization distribution, reward decomposition, rollout hori-
+zon, and training allocation [40], [41]. To instantiate this
+stage-organized protocol, we define stage boundaries and entry
+distributions based on transitions between manipulation skills
+and observable subgoal completion. Each stage is assigned a
+separate binary completion reward, providing localized opti-
+mization signals without requiring successful completion of
+the entire task.
+We sample a stage mstart
+with controllable weights
+{ωm}M
+m=1, and then sample an initial state s0 ∼ρmstart
+together with its recorded observation history. This changes
+the stage-start probability and generated prefix to
+qπ
+m,reset = ωm,
+T pre
+m,reset = 0.
+(18)
+We use balanced weights ωm = 1/M, providing each stage
+with N/M direct rollout starts in expectation without replay-
+ing any preceding stage. We then branch a GRPO rollout group
+from each reset state for the corresponding local horizon Lm,
+as illustrated in Fig. 8.
+Let T valid
+i,m
+≤Lm denote the valid length of local rollout
+i for stage m, with time indexed from the reset state. Only
+successful completion of the selected stage receives a nonzero
+reward: r(i)
+t,m = y(i)
+m 1[t = T valid
+i,m ], where y(i)
+m ∈{0, 1} indicates
+stage completion, rather than full-task success. Frames after
+detected stage completion or beyond the local horizon are
+masked. The stage-balanced clipped GRPO objective is
+Jstage(θ) =
+M
+X
+m=1
+ωm E
+"
+1
+G
+G
+X
+i=1
+1
+T valid
+i,m
+T valid
+i,m
+X
+t=1
+min
+
+ρ(i)
+t,m(θ) ˆA(i)
+m ,
+clip
+ ρ(i)
+t,m(θ), 1 −ϵ, 1 + ϵ
+ ˆA(i)
+m
+#
+,
+(19)
+where the expectation is over reset states s0 ∼ρm and the
+corresponding rollout groups generated by the old policy in the
+world model. The advantage ˆA(i)
+m is obtained by normalizing
+the local return R(i)
+m = P
+t r(i)
+t,m = y(i)
+m within each group
+sharing the same stage and reset state; ρ(i)
+t,m(θ) denotes the
+same surrogate policy ratio used above.
+Together, stage-balanced resets provide direct training op-
+portunities across all stages, including the initial stage,
+while eliminating cross-stage model-generated prefixes. Stage-
+specific rewards further allow each skill segment to be opti-
+mized without requiring successful execution of the remaining
+task. All stages optimize a shared VLA policy, which executes
+the complete task end-to-end without resets at deployment.
+V. EXPERIMENTS
+Our experiments evaluate the proposed world model and its
+use as an interactive environment for VLA-RL. We organize
+the evaluation around five questions:
+1) World Model Capability (Sec.V-A) Does the pro-
+posed ACWM provide the basic predictive capability re-
+quired of a VLA interaction environment, including high
+fidelity, cross-view consistent, and action-conditioned
+video generation?
+2) Policy-Level Utility of the ACWM (Sec.V-B) Does
+the WM, beyond high-fidelity video prediction, support
+reliable policy evaluation and provide useful training
+data for policy improvement?
+3) Exploration in WM-RL (Sec.V-C) How should a flow-
+based VLA explore when interacting with the learned
+environment?
+4) Policy Optimization with WM-RL (Sec.V-D) Can
+RL entirely through imagined VLA–WM interaction
+improve the policy?
+5) Long-Horizon Policy Learning (Sec.V-E) How can
+WM-RL be organized to effectively optimize long-
+horizon tasks composed of multiple sequential manip-
+ulation skills?
+Our experiments span both simulation and real robots:
+RoboTwin is used for controlled world-model and WM-RL
+studies, while policy-level consistency, multi-task WM-RL,
+and long-horizon task are evaluated on real robots.
+A. World Model Capability
+1) Video Prediction Setup: We evaluate video generation
+on RoboTwin, training on 2,000 trajectories from 50 tasks (40
+
+
+9
+per task) and testing on 50 held-out trajectories (one per task).
+We compare against the following representative ACWMs:
+• WoVR [25]. WoVR serves as the methodological basis
+substantially extended in this work. We evaluate both
+the original single-view model and a three-view adap-
+tation. For the three-view adaptation, WoVR is trained
+on the same three-view observations and absolute-joint
+commands as our model.
+• Ctrl-World [29]. Ctrl-World is an SVD-based [42]
+ACWM that natively supports multi-view video predic-
+tion and conditions generation on robot actions through
+cross-attention.
+• EVAC [36]. EVAC adopts a U-Net [43] video-generation
+architecture and explicitly represents robot and camera
+geometry using action maps and camera raymaps, while
+supporting multi-view prediction.
+We report LPIPS [44], FID [45], FVD [46], SSIM [47], and
+PSNR [48] as video-quality metrics.
+3-views
+3-views
+1-view
+WoVR
+WoVR
+GT
+reference
+Not available
+Not available
+Head
+Left wrist
+Right wrist
+WoVR+
+Fig. 9. Qualitative comparison of multi-view prediction.
+2) Multi-View Prediction Fidelity and Efficiency: Table I
+shows our 5-step model achieves the best overall fidelity across
+head and wrist views with high throughput, while DMD2
+enables one-step generation. As shown in Fig. 9, although ex-
+tending WoVR to three views improves localization, its cross-
+view layouts remain inconsistent; our model better preserves
+object counts and spatial relations.
+3) Autoregressive Prediction Fidelity: We next evaluate the
+first 200 frames of 20 held-out autoregressive rollouts in eight
+25-frame intervals, reporting frame-aligned LPIPS, SSIM, and
+PSNR since each interval contains too few samples for reliable
+FID or FVD.
+Fig. 10 shows that all methods degrade over time, while ours
+maintains the best overall fidelity across views and horizons.
+This motivates limiting long model-generated prefixes despite
+the improved autoregressive stability. Qualitatively, Ctrl-World
+and EVAC exhibit structural distortions, while WoVR produces
+less realistic surface appearance; our WoVR+ better preserves
+both geometry and visual realism.
+4) Prediction
+under
+Policy-Induced
+Actions:
+Held-out
+demonstration actions do not capture the action shift encoun-
+tered in WM-RL, where policy exploration produces action
+chunks that are executable but underrepresented in the training
+data. We therefore sample Flow-SDE actions from held-out
+0-25
+25-50
+50-75
+75-100
+100-125
+125-150
+150-175
+175-200
+Frame interval
+0.1
+0.2
+0.3
+0.4
+LPIPS (lower is better)
+Head view
+LPIPS
+0-25
+25-50
+50-75
+75-100
+100-125
+125-150
+150-175
+175-200
+Frame interval
+0.7
+0.8
+0.9
+SSIM (higher is better)
+SSIM
+0-25
+25-50
+50-75
+75-100
+100-125
+125-150
+150-175
+175-200
+Frame interval
+10
+15
+20
+25
+30
+PSNR (dB; higher is better)
+PSNR
+0-25
+25-50
+50-75
+75-100
+100-125
+125-150
+150-175
+175-200
+Frame interval
+0.10
+0.15
+0.20
+0.25
+0.30
+0.35
+0.40
+LPIPS (lower is better)
+Wrist-view mean
+0-25
+25-50
+50-75
+75-100
+100-125
+125-150
+150-175
+175-200
+Frame interval
+0.80
+0.85
+0.90
+0.95
+SSIM (higher is better)
+0-25
+25-50
+50-75
+75-100
+100-125
+125-150
+150-175
+175-200
+Frame interval
+20
+25
+30
+35
+PSNR (dB; higher is better)
+Ctrl-World (50 steps)
+WoVR+ (5 steps)
+WoVR (single view, 5 steps)
+EVAC (27 steps)
+WoVR (3 views, 5 steps)
+5-steps
+27-steps
+50-steps
+Ctrl-World
+EVAC
+GT
+reference
+Head
+Left wrist
+Right wrist
+WoVR
+5-steps
+WoVR+
+Fig. 10. Long-horizon prediction fidelity over a fixed cohort of 20 held-
+out trajectories.
+RoboTwin states, execute them to obtain ground-truth futures,
+and condition each world model on the same history and
+actions. As shown in Table II, our model outperforms all three-
+view baselines, demonstrating stronger local generalization
+under policy-induced exploration, consistent with its image-
+space action grounding and explicit camera conditioning.
+5) Ablation Study of Model Structure and Training meth-
+ods: Having established the overall prediction fidelity and
+robustness of our world model, we next examine which
+architectural and training components contribute to these im-
+provements. We first ablate the geometric-conditioning design
+and then analyze the training strategies introduced for autore-
+gressive robustness.
+For the architectural ablations, we keep the action maps and
+all remaining components fixed, and vary only the camera-
+geometry conditioning. We compare removing raymaps en-
+tirely, encoding ray origins and directions as rasterized images
+followed by VAE encoding (Image + VAE), and constructing
+them directly on the video-latent grid (Direct Latent), each
+with or without learned view embeddings.
+As shown in Table III, removing raymaps produces the
+weakest performance, while direct latent ray encoding con-
+sistently outperforms the image-based representation. Adding
+view embeddings further improves prediction quality, indicat-
+ing that continuous camera geometry and explicit view identity
+provide complementary information beyond EEF projection
+alone.
+We next fix the full geometric-conditioning architecture
+and ablate the training strategies introduced for robust au-
+toregressive prediction. As shown in Table IV, all three
+strategies improve generation quality over the raw training
+configuration. Anchored sparse history provides a substantial
+
+
+10
+TABLE I
+VIDEO PREDICTION QUALITY. WRIST METRICS ARE AVERAGED OVER THE TWO WRIST CAMERAS. BEST AND SECOND-BEST RESULTS ARE SHOWN IN
+BOLD AND UNDERLINED, RESPECTIVELY. “–” DENOTES AN UNAVAILABLE VIEW.
+Method
+NFE
+Head View
+Wrist Views
+FPS↑
+LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑
+Ctrl-World
+5
+0.318
+73.22 229.83
+0.812
+16.39
+0.350
+117.45 305.39
+0.863
+22.38
+4.16
+50
+0.305
+47.16 147.46
+0.802
+15.86
+0.346
+73.67
+186.66
+0.849
+22.14
+0.53
+EVAC
+27
+0.337
+50.93 196.72
+0.768
+13.76
+0.328
+68.49
+185.15
+0.833
+20.89
+1.71
+WoVR (1 view)
+5
+0.182
+20.74
+75.09
+0.858
+19.12
+–
+–
+–
+–
+–
+22.56
+WoVR (3 views)
+5
+0.231
+27.01 109.33
+0.825
+16.96
+0.269
+47.55
+124.41
+0.825
+23.16
+14.01
+WoVR+
+5
+0.148
+22.45
+62.16
+0.883
+22.28
+0.204
+44.10
+81.33
+0.894
+29.77
+9.41
+50
+0.153
+19.92
+49.61
+0.877
+21.86
+0.203
+35.96
+65.77
+0.888
+29.39
+1.78
+WoVR+(DMD)
+1
+0.163
+23.59
+57.41
+0.877
+22.20
+0.236
+53.58
+106.15
+0.889
+28.79
+15.03
+TABLE II
+PREDICTION FIDELITY UNDER POLICY-INDUCED ACTION DISTRIBUTION SHIFT.
+Method
+NFE
+Head View
+Wrist Views
+LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑
+Ctrl-World
+5
+0.264
+80.42 198.17
+0.847
+15.99
+0.311
+97.43 491.56
+0.913
+19.57
+50
+0.278
+51.86 191.81
+0.823
+14.89
+0.338
+58.02 229.34
+0.890
+18.71
+EVAC
+27
+0.304
+56.74 147.66
+0.809
+14.12
+0.291
+56.59 278.99
+0.887
+20.00
+WoVR (1 view)
+5
+0.228
+34.58 131.12
+0.854
+16.36
+–
+–
+–
+–
+–
+WoVR (3 views)
+5
+0.236
+36.91 144.73
+0.847
+16.09
+0.322
+49.34 297.26
+0.856
+19.21
+WoVR+
+5
+0.206
+36.18 107.22
+0.878
+18.55
+0.265
+40.23 225.84
+0.890
+22.50
+TABLE III
+ABLATION OF CAMERA RAYMAP ENCODING AND VIEW EMBEDDINGS.
+RayMap Encoding
+View Emb.
+NFE
+Head View
+Wrist Views
+LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑
+No RayMap
+No
+5
+0.2335
+32.67 101.07
+0.8275
+16.91
+0.2842
+61.14 130.27
+0.8685
+26.57
+50
+0.2360
+27.46
+81.22
+0.8243
+16.80
+0.2875
+52.06 114.71
+0.8589
+26.24
+Direct Latent
+No
+5
+0.1829
+27.73
+79.99
+0.8593
+20.10
+0.2439
+53.30 105.46
+0.8780
+27.81
+50
+0.1862
+24.36
+64.72
+0.8553
+19.82
+0.2447
+44.30
+94.14
+0.8698
+27.71
+Image + VAE
+No
+5
+0.2148
+33.29 103.37
+0.8433
+18.43
+0.2634
+57.55 120.34
+0.8735
+27.02
+50
+0.2203
+27.90
+81.76
+0.8363
+18.03
+0.2615
+47.70 101.28
+0.8664
+26.80
+Image + VAE
+Yes
+5
+0.2070
+30.74
+99.43
+0.8456
+18.73
+0.2552
+56.38 115.03
+0.8779
+26.71
+50
+0.2161
+26.18
+77.92
+0.8368
+18.25
+0.2582
+46.23
+88.75
+0.8636
+26.74
+Direct Latent
+Yes
+5
+0.1801
+26.79
+76.29
+0.8613
+20.29
+0.2333
+53.04 101.11
+0.8875
+28.29
+50
+0.1850
+22.88
+63.50
+0.8549
+19.96
+0.2330
+44.49
+87.95
+0.8783
+28.13
+gain by preserving both the initial scene context and recent
+task progress, while geometry-aware local corruption improves
+robustness to imperfect generated context. Temporal-stride
+sampling yields the largest individual improvement, suggest-
+ing that exposing the model to different motion magnitudes
+and transition intervals is particularly important for action-
+conditioned prediction. Combining all three strategies achieves
+the strongest distribution-level and wrist-view performance, al-
+though temporal-stride sampling alone remains slightly better
+on several frame-aligned head-view metrics.
+B. Policy-Level Utility of the Learned Environment
+The preceding section evaluates predictive fidelity at the
+observation level. We next ask whether these predictions
+preserve useful policy-level information before applying RL.
+1) Policy-Level Consistency: We evaluate two VLA poli-
+cies on each of three tasks, conducting 120 rollouts in the
+ACWM and 120 on the real robot for each task–policy pair.
+Each ACWM rollout is initialized using the initial images
+from the corresponding real-robot rollout. As shown in Fig 11,
+success rates in the learned and real environments are strongly
+correlated across the six task–policy pairs (Pearson r = 0.97,
+Spearman ρ = 0.94).
+2) Synthetic-Data Utility:
+We further evaluate whether
+imagined trajectories provide useful supervision for policy
+improvement. Using 500 environment rollouts to train the
+ACWM, we generate 512 synthetic trajectories from matched
+reset states. After success filtering, 401 real and 480 synthetic
+
+
+11
+TABLE IV
+ABLATION OF WORLD-MODEL TRAINING STRATEGIES. EACH INDIVIDUAL VARIANT ADDS THE INDICATED STRATEGY TO THE RAW CONFIGURATION,
+WHILE All COMBINES ALL THE STRATEGIES.
+Training Configuration
+NFE
+Head View
+Wrist Views
+LPIPS↓
+FID↓
+FVD↓SSIM↑PSNR↑LPIPS↓
+FID↓
+FVD↓
+SSIM↑PSNR↑
+Raw
+5
+0.1801
+26.79
+76.29
+0.8613
+20.29
+0.2333
+53.04 101.11
+0.8875
+28.29
+50
+0.1850
+22.88
+63.50
+0.8549
+19.96
+0.2330
+44.49
+87.95
+0.8783
+28.13
++ Sparse History
+5
+0.1623
+25.52
+73.77
+0.8743
+21.33
+0.2263
+48.57
+95.57
+0.8898
+29.05
+50
+0.1660
+21.03
+55.35
+0.8689
+21.04
+0.2254
+39.71
+77.52
+0.8817
+28.82
++ Geometry-Aware Blur
+5
+0.1721
+25.82
+74.94
+0.8681
+20.92
+0.2288
+49.21
+92.84
+0.8885
+28.69
+50
+0.1767
+21.82
+57.01
+0.8627
+20.57
+0.2308
+40.34
+82.28
+0.8803
+28.52
++ Temporal Stride
+5
+0.1473
+23.11
+66.51
+0.8859
+22.50
+0.2058
+45.74
+82.16
+0.8964
+29.86
+50
+0.1529
+20.01
+51.28
+0.8789
+21.95
+0.2100
+38.47
+70.42
+0.8867
+29.34
+All
+5
+0.1478
+22.45
+62.16
+0.8830
+22.28
+0.2041
+44.10
+81.33
+0.8944
+29.77
+50
+0.1533
+19.92
+49.61
+0.8771
+21.86
+0.2029
+35.96
+65.77
+0.8878
+29.39
+30
+45
+60
+75
+90
+Real-robot success rate (%)
+30
+45
+60
+75
+90
+World-model success rate (%)
+r=0.970, ρ=0.943
+Task
+Fold Towel
+Press Button
+Stack Cups
+Collection
+Original
+Additional
+Fig. 11.
+Real-robot and world-model success rates across six task–
+collection groups. Colors denote tasks; circles and squares distinguish
+different checkpoints.
+trajectories are retained, forming an 881-trajectory dataset
+for continued SFT. WM-BC improves success from 71.00%
+to 91.00% under fixed resets and from 72.66% to 76.56%
+under randomized resets. The smaller gain under randomized
+initialization suggests that filtered synthetic demonstrations
+provide useful but incomplete supervision, motivating direct
+WM-RL over both successful and failed rollouts.
+C. Exploration in WM-RL
+We next study how the temporal structure of Flow-SDE
+exploration affects policy optimization in the learned envi-
+ronment. We first compare I.I.D. and chunk-wise exploration
+under otherwise matched WM-RL configurations, and then
+analyze the resulting action perturbations and executed task-
+space trajectories to understand the observed optimization
+behavior.
+1) Effect on WM-RL Optimization: We first isolate the
+effect of exploration noise by fixing the initial policy, world
+model, reward model, rollout budget, and GRPO configura-
+tion, varying only the temporal correlation of the Flow-SDE
+innovation.
+TABLE V
+SUCCESS RATES (%) USING I.I.D. AND CHUNK-WISE FLOW-SDE NOISE.
+FIXED EVALUATION USES 100 SHARED INITIAL STATES.
+Exploration
+Updates
+Adjust Bottle
+Click Bell
+Fixed
+Random
+Fixed
+Random
+Initial SFT
+0
+79.00
+70.70
+71.00
+72.66
+Chunk-wise
+10
+76.00
+76.95
+87.00
+81.25
+20
+80.00
+80.86
+89.00
+86.72
+30
+85.00
+86.33
+87.00
+86.33
+40
+86.00
+88.28
+88.00
+89.45
+50
+93.00
+91.80
+92.00
+93.75
+I.I.D.
+10
+72.00
+65.63
+78.00
+75.78
+20
+73.00
+77.34
+71.00
+68.36
+30
+77.00
+78.52
+72.00
+74.22
+40
+70.00
+68.36
+81.00
+74.61
+50
+77.00
+74.22
+89.00
+86.33
+As shown in Table V, chunk-wise exploration produces
+more stable policy improvement and consistently achieves
+higher final success rates than I.I.D. exploration across both
+tasks and evaluation settings.
+2) Temporal and Task-Space Analysis: To explain the op-
+timization advantage observed above, we further analyze how
+the two Flow-SDE variants differ in both action perturbations
+and executed EEF motion.
+We characterize exploration using EEF ensemble spread, co-
+herent action exploration, and within-chunk jitter. For replayed
+episode i, let qi,t = pi,t −pi,0 denote the EEF trajectory
+aligned to its initial position. Grouping episodes by the active
+arm a ∈{L, R}, we define
+SEEF = 1
+H
+H
+X
+t=1
+X
+a∈{L,R}
+Na
+N
+s
+1
+Na
+X
+i∈Ia
+∥qi,t −¯qa,t∥2
+2
+∆Ai,c = ASDE
+i,c
+−AODE
+i,c
+,
+µi,c = 1
+T
+T −1
+X
+τ=0
+∆Ai,c,τ
+
+
+12
+Ei,c =
+r
+1
+D∥µi,c∥2
+2
+Ji,c =
+v
+u
+u
+t 1
+TD
+T −1
+X
+τ=0
+∥∆Ai,c,τ −µi,c∥2
+2.
+(20)
+Here, H denotes the execution horizon and T is the action-
+chunk length where E and J are averaged over chunks and
+episodes. For visualization, the three metrics are min–max
+normalized over the evaluated configurations, and the plotted
+jitter-suppression coordinate is 1 −eJ.
+10−4
+10−3
+10−2
+10−1
+0.0
+0.5
+1.0 0.0
+0.5
+1.0
+0.0
+0.5
+1.0
+Jitter suppression
+(higher is better)
+ideal
+(a)
+0.1
+0.2
+0.3
+0.4
+0.5
+0.1 0.2
+0.3
+0.4
+0.5
+0
+3
+4
+8
+12
+15
+Normalized residual power
+coherent
+jitter
+(b)
+3D Pareto
+Temporal spectrum
+Chunk-wise SDE
+IID SDE
+Matched-noise pairing
+Non-dominated
+DCT frequency k
+Fig. 12.
+Chunk-wise and I.I.D. Flow-SDE exploration. (a) Across the
+evaluated noise scales, chunk-wise exploration achieves a better trade-off
+among EEF ensemble spread, coherent exploration magnitude, and jitter sup-
+pression. (b) DCT spectra of standardized action residuals show that chunk-
+wise exploration concentrates perturbations in low-frequency components and
+exhibits substantially less high-frequency power than I.I.D. exploration.
+Across the evaluated noise scales, chunk-wise Flow-SDE
+achieves a better trade-off among EEF ensemble spread, coher-
+ent exploration magnitude, and jitter suppression (Fig. 12). To
+further characterize the temporal structure of the perturbations,
+we apply a DCT along the within-chunk time axis of the
+standardized action residuals. I.I.D. noise exhibits substan-
+tially more high-frequency power, whereas chunk-wise noise
+concentrates perturbations in temporally coherent components.
+This shows that its advantage arises from reshaping the tem-
+poral structure of exploration rather than simply reducing its
+magnitude.
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+0.75
+1.00
+1.25
+1.50
+IID SDE
+Noise 0.1
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+Noise 0.2
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+Noise 0.3
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+Noise 0.4
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+Noise 0.5
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+0.75
+1.00
+1.25
+1.50
+Chunk-wise SDE
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+−0.5
+0.0
+0.5
+−0.6
+−0.2
+0.2
+IID swept workspace
+Chunk-wise swept workspace
+Fig. 13.
+Executed EEF swept workspace.
+We further quantify the spatial coverage of the executed
+EEF trajectories. As shown in Fig. 13, chunk-wise and
+I.I.D. Flow-SDE yield similar EEF swept volumes at low
+noise, while chunk-wise exploration achieves broader coverage
+as the noise scale increases. This suggests that temporally
+coherent perturbations convert larger exploration amplitudes
+into meaningful motion rather than high-frequency oscillation,
+supporting more stable and effective WM-RL.
+D. Policy Optimization with WM-RL
+We evaluated our method on two RoboTwin tasks and six
+real-robot tasks, with the experiments implemented based on
+the RLinf framework [49].
+1) RoboTwin
+Policy
+Optimization:
+Having
+established
+chunk-wise Flow-SDE as the exploration strategy, we next
+evaluate whether the learned environment itself can support
+effective policy optimization. To isolate the effect of the
+world model, we fix the SFT policy, reset states, chunk-
+wise exploration, reward model, and GRPO configuration, and
+vary only the RL environment. We evaluate both single- and
+multi-view VLAs; the corresponding base policies are trained
+with the same number of demonstrations, and all optimization
+settings are matched within each view configuration.
+TABLE VI
+VLA SUCCESS RATES ON ROBOTWIN (%). FIXED USES 100 FIXED
+INITIAL STATES AND RANDOM USES 256 RANDOM STATES.
+RL Environment
+Adjust Bottle
+Click Bell
+Fixed
+Random
+Fixed
+Random
+Single-view VLA
+None (SFT)
+68.00
+58.98
+59.00
+40.63
+Direct RL (matched)
+69.00
+60.16
+60.00
+37.89
+Direct RL (converged)
+78.00
+76.95
+89.00
+83.59
+WoVR
+69.00
+63.67
+77.00
+68.36
+WoVR+ (1 view)
+75.00
+71.09
+85.00
+73.44
+Multi-view VLA
+None (SFT)
+79.00
+70.70
+71.00
+72.66
+Direct RL (matched)
+74.00
+68.75
+82.00
+79.30
+Direct RL (converged)
+95.00
+94.53
+99.00
+98.83
+Ctrl-World
+79.00
+76.56
+84.00
+78.52
+WoVR (3 views)
+90.00
+83.20
+92.00
+90.63
+WoVR+
+93.00
+91.80
+92.00
+93.75
+As shown in Table VI, WoVR+ achieves the strongest
+overall performance among the ACWM-based environments
+and outperforms budget-matched Direct RL. It further ap-
+proaches converged Direct RL, which is trained without the
+online-interaction budget constraint. Together with the preced-
+ing exploration ablation, these results show that chunk-wise
+exploration supports effective WM-RL, while the improved
+learned environment provided by WoVR+ further translates
+into stronger downstream policy optimization. Moreover, the
+multi-view policy consistently outperforms its single-view
+counterpart, demonstrating the benefit of preserving the com-
+plete observation interface during both policy learning and
+imagined optimization.
+2) Real-Robot WM-RL: We next evaluate whether the com-
+plete WM-RL pipeline transfers from simulation to phys-
+ical multi-task manipulation. We jointly optimize a single
+language-conditioned π0.5 policy across three single-arm and
+three bimanual ARX-5 tasks (Fig. 14), covering contact ex-
+ecution, object reorientation, precise insertion, multi-object
+placement, and bimanual deformable-object manipulation. All
+tasks share the same observation interface and absolute joint-
+and-gripper action space. Details of the real-robot platform,
+
+
+13
+Button
+Pressing
+Bottle
+Righting
+Test-Tube
+Transfer
+Cup
+Stacking
+Flower
+Insertion
+Towel
+Folding
+Execution Process
+Fig. 14.
+Real-robot tasks for multi-task WM-RL. Three single-arm
+and three bimanual tasks covering contact execution, object reorientation,
+precise insertion, multi-object placement, and bimanual deformable-object
+manipulation
+data synchronization, and WM-RL configurations are provided
+in Appendix B-E.
+Starting from SFT with 100 demonstrations per task, we
+collect 120 real-robot rollouts per task to train a shared
+world model, task-routed reward models, and data-supported
+reset pools. Tasks are sampled uniformly during 50 WM-RL
+updates, with no further real-robot data collection.
+Across 20 matched real-robot evaluations per task, WM-
+RL improves success on all six tasks, increasing the average
+success rate from 39.2% to 55.8% (Fig. 15). These real-
+robot results demonstrate that a shared learned environment
+can support policy improvements that transfer to physical
+execution across heterogeneous single-arm and bimanual tasks
+within a unified language-conditioned VLA policy.
+E. Long-Horizon Policy Learning
+Long-horizon WM-RL with full-start rollouts is limited by
+three factors:
+• stage-access imbalance: later stages receive fewer train-
+ing opportunities because they depend on successful
+preceding execution;
+• reward sparsity: trajectory-level success rewards do not
+distinguish intermediate task progress;
+• prefix-induced model error: later-stage optimization re-
+lies on increasingly long autoregressive ACWM prefixes.
+We examine these limitations separately to evaluate whether
+stage-wise rewards and stage-local imagined training can im-
+prove long-horizon policy learning.
+1) Task, Variants, and Evaluation Protocol: We consider
+Phone Packaging, a 4-stage task spanning approximately 700
+control steps at 10 Hz, including base positioning, phone
+placement, lid reorientation and handover, and bimanual lid
+closure (As shown in Fig. 16).
+Stage boundaries are defined based on transitions between
+manipulation skills and observable subgoal completion and
+finalized through manual annotation, with one binary reward
+model for each stage.
+Under matched real-data and computing budgets, we eval-
+uate the following WM-RL variants:
+• Full-start + trajectory reward. All rollouts start from
+the task initial state and receive only a binary full-task
+success reward.
+• Full-start + stage rewards. Rollouts remain full-start,
+while stage-specific reward models provide intermediate
+completion signals along the trajectory.
+• Stage-reset + arrival-matched sampling. Rollouts start
+from data-supported stage-entry histories, while the stage-
+sampling probabilities match the empirical stage-arrival
+distribution of full-start rollouts.
+• Stage-reset + uniform sampling. Stage-entry histories
+are sampled uniformly across the 4 stages, providing
+balanced local training opportunities.
+• KIR. Following WoVR [25] and using a simplified ver-
+sion, imagined rollouts are only initialized from task-level
+keyframes to shorten the generated prefix.
+All WM-RL variants optimize the same shared π0.5 policy
+under the instruction ‘Pack the phone.’. Stage information is
+used only during training for reset selection, rollout horizon,
+and reward routing. All policies are evaluated end-to-end from
+the task initial state without intermediate resets.
+2) Overall Policy Performance: Fig 17 reports completion
+rates for all 4 stages. SFT succeeds in 30% of trials, while
+full-start WM-RL improves this to 50% with trajectory-level
+rewards and 55% with stage-wise rewards. KIR reaches 50%,
+and stage-reset training shows a strong dependence on the
+stage-sampling strategy: arrival-matched sampling drops to
+20%, whereas uniform stage sampling achieves the best end-
+to-end success of 75%.
+The intermediate stage-completion rates further reveal dis-
+tinct failure patterns. Full-start stage-wise rewards substan-
+tially improve progress through Stages 2 and 3, but still leave
+a large gap at Stage 4. Arrival-matched stage-reset training
+preserves strong intermediate-stage completion yet fails to
+convert this into final task success, whereas uniform stage
+sampling yields the most balanced completion profile across
+all stages. We analyze reward granularity, generated-prefix
+length, stage-training allocation, and the difference from KIR
+separately below.
+3) Effect of Reward Granularity: We first isolate the effect
+of reward granularity by keeping full-start imagination un-
+changed and replacing the trajectory-level binary reward with
+
+
+14
+Bottle
+WoVR+
+SFT
+Righting
+Fig. 15. Real-world multi-task WM-RL. A single policy is jointly optimized across three single-arm and three bimanual tasks. Bars report success over 20
+matched trials per task.
+Stage1
+Stage2
+Stage3
+Stage4
+𝑳𝟏≈𝟏𝟎𝟎𝒔𝒕𝒆𝒑𝒔
+𝑳𝟐≈𝟐𝟎𝟎𝒔𝒕𝒆𝒑𝒔
+𝑳𝟑≈𝟐𝟎𝟎𝒔𝒕𝒆𝒑𝒔
+𝑳𝟒≈𝟐𝟎𝟎𝒔𝒕𝒆𝒑𝒔
+Fig. 16.
+Stage-reset WM-RL for long-horizon phone packaging. 4
+sequential stages spanning approximately 700 control steps. All policies are
+evaluated from the task initial state without intermediate resets.
+Conditional stage success
+End-to-end success
+Conditional success (%)
+Task success (%)
+Fig. 17.
+Conditional stage success and end-to-end success on the long-
+horizon Phone Packaging task. For each stage, the percentage denotes the
+conditional probability of completing that stage among trials that successfully
+reach it; the fraction below reports the corresponding number of successful
+completions over stage arrivals. All policies are evaluated from the task initial
+state without intermediate resets.
+stage-wise completion rewards. As shown in Fig. 17, the end-
+to-end success improves more moderately from 50% to 55%.
+This indicates that stage-wise rewards provide substantially
+more useful supervision for intermediate task progress, but
+do not by themselves resolve the difficulty of later-stage
+optimization.
+This observation is also reflected in the GRPO training
+signal: under the same full-start rollout protocol, approxi-
+mately 94% of groups remain informative with stage-wise
+rewards, compared with 51% under the trajectory-level binary
+reward. Thus, finer-grained rewards alleviate optimization-
+signal sparsity, while leaving the state-visitation pattern and
+world-model prefix length unchanged.
+4) Effect of Autoregressive Prefix Length: We next examine
+how long autoregressive prefixes affect world-model fidelity
+at later task stages. We compare two rollout protocols using
+the same underlying trajectories: full-start prediction generates
+the complete prefix from the task initial state, whereas stage-
+entry prediction initializes the model directly from recorded
+observations at the corresponding stage boundary.
+Stage 1
+Stage 2
+Stage 3
+Stage 4
+0%
+20%
+40%
+60%
+80%
+100%
+Cumulative completion rate
+88.0
+49.0
+41.0
+18.0
+94.5
+61.3
+60.3
+34.4
+99.8
+87.3
+86.3
+43.9
+Real trajectories
+Stage-reset
+Full-start
+Fig. 18.
+Stage-completion estimates under full-start and stage-reset
+imagination. Full-start cumulative completion rates are measured directly,
+whereas stage-reset cumulative estimates are computed as products of local
+completion rates.
+Fig. 18 compares the resulting cumulative completion pro-
+files with real trajectories. Full-start prediction increasingly
+overestimates later-stage completion, while stage-entry predic-
+tion more closely follows the empirical profile.
+This discrepancy is consistent with the qualitative replay
+in Fig. 19, where long-prefix generation exhibits object drift
+and disappearance, whereas direct stage-entry initialization
+avoids accumulating errors from the preceding trajectory.
+Together, these results show that long autoregressive prefixes
+distort later-stage world-model predictions, motivating local
+initialization for long-horizon imagined interaction.
+5) Effect of Stage-Training Allocation: To isolate the effect
+of stage allocation, we compare the two stage-reset variants
+while keeping the world model, stage-specific rewards, local
+rollout horizons, GRPO configuration, and reset-state pools
+unchanged. Arrival-matched sampling follows the empirical
+
+
+15
+GT
+Full-start replay 
+in ACWM
+Stage-reset replay 
+In ACWM
+time step
+stage4
+Fig. 19.
+Effect of generated-prefix length on ACWM replay. Actions from
+the same recorded trajectory are replayed from either the task initial state or
+the beginning of Stage 4. Full-start replay exhibits object disappearance and
+positional drift, while the stage-entry reset avoids the long generated prefix.
+S1
+S2
+S3
+S4
+0
+5
+10
+15
+20
+Groups per update
+16
+16
+16
+16
+2.2
+8.5
+0.6
+11.3
+(a)
+Balanced opportunities
+Sampled
+Informative
+Stage-reset
+Full-start
++ stage RMs
+0
+10
+20
+30
+40
+50
+60
+70
+Informative groups / update
+22.6
+60.8
+(b)
+Per-update signal
+Stage-reset
+Full-start
++ stage RMs
+0
+10
+20
+30
+40
+50
+60
+Informative groups / hour
+47.6
+(28.4 min/update)
+30.1
+(121.1 min/update)
+(c)
+Wall-clock throughput
+(1.58x)
+Fig. 20.
+Informative-group generation under stage-reset and full-start
+training. (a) Uniform stage-reset sampling allocates equal rollout groups
+across stages, while informative-group counts vary. (b) Full-start training
+with stage-wise rewards produces more informative groups per update. (c)
+Shorter stage-local rollouts reduce update time, yielding 1.58× the hourly
+informative-group throughput of full-start training.
+stage-arrival distribution of full-start rollouts, whereas uniform
+sampling assigns equal probability to all 4 stages.
+The two variants achieve similar performance on the early
+and intermediate stages, but differ substantially at the final
+stage: Stage 4 completion increases from 4/18 (22.2%) under
+arrival-matched sampling to 15/16 (93.8%) under uniform
+sampling. The latter sacrifices only small amounts of Stage 2–
+3 completion while producing a substantially more balanced
+stage-completion profile.
+These results show that reproducing the naturally imbal-
+anced visitation distribution is undesirable for stage-local
+policy optimization. Uniform stage sampling explicitly reallo-
+cates imagined interaction toward underrepresented later-stage
+skills, which is critical for converting strong intermediate-stage
+performance into end-to-end task success.
+6) Optimization Efficiency of Stage-Local Training: We
+further compare the optimization efficiency of stage-local
+and full-start training with stage-wise rewards. As shown in
+Fig. 20, uniform stage sampling allocates equal rollout groups
+across the 4 stages, while the number of informative groups
+naturally concentrates on stages that remain difficult. Although
+full-start training produces more informative groups per policy
+update (60.8 vs. 22.6), its substantially longer rollouts in-
+crease each update from 28.4 to 121.1 minutes. Consequently,
+stage-local training yields 47.6 informative groups per hour,
+compared with 30.1 for full-start training, corresponding to a
+1.58× higher wall-clock throughput.
+7) Comparison with KIR used in WoVR: Finally, we com-
+pare stage-local uniform training with the Keyframe-Initialized
+Rollout (KIR) protocol introduced in WoVR [25]. KIR short-
+ens the generated prefix by initializing rollouts near a task-
+critical region, but does not explicitly organize optimization
+across the multiple skill stages of the complete task.
+KIR achieves cumulative completion rates of 18/20, 13/20,
+10/20, and 10/20 across Stages 1–4, corresponding to 50%
+end-to-end success. The fact that earlier-stage performance
+also changes under KIR is expected because all stages share
+the same policy parameters, so suffix-level optimization can
+transfer to behaviors outside the directly optimized segment.
+Nevertheless, these earlier stages receive no explicit stage-
+balanced supervision.
+In comparison, uniform stage-local training achieves 20/20,
+17/20, 16/20, and 15/20, yielding 75% end-to-end success. The
+improvement is therefore not explained by prefix shortening
+alone. By combining stage-specific rewards, direct stage-entry
+initialization, and explicit balancing of training opportunities
+across stages, stage-local training provides a more systematic
+optimization protocol for long-horizon manipulation while
+retaining a single shared policy for end-to-end deployment.
+VI. CONCLUSION
+We present WoVR+, a world-model-based RL framework
+for improving VLA policies with limited real-robot interaction.
+WoVR+ combines a geometry-grounded multi-view world
+model, temporally coherent chunk-wise exploration, and stage-
+local imagined training to support reliable closed-loop policy
+optimization. Experiments in simulation and on real robots
+demonstrate improved world-model fidelity and downstream
+policy performance, while long-horizon analyses further show
+the benefits of localized rewards, shorter imagined prefixes,
+and balanced stage-wise training.
+Despite these advantages, the current framework relies on
+predefined task stages and data-supported stage-entry states.
+In addition, chunk-wise Flow-SDE introduces cross-token
+correlations, while the current GRPO implementation employs
+token-wise surrogate policy ratios. Future work may explore
+automatic stage discovery, adaptive reset-state construction,
+and joint chunk-level optimization that explicitly accounts for
+temporally correlated exploration.
+APPENDIX A
+VALIDATION OF COMMAND-BASED PROPRIOCEPTION
+Equation 10 updates proprioception by temporally shifting
+the absolute joint-and-gripper commands, rather than learning
+an additional robot-state transition model. This approximation
+
+
+16
+relies on the low-level controller tracking absolute targets
+sufficiently closely. We therefore evaluate whether its tracking
+error remains bounded during long-horizon autoregressive
+interaction and compare it with three learned transition models
+using alternative action representations:
+• Command Shift (Ours). The predicted proprioception
+is obtained directly from the temporally shifted absolute
+joint targets,
+ˆSt+1:t+H = Ajoint
+t:t+H−1,
+H = 8,
+(21)
+• Joint MLP. A learned transition model receives the
+current proprioceptive state and the absolute joint-action
+block. MLP predicts only a residual correction to the
+command-shift estimate:
+ˆSt+1:t+H = Ajoint
+t:t+H−1 + f joint
+θ
+
+St, Ajoint
+t:t+H−1
+
+. (22)
+• Absolute-EEF MLP. The model instead receives the
+current proprioceptive state and the absolute dual-arm
+EEF targets obtained through forward kinematics:
+ˆSt+1:t+H = f EEF
+θ
+ St, Eabs
+t:t+H−1
+
+.
+(23)
+• Delta-EEF MLP. Following the delta-EEF action inter-
+face used in WoVR [25], the final baseline conditions the
+same architecture on relative EEF motion.
+ˆSt+1:t+H = f ∆EEF
+θ
+(St, ∆Et:t+H−1) .
+(24)
+The three learned baselines use the same MLP architecture.
+Using real-robot data, starting from the ground-truth state,
+we recursively predict eight-step blocks for 200 control steps,
+feeding each predicted endpoint into the next block. We eval-
+uate 75 held-out in-distribution trajectories and 75 trajectories
+from two unseen tasks using NRMSE:
+NRMSE(k) =
+v
+u
+u
+t 1
+ND
+N
+X
+i=1
+D
+X
+d=1
+ ˆsi,k,d −si,k,d
+σd
+2
+.
+(25)
+Fig. 21 reports NRMSE over all trajectories and 14 proprio-
+ceptive dimensions; shading denotes 95% trajectory-bootstrap
+confidence intervals.
+Joint MLP achieves the lowest task-internal error at 200
+steps, showing that learned residuals can capture task-specific
+tracking offsets. Under cross-task shift, however, Command
+Shift performs best and remains substantially more stable than
+EEF MLP and ∆EEF MLP. Thus, directly shifting absolute
+joint commands provides a simple and robust proprioceptive
+update without introducing an additional transition model
+whose errors can accumulate during autoregressive interaction.
+APPENDIX B
+REWARD MODEL USED IN WM-RL
+We use lightweight task-specific ResNet classifiers to con-
+vert the current multi-view observation into a binary success
+reward. Synchronized head, left-wrist, and right-wrist images
+are resized and concatenated vertically, and processed without
+actions, proprioception, or observation history. We train one
+classifier for each task or phone-packing stage, selected by the
+task instruction or reset-stage identifier, respectively. Frames
+25
+50
+75
+100
+125
+150
+175
+200
+Autoregressive horizon (10 Hz steps)
+10
+−1
+10
+0
+Endpoint micro NRMSE ↓
+Task-internal test (n=75)
+25
+50
+75
+100
+125
+150
+175
+200
+Autoregressive horizon (10 Hz steps)
+Cross-task unseen test (n=75)
+Direct (Ours)
+Joint MLP
+EEF MLP
+ΔEEF MLP
+Fig. 21. Long-horizon proprioception prediction. Endpoint NRMSE over
+75 task-internal and 75 cross-task trajectories. Predictions are recursively
+propagated in eight-step blocks for 200 control steps.
+from the first annotated success onward are labeled positive;
+preceding frames and all frames from failed trajectories are
+labeled negative. We use inverse-class-frequency sampling and
+latch the reward once success is detected. All reward models
+remain frozen during WM-RL.
+APPENDIX C
+REAL-ROBOT PLATFORM AND DATA INTERFACE
+All real-robot experiments are conducted on a dual-arm
+ARX-5 manipulation platform. Each arm contains six actuated
+joints and a parallel-jaw gripper, resulting in a 14-D joint-and-
+gripper proprioceptive state. The platform is equipped with
+three Intel RealSense D405 cameras as shown in Fig. 22.
+Fig. 22. Dual-arm ARX-5 manipulation platform.
+During demonstration collection, all streams retain their
+original timestamps and are synchronized and resampled onto
+the 10-Hz control timeline used for policy training and de-
+ployment. Consequently, each policy observation consists of
+synchronized head, left-wrist, and right-wrist RGB images
+together with the 14-D proprioceptive state.
+Our demonstrations are collected through direct kinesthetic
+teaching. Since this procedure records the realized robot
+proprioception rather than an independently logged command
+sequence, we construct the absolute joint-and-gripper action
+label at time t from the subsequent proprioceptive state,
+at := st+1.
+(26)
+For an action-chunk horizon H, the supervised target is
+therefore
+At = (st+1, st+2, . . . , st+H) .
+(27)
+
+
+17
+TABLE VII
+DEFINITIONS AND SUCCESS CRITERIA OF THE SIX REAL-ROBOT
+MANIPULATION TASKS.
+Task
+Objective
+Success Criterion
+Button Pressing
+(Single)
+Press the target button.
+The target button is success-
+fully actuated.
+Bottle Righting
+(Single)
+Grasp and reorient a fallen
+bottle upright.
+The bottle remains stably up-
+right.
+Test-Tube Transfer
+(Single)
+Transfer a test tube between
+racks.
+The tube is inserted into the
+target rack.
+Flower Insertion
+(Bimanual)
+Insert two flower bundles into
+the vase.
+Both bundles are placed inside
+the vase.
+Cup Stacking
+(Bimanual)
+Arrange three cups into the
+target stack.
+All cups form the designated
+stack.
+Towel Folding
+(Bimanual)
+Fold the towel into the target
+shape.
+The towel reaches the target
+folded configuration.
+TABLE VIII
+STAGE DEFINITIONS AND COMPLETION CRITERIA FOR THE
+LONG-HORIZON PHONE PACKAGING TASK.
+Stage
+Operation
+Completion Criterion
+Stage 1
+Base positioning
+Drag the box base to the target
+position.
+The base reaches the required
+pose for phone placement.
+Stage 2
+Phone placement
+Grasp and place the phone
+into the base.
+The phone is completely in-
+side the base.
+Stage 3
+Lid handover
+Reorient the lid and transfer it
+to the right gripper.
+The lid is correctly oriented
+and held by the right gripper.
+Stage 4
+Lid closure
+Place the lid and perform bi-
+manual fine adjustment.
+The lid is aligned and the box
+is fully closed.
+This labeling convention matches the absolute-position action
+interface used during autonomous policy execution and the
+command-based proprioceptive update adopted by WoVR+.
+APPENDIX D
+TASK DEFINITIONS AND SUCCESS CRITERIA
+We use explicit completion criteria for all real-robot evalu-
+ations. Table VII summarizes the six manipulation tasks used
+for multi-task WM-RL, covering both single-arm and biman-
+ual skills. For the long-horizon evaluation, Phone Packaging
+is further decomposed into 4 sequential stages according to
+observable subgoal completion. Each stage is associated with
+a local completion criterion used for reward routing and stage-
+wise analysis, as summarized in Table VIII.
+APPENDIX E
+TRAINING CONFIGURATIONS
+We provide the main training and implementation configura-
+tions for both the world model and real-robot WM-RL experi-
+ments. Table IX summarizes the architecture and optimization
+settings of the three-view world model, while Table X reports
+the shared policy and WM-RL settings together with the task-
+specific rollout configurations.
+TABLE IX
+ARCHITECTURE AND TRAINING HYPERPARAMETERS OF THE THREE-VIEW
+WORLD MODEL.
+Hyperparameter
+Configuration
+Architecture and conditioning
+Video backbone
+Wan2.2-TI2V-5B
+Temporal window
+13 frames: 5 context + 8 predicted frames
+VACE branch
+15
+blocks
+initialized
+from
+main-DiT
+blocks
+{0, 2, . . . , 28}
+Trainable modules
+Main DiT and VACE branch; VAE and UMT5 are frozen
+Optimization and distributed training
+Scheduler
+FlowMatchingScheduler, shift 5, σ′ = 5σ/(1 +
+4σ)
+Optimizer
+AdamW, β1 = 0.9, β2 = 0.999, ϵ = 10−8, LR
+= 10−5, weight decay = 0.01
+LR scheduler
+ConstantLR, factor 1/3 for the first 5 optimizer steps
+Precision / sharding
+bfloat16 mixed precision; DeepSpeed ZeRO-2
+Batch size
+global batch size = 16
+TABLE X
+MAIN CONFIGURATIONS FOR THE REAL-ROBOT WM-RL EXPERIMENTS.
+Configuration
+Setting
+Shared policy and exploration
+Policy observation
+3 RGB views, 14-D proprioception, and instruction
+Policy action
+14-D absolute joint-and-gripper action; horizon H = 16
+Policy sampling
+5 flow steps; chunk-wise Flow-SDE noise at 1 sampled
+step
+Noise scale
+0.2
+Trainable module
+Action expert only; no value head
+Shared WM-RL optimization
+GRPO group size
+8
+Imagined rollouts
+512 trajectories per update
+Actor optimizer
+AdamW, learning rate 5 × 10−6
+Compute resources
+8× NVIDIA A100 GPUs
+Six-task WM-RL
+Reset pool
+120 episode-initial histories per task
+Sampling
+Uniform over six tasks
+Reward routing
+One task-specific three-view reward model per task
+Phone Packaging
+Reset pool
+Stage-entry histories from 100 shared reference trajecto-
+ries, with pool size determined by stage arrival
+Sampling
+Uniform over 4 stages
+Stage horizons
+144/256/240/256 frames for Stages 1–4
+Reward routing
+One stage-specific three-view reward model per stage
+REFERENCES
+[1] M. J. Kim, C. Finn, and P. Liang, “Fine-Tuning Vision-Language-Action
+Models: Optimizing Speed and Success,” in Proceedings of Robotics:
+Science and Systems, 2025.
+[2] K. Black, N. Brown, J. Darpinian, K. Dhabalia, D. Driess, A. Esmail,
+M. R. Equi, C. Finn, N. Fusai, M. Y. Galliker, D. Ghosh, L. Groom,
+K. Hausman, b. ichter, S. Jakubczak, T. Jones, L. Ke, D. LeBlanc,
+S. Levine, A. Li-Bell, M. Mothukuri, S. Nair, K. Pertsch, A. Z. Ren,
+L. X. Shi, L. Smith, J. T. Springenberg, K. Stachowicz, J. Tanner,
+Q. Vuong, H. Walke, A. Walling, H. Wang, L. Yu, and U. Zhilinsky,
+“π0.5: a vision-language-action model with open-world generalization,”
+in Proceedings of The 9th Conference on Robot Learning, vol. 305,
+2025, pp. 17–40.
+[3] S. Bai, W. Song, J. Chen, Y. Ji, Z. Zhong, J. Yang, H. Zhao, W. Zhou,
+Z. Li, P. Ding, C. Chi, C. Xu, X. Zheng, D. Wang, H. Li, S. Zhang, and
+B. Chen, “Embodied robot manipulation in the era of foundation models:
+Planning and learning perspectives,” IEEE Transactions on Robotics, pp.
+1–21, 2026.
+[4] K. Lei, H. Li, D. Yu, Z. Wei, L. Guo, Z. Jiang, Z. Wang, S. Liang, and
+H. Xu, “Performant robotic manipulation with real-world reinforcement
+learning,” Science Robotics, vol. 11, no. 116, p. eaed6267, 2026.
+[5] H. Zang, M. Wei, S. Xu, Y. Wu, Z. Guo, Y. Wang, H. Lin, P. Wang,
+H. Yuan, Y. Zhang, L. Shi, Y. Xie, Z. Xu, Z. Liu, K. Chen, W. Tang,
+Q. Zhang, W. Zhang, C. Yu, and Y. Wang, “RLux-VLA: A Unified and
+Efficient Framework for Reinforcement Learning of Vision-Language-
+Action Models,” in Proceedings of Robotics: Science and Systems, 2026.
+
+
+18
+[6] J. Liu, F. Gao, B. Wei, X. Chen, Q. Liao, Y. WU, C. Yu, and Y. Wang,
+“What can rl bring to vla generalization? an empirical study,” in
+Advances in Neural Information Processing Systems, 2025.
+[7] Y. Chen, S. Tian, S. Liu, Y. Zhou, H. Li, and D. Zhao, “ConRFT:
+A Reinforced Fine-tuning Method for VLA Models via Consistency
+Policy,” in Proceedings of Robotics: Science and Systems, 2025.
+[8] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, “Prox-
+imal policy optimization algorithms,” arXiv preprint arXiv:1707.06347,
+2017.
+[9] Z. Shao, P. Wang, Q. Zhu, R. Xu, J. Song, X. Bi, H. Zhang, M. Zhang,
+Y. K. Li, Y. Wu, and D. Guo, “Deepseekmath: Pushing the limits
+of mathematical reasoning in open language models,” arXiv preprint
+arXiv:2402.03300, 2024.
+[10] K. Chen, Z. Liu, T. Zhang, Z. Guo, S. Xu, H. Lin, H. Zang, X. Li,
+Q. Zhang, Z. Yu, G. Fan, T. Huang, Y. Wang, and C. Yu, “πRL:
+Online rl fine-tuning for flow-based vision-language-action models,”
+arXiv preprint arXiv:2510.25889, 2026.
+[11] J. Luo, C. Xu, J. Wu, and S. Levine, “Precise and dexterous robotic
+manipulation via human-in-the-loop reinforcement learning,” Science
+Robotics, vol. 10, no. 105, p. eads5033, 2025.
+[12] H. Li, Y. Zuo, J. Yu, Y. Zhang, Y. Zhaohui, K. Zhang, X. Zhu, Y. Zhang,
+T. Chen, G. Cui, D. Wang, D. Luo, Y. Fan, Y. Sun, J. Zeng, J. Pang,
+S. Zhang, Y. Wang, Y. Mu, B. Zhou, and N. Ding, “SimpleVLA-
+RL: Scaling vla training via reinforcement learning,” in International
+Conference on Learning Representations, vol. 2026, 2026, pp. 125 846–
+125 869.
+[13] T. Jiang, Y. Guan, L. Ma, J. Xu, J. Meng, W. Chen, Z. Zeng, L. Li,
+D. Wu, and R. Chen, “Dexsim2real2: Building explicit world model for
+precise articulated object dexterous manipulation,” IEEE Transactions
+on Robotics, vol. 41, pp. 4360–4379, 2025.
+[14] S. He, A. von Rohr, D. Baumann, J. Xiang, and S. Trimpe, “Simulation-
+aided policy tuning for black-box robot learning,” IEEE Transactions on
+Robotics, vol. 41, pp. 2533–2548, 2025.
+[15] J. Tang, J. Liu, J. Li, L. Wu, H. Yang, P. Zhao, S. Gong, X. Yuan,
+S. Shao, and Q. Lu, “Hunyuan-gamecraft-2: Instruction-following inter-
+active game world model,” arXiv preprint arXiv:2511.23429, 2025.
+[16] X. Mao, Z. Li, C. Li, X. Xu, K. Ying, T. He, J. Pang, Y. Qiao, and
+K. Zhang, “Yume-1.5: A text-controlled interactive world generation
+model,” arXiv preprint arXiv:2512.22096, 2025.
+[17] R. Team, Z. Gao, Q. Wang, Y. Zeng, J. Zhu, K. L. Cheng, Y. Li,
+H. Wang, Y. Xu, S. Ma, Y. Chen, J. Liu, Y. Cheng, Y. Yao, J. Zhu,
+Y. Meng, K. Zheng, Q. Bai, J. Chen, Z. Shen, Y. Yu, X. Zhu, Y. Shen,
+and H. Ouyang, “Advancing open-source world models,” arXiv preprint
+arXiv:2601.20540, 2026.
+[18] T. Wan, A. Wang, B. Ai, B. Wen, C. Mao, C.-W. Xie, D. Chen, F. Yu,
+H. Zhao, J. Yang, J. Zeng, J. Wang, J. Zhang, J. Zhou, J. Wang,
+J. Chen, K. Zhu, K. Zhao, K. Yan, L. Huang, M. Feng, N. Zhang, P. Li,
+P. Wu, R. Chu, R. Feng, S. Zhang, S. Sun, T. Fang, T. Wang, T. Gui,
+T. Weng, T. Shen, W. Lin, W. Wang, W. Wang, W. Zhou, W. Wang,
+W. Shen, W. Yu, X. Shi, X. Huang, X. Xu, Y. Kou, Y. Lv, Y. Li, Y. Liu,
+Y. Wang, Y. Zhang, Y. Huang, Y. Li, Y. Wu, Y. Liu, Y. Pan, Y. Zheng,
+Y. Hong, Y. Shi, Y. Feng, Z. Jiang, Z. Han, Z.-F. Wu, and Z. Liu, “Wan:
+Open and advanced large-scale video generative models,” arXiv preprint
+arXiv:2503.20314, 2025.
+[19] Z. Zheng, X. Peng, T. Yang, C. Shen, S. Li, H. Liu, Y. Zhou, T. Li, and
+Y. You, “Open-sora: Democratizing efficient video production for all,”
+arXiv preprint arXiv:2412.20404, 2024.
+[20] F. Zhu, Z. Yan, Z. Hong, Q. Shou, X. Ma, and S. Guo, “WMPO: World
+model-based policy optimization for vision-language-action models,” in
+International Conference on Learning Representations, vol. 2026, 2026,
+pp. 62 486–62 502.
+[21] J. Xiao, Y. Yang, X. Chang, R. Chen, F. Xiong, M. Xu, W.-S. Zheng,
+and Q. Zhang, “Rehearsevla: Simulated post-training for vlas with
+physically-consistent world model,” in Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), 2026,
+pp. 20 867–20 877.
+[22] Z. Jiang, K. Liu, Y. Qin, S. Tian, Y. Zheng, M. Zhou, Z. Zhang, C. Yu,
+H. Li, and D. Zhao, “World4rl: Diffusion world models for policy
+refinement with reinforcement learning for robotic manipulation,” IEEE
+Robotics and Automation Letters, vol. 11, no. 10, pp. 12 240–12 247,
+2026.
+[23] X. Liu, Z. Bai, H. Ci, K. Y. Ma, and M. Z. Shou, “World-vla-loop:
+Closed-loop learning of video world model and vla policy,” arXiv
+preprint arXiv:2602.06508, 2026.
+[24] J. Zhang, Z. Huang, C. Gu, Z. Ma, and L. Zhang, “Reinforcing action
+policies by prophesying,” arXiv preprint arXiv:2511.20633, 2025.
+[25] Z. Jiang, S. Zhou, Y. Jiang, Z. Huang, M. Wei, Y. Chen, T. Zhou, Z. Guo,
+H. Lin, Q. Zhang, Y. Wang, H. Li, C. Yu, and D. Zhao, “WoVR: World
+models as reliable simulators for post-training vla policies with rl,” in
+Proceedings of The 10th Conference on Robot Learning, 2026.
+[26] Z. Zhang, H. Ren, Y. Sun, Y. Sheng, H. Wang, Z. Wu, H. Lin, P.-L.
+Bacon, and Y. Yu, “Towards practical world model-based reinforcement
+learning for vision-language-action models,” in Proceedings of the 43rd
+International Conference on Machine Learning, 2026.
+[27] Z. Chen, P. Liu, J. Li, and Q. Wang, “HaWMPO: Hallucination-aware
+world model-based policy optimization for generalist robot policy,”
+arXiv preprint arXiv:2609.09941, 2026.
+[28] Y. Xue, L. Xu, Z. Liu, Z. Wu, Z. Gu, X. Song, B. Jia, and Z. Wang,
+“Worldsample: Closed-loop real-robot rl with world modelling,” arXiv
+preprint arXiv:2607.02431, 2026.
+[29] Y. Guo, L. Shi, J. Chen, and C. Finn, “Ctrl-world: A controllable gener-
+ative world model for robot manipulation,” in International Conference
+on Learning Representations, vol. 2026, 2026, pp. 6121–6138.
+[30] A. K. Jain, Y. Wu, J. Farebrother, G. Swamy, and A. Bajcsy, “Weaver,
+better, faster, longer: An effective world model for robotic manipulation,”
+arxiv preprint arxiv:2606.13672, 2026.
+[31] B. Qiu, L. Chen, Y. Liao, N. Wang, L. Wang, J. Luo, W. Zhao, S. Chen,
+D. Chen, Y. Li, C. Gao, S. Yan, S. Liu, M. Yao, and G. Ren, “Ge-
+sim 2.0: A roadmap towards comprehensive closed-loop video world
+simulators for robotic manipulation,” arxiv preprint arxiv:2605.27491,
+2026.
+[32] T. Yin, M. Gharbi, T. Park, R. Zhang, E. Shechtman, F. Durand,
+and W. T. Freeman, “Improved distribution matching distillation for
+fast image synthesis,” in Advances in Neural Information Processing
+Systems, vol. 37, 2024, pp. 47 455–47 487.
+[33] G. Team, A. Ma, B. Wang, B. Li, C. Ni, G. Li, G. Huang, G. Zhao,
+H. Li, H. Li, J. Liu, J. Lu, Q. Deng, T. Yu, X. Xu, X. Zhou, X. Xu,
+X. Chen, X. Wang, X. Tian, Y. Wang, Y. Chang, Y. Zhou, Y. Ye, Z. Wu,
+Z. Wu, and Z. Zhu, “Gigaworld-1: A roadmap to build world models
+for robot policy evaluation,” arXiv preprint arXiv:2607.02642, 2026.
+[34] C. Gu, H. Yu, J. Zhang, H. Lin, W. Zhang, J. Wang, H. Jin, S. Xie,
+J. Jiang, and Z. Wang, “Geniworld: A generalizable interactive world
+model for robotic manipulation via visual actions,” arXiv preprint
+arXiv:2608.06332, 2026.
+[35] S. Chen, J. Liu, J. Wu, Y. Guo, T. Wang, S. Qian, H. Chen, J. Cao,
+J. Tang, and S. Zhang, “Do robotic world models really follow actions?
+diagnosing and aligning action-conditioned generation for policy learn-
+ing,” arXiv preprint arXiv:2608.24885, 2026.
+[36] Y. Jiang, S. Chen, S. Huang, L. Chen, P. Zhou, Y. Liao, X. He, C. Liu,
+H. Li, M. Yao, and G. Ren, “Enerverse-ac: Envisioning embodied
+environments with action condition,” arxiv preprint arxiv:2505.09723,
+2025.
+[37] J. Liu, G. Liu, J. Liang, Y. Li, J. Liu, X. Wang, P. Wan, D. ZHANG, and
+W. Ouyang, “Flow-grpo: Training flow matching models via online rl,”
+in Advances in Neural Information Processing Systems, vol. 38, Main
+Conference, 2025, pp. 40 783–40 818.
+[38] Z. Jiang, Z. Han, C. Mao, J. Zhang, Y. Pan, and Y. Liu, “Vace: All-
+in-one video creation and editing,” in Proceedings of the IEEE/CVF
+International Conference on Computer Vision (ICCV), 2025, pp. 17 191–
+17 202.
+[39] Y. Chen, P. Li, J. Yang, K. He, X. Wu, Y. Xu, K. Wang, J. Liu, N. Liu,
+Y. Huang, and L. Wang, “Bridgev2w: Bridging video generation models
+to embodied world models via embodiment masks,” arxiv preprint
+arxiv:2602.03793, 2026.
+[40] F. Xu, G. Zhai, X. Kong, T. Fu, D. F. N. Gordon, X. An, and B. Busam,
+“Stare-vla: Progressive stage-aware reinforcement for fine-tuning vision-
+language-action models,” arXiv preprint arXiv:2512.05107, 2025.
+[41] Y. Zhou, H. Gao, F. Wu, C. Zheng, and W. Qiang, “Temporal grpo:
+Beyond trajectory-level credit in vision-language-action reinforcement
+learning,” arXiv preprint arXiv:2608.13026, 2026.
+[42] A. Blattmann, T. Dockhorn, S. Kulal, D. Mendelevitch, M. Kilian,
+D. Lorenz, Y. Levi, Z. English, V. Voleti, A. Letts, V. Jampani, and
+R. Rombach, “Stable video diffusion: Scaling latent video diffusion
+models to large datasets,” arXiv preprint arXiv:2311.15127, 2023.
+[43] O. Ronneberger, P. Fischer, and T. Brox, “U-net: Convolutional networks
+for biomedical image segmentation,” arXiv preprint arXiv:1505.04597,
+2015.
+[44] R. Zhang, P. Isola, A. A. Efros, E. Shechtman, and O. Wang, “The
+unreasonable effectiveness of deep features as a perceptual metric,” in
+Proceedings of the IEEE Conference on Computer Vision and Pattern
+Recognition (CVPR), 2018.
+[45] M. Heusel, H. Ramsauer, T. Unterthiner, B. Nessler, and S. Hochreiter,
+“Gans trained by a two time-scale update rule converge to a local nash
+
+
+19
+equilibrium,” in Advances in Neural Information Processing Systems,
+vol. 30, 2017.
+[46] T. Unterthiner, S. Van Steenkiste, K. Kurach, R. Marinier, M. Michalski,
+and S. Gelly, “Towards accurate generative models of video: A new
+metric & challenges,” arXiv preprint arXiv:1812.01717, 2018.
+[47] Z. Wang, A. Bovik, H. Sheikh, and E. Simoncelli, “Image quality assess-
+ment: from error visibility to structural similarity,” IEEE Transactions
+on Image Processing, vol. 13, no. 4, pp. 600–612, 2004.
+[48] Q. Huynh-Thu and M. Ghanbari, “Scope of validity of psnr in im-
+age/video quality assessment,” Electronics Letters, vol. 44, pp. 800–801,
+2008.
+[49] C. Yu, Y. Wang, Z. Guo, H. Lin, S. Xu, H. Zang, Q. Zhang, Y. Wu,
+C. Zhu, J. Hu, Z. Huang, M. Wei, Y. Xie, K. Yang, B. Dai, Z. Xu, J. Du,
+X. Wang, X. Fu, L. Shi, Z. Liu, K. Chen, W. Liu, G. Liu, B. Li, J. Yang,
+Z. Yang, G. Dai, and Y. Wang, “RLinf: Flexible and efficient Large-Scale
+reinforcement learning via Macro-to-Micro flow transformation,” in 20th
+USENIX Symposium on Operating Systems Design and Implementation
+(OSDI 26), 2026.

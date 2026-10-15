@@ -1,0 +1,1098 @@
+Beyond Safe Execution: Safe Online Reinforcement Learning for
+Autonomous Driving with Value Calibration and Adaptive Guidance
+Zeqiao Li, Yijing Wang, Haoyu Wang, Zheng Li, and Zhiqiang Zuo
+Abstract— Online reinforcement learning (RL) enables driv-
+ing policies to adapt to changing deployment conditions, but
+requires safe exploration throughout training. Safety filtering
+alone does not ensure stable policy improvement or reduced de-
+pendence on corrections. We propose Safe Online Adaptive Re-
+finement (SOAR-Flow), a framework for safe and stable online
+fine-tuning of offline-initialized Flow-based driving policies. A
+control barrier function (CBF)–model predictive control (MPC)
+filter corrects potentially unsafe actions before execution. To
+support stable policy updates, we introduce Gaussian-return-
+aware value calibration based on calibrated Q-learning (Cal-
+QL), using recorded behavior returns and predicted return vari-
+ability to smooth conservative critic updates and mitigate policy
+degradation. Paired corrective learning teaches feasible action
+adjustments, while an intervention-to-go predictor encourages
+decisions requiring fewer future corrections. Its predictions
+also regulate guidance strength, allowing recovery supervision
+to weaken as predicted dependence decreases. Together with
+gradually reduced calibration regularization, this supports
+continued task improvement while preserving hard execution
+constraints. We analyze conditions for safe execution at control
+steps and diminishing auxiliary learning influences. We evaluate
+SOAR-Flow in simulation and on an uncrewed ground vehicle
+(UGV). The results demonstrate improved driving performance
+and reduced reliance on safety corrections during protected on-
+line fine-tuning. The demonstration video and project overview
+are available at https://lzqw.github.io/SOAR-Flow/.
+I. INTRODUCTION
+Learning safe and efficient driving behavior in changing
+environments remains a central challenge in autonomous
+driving [1]. Online RL enables continued policy improve-
+ment through interaction, with offline demonstrations provid-
+ing useful initial skills [2], [3]. On UGVs, however, trial-and-
+error exploration can lead to collisions and other accidents,
+making safety essential throughout online learning [4].
+Preventing failures before they occur is a practical ap-
+proach to safe exploration. Failure-Aware Offline-to-Online
+Reinforcement Learning (FARL) follows this principle
+through failure prediction and preventive recovery in robotic
+manipulation [5]. Model-based safety filters check actions
+against explicit constraints and compute feasible corrections
+before execution [6]. However, successful protected execu-
+tion can still depend on repeated corrections, while online
+updates may degrade previously learned behavior [2], [6].
+Going beyond safe execution therefore requires learning
+effectively from protected experience to improve task per-
+formance and reduce correction demand.
+Reliable value estimates are central to this improvement.
+Overestimation may favor actions with limited data support,
+whereas excessive pessimism can undervalue established
+behaviors as new experience is incorporated [2]. Filtering
+also changes the executed action, so observed rewards and
+transitions need to be associated with the action actually
+applied [6]. Cal-QL addresses value-scale mismatch by cali-
+brating conservative estimates against a reference behavior’s
+return [2]. This motivates calibration that uses recorded
+execution outcomes while accounting for return variability
+during continued online learning.
+Learning from corrected actions can reduce repeated in-
+terventions [6]. Human–AI Copilot Optimization (HACO)
+estimates cumulative human intervention costs to guide
+policy optimization [7], motivating consideration of future
+assistance alongside immediate corrections. In driving, ear-
+lier position or speed choices can determine whether later
+corrections are needed. Moreover, optimizing a finite-horizon
+MPC cost need not maximize long-horizon task return.
+Corrective guidance should therefore combine feasible local
+adjustments with anticipation of future interventions, while
+allowing its influence to diminish as dependence decreases.
+This leaves room for continued reward-driven improvement
+under unchanged safety constraints.
+To address these challenges, we propose SOAR-Flow, a
+framework for safe online refinement of offline-initialized
+Flow-based driving policies. CBF–MPC certifies references
+before execution to protect online interaction. We introduce
+Gaussian-return-aware value calibration by extending Cal-
+QL with the Gaussian return model of distributional soft
+actor–critic (DSAC) [2], [8]. Recorded behavior returns
+provide calibration references, while predicted return vari-
+ability smooths conservative critic updates. Paired correc-
+tive learning teaches feasible action adjustments, and an
+intervention-to-go predictor encourages earlier adjustments
+to reduce subsequent corrections. The same predictions reg-
+ulate guidance strength, allowing recovery supervision to
+weaken as predicted dependence decreases. Together with
+decaying calibration regularization, this supports continued
+task improvement under unchanged execution constraints.
+The main contributions are as follows:
+• A Gaussian-return-aware extension of Cal-QL combines
+recorded behavior returns with predicted return variabil-
+ity to smooth conservative critic updates and support
+stable online learning from protected execution.
+• An adaptive guidance mechanism combines paired cor-
+rective learning with intervention-to-go prediction. The
+predictor guides policy actions and regulates guidance
+strength to reduce filter reliance while retaining task
+optimization.
+• We establish conditions for sample-time safety of pro-
+1
+arXiv:2610.17799v1  [cs.RO]  13 Oct 2026
+
+
+tected execution and vanishing auxiliary gradient contri-
+butions. Safety-filtered (SF) and policy-only (PO) tests
+in MetaDrive and on a UGV assess learning stability,
+safety, and autonomy with nominal MPC tracking re-
+tained.
+II. RELATED WORK
+Safe RL and intervention-based learning. Safe RL
+addresses safety through policy optimization and execution-
+time protection. Constrained policy optimization regulates
+expected costs in policy updates [9], whereas recovery
+policies and predictive safety filters intervene using learned
+risk estimates or model-based feasibility checks [10], [11].
+For pretrained policies, SafeFlow enforces barrier conditions
+during test-time flow-based trajectory generation [12], while
+FARL uses an offline-trained world model and recovery
+policy to prevent failures during online refinement, keep-
+ing both protection components fixed online [5]. Beyond
+execution protection, interventions also provide information
+for policy learning. Safety Filtering While Training studies
+how filtering and correction penalties affect learned behav-
+ior [6], while CBF-RL combines training-time filtering with
+barrier-inspired rewards to encourage safer actions without
+runtime correction [13]. HACO estimates cumulative human
+intervention costs to guide policy optimization [7]. Building
+on this connection between protection and learning, SOAR-
+Flow combines paired corrective supervision with prediction
+of future filter use. The predictions guide policy actions and
+regulate supervision strength, while CBF–MPC certification
+remains active.
+Value learning and online policy refinement. Online
+refinement seeks to improve from new experience while
+retaining useful pretrained behavior. Offline RL addresses
+unsupported actions through conservative value estimation
+in conservative Q-learning or in-dataset value learning in
+implicit Q-learning [14], [15]. However, excessive pessimism
+can hinder the transition to online learning, motivating Cal-
+QL’s calibration against a reference behavior’s return [2].
+Policy regularization and objective alignment offer com-
+plementary approaches: PROTO evolves its policy regular-
+izer during fine-tuning [16], while Uni-O4 uses a shared
+on-policy objective across offline and online stages [17].
+Generative policies complement these optimization methods
+by representing diverse behaviors in prior data. Flow Q-
+learning combines flow-based action modeling with value-
+driven training of an expressive one-step actor [3]; RL-100
+connects imitation, iterative offline RL, and online refinement
+for diffusion-based robotic policies [18]. Building on Cal-
+QL and DSAC’s Gaussian return model [2], [8], SOAR-
+Flow uses predicted return variability to smooth behavior-
+referenced calibration of values learned from certified exe-
+cution. This value-learning objective complements adaptive
+intervention guidance during protected online policy refine-
+ment.
+III. METHODOLOGY
+Building on Cal-QL [2], SOAR-Flow performs safe online
+refinement of a Flow policy and task critics initialized
+from offline data. CBF–MPC checks policy actions before
+execution. The resulting transitions support Gaussian-return-
+aware value calibration, while corrections and intervention
+sequences guide policy improvement. Adaptive guidance re-
+duces auxiliary learning influences as predicted filter depen-
+dence decreases. Fig. 1 summarizes this protected interaction
+and update loop.
+Autonomous driving is modeled as a continuous-action
+Markov decision process (MDP) M = ⟨S, A, P, R, γ⟩,
+where S and A are the state and driving-reference spaces,
+P is the transition kernel, R is the task reward function, and
+γ ∈[0, 1) is the discount factor. The policy maximizes the
+entropy-augmented objective of soft actor–critic (SAC) [19]
+Jπ = E(si≥t,ai≥t)∼ρπ
+" ∞
+X
+i=t
+γi−t 
+ri + αH
+ π(· | si)
+
+#
+,
+(1)
+where ri is the task reward, ρπ is the policy-induced trajec-
+tory distribution, α ≥0 is the temperature coefficient, and
+H(π(· | s)) = Ea∼π(·|s)[−log π(a | s)]. The optimal policy
+satisfies π⋆∈arg maxπ Jπ.
+A conditional Flow policy transforms Gaussian noise into
+driving references through a state-conditioned vector field
+vϕ [3], [20]. Given state s and z ∼N(0, I), the flow satisfies
+dxτ
+dτ = vϕ(xτ, τ, s),
+x0 = z,
+τ ∈[0, 1],
+(2)
+where τ denotes flow time. The endpoint µϕ(s, z) = x1
+induces the policy distribution πϕ(· | s). Given an offline
+dataset Doff of state–reference pairs, we sample (s, a) ∼Doff
+and τ ∼U[0, 1] independently of z, and let exτ = (1−τ)z +
+τa. Flow-based behavior cloning (Flow-BC) initializes the
+policy by minimizing
+LFM(ϕ) = E
+h
+∥vϕ(exτ, τ, s) −(a −z)∥2
+2
+i
+.
+(3)
+A. Calibrated Value Learning under Safety Filtering
+Maintaining safe exploration. CBF–MPC checks policy
+actions using a prescribed nominal model and the same MPC
+tracking solution used for execution [6]. Let ξt denote the
+prediction state. Barrier functions hj define C = {ξ ∈X :
+hj(ξ) ≥0, ∀j}, where X is the admissible state set. For
+reference a, the predicted tracking trajectory satisfies the
+discrete-time CBF condition [13], [21]
+hj(ˆξa
+k+1|t) ≥ρjhj(ˆξa
+k|t),
+ρj ∈[0, 1).
+(4)
+Here, ˆξa
+0|t = ξt, k = 0, . . . , Np −1, and j = 1, . . . , nh,
+with prediction horizon Np. The set Acert(ξt) contains
+references whose tracking solutions satisfy this condition,
+admissible state and input constraints, and a terminal condi-
+tion in Xf ⊆C. The terminal set admits a feasible backup
+controller that keeps the nominal state within it. For example,
+if tracking a reference would violate obstacle clearance,
+2
+
+
+Initialization
+Simulator rollouts
+UGV rollouts
+Pretrain
+Flow policy
+Gaussian critics
+Initial parameters
+φ0, θ0
+Protected online interaction
+Flow Policy
+CBF–MPC
+Keep / Correct
+MPC Tracking& UGV
+Gaussian-return-aware
+Value Calibration
+Recorded behavior
+returns
+Adaptive Intervention Guidance
+Paired Correction
+ιt = 1
+Intervention-to-go
+Future filter use
+Adaptive Weight
+Recent statescurrent actions
+Smoothed
+Update
+OfflineReplay
+Mixed buffer
+Store
+Current policy
+candidates
+Fig. 1: Overall framework of SOAR-Flow.
+the filter searches for a feasible bypass reference before
+execution. Online interaction follows
+araw
+t
+∼πϕ(· | st),
+acert
+t
+= Fξt(araw
+t
+),
+(5)
+where Fξt retains certifiable references or returns feasi-
+ble corrections. The first input of the associated MPC
+tracking solution is applied as ut = u⋆
+0|t, with certifi-
+cation repeated at the next control step. We store Tt =
+(st, araw
+t
+, acert
+t
+, ιt, rt, st+1, dt), where ιt
+=
+1 denotes a
+certification-triggered correction and dt = 1 denotes true
+termination. The generator input and prediction states are
+retained for paired updates and target certification. These
+transitions form Don, with mixed replay D = Doff∪Don. The
+reward rt and next state st+1 result from tracking acert
+t
+and
+therefore supervise the task critics at (st, acert
+t
+) [6]. Recorded
+corrections provide action targets for learning references that
+pass certification directly.
+Avoiding policy degradation. Cal-QL uses a reference
+behavior’s return to limit excessive pessimism during O2O
+learning [2]. For each transition from a completed episode
+ending at T, we store the discounted task return bt =
+PT −1
+k=t γk−trk as its calibration reference. This quantity
+is computed from recorded offline and online trajecto-
+ries; for online data, it includes rewards from both un-
+modified and corrected execution. Cal-QL’s candidate term
+max{Q(st, a), bt} retains conservative pressure above the
+reference and stops it below, producing an abrupt change in
+its mean gradient. We extend this construction with DSAC’s
+Gaussian return model [8] to smooth calibration using pre-
+dicted return variability. For return variable Zπ(s, a), its
+mean satisfies Qπ(s, a) = E[Zπ(s, a)]. Each critic predicts
+the mean Q and variance σ2 > 0 of a Gaussian approxima-
+tion:
+Z(· | s, a) = N
+ Q(s, a), σ2(s, a)
+
+.
+(6)
+For a candidate a ∼πϕ(· | st), let Qi = Qθi(st, a) and
+σi = σθi(st, a) > 0 denote the outputs of critic i ∈{1, 2}.
+We define
+Gi(st, a; bt) := Eϵ∼N (0,1)[max{Qi + σiϵ, bt}]
+= bt + (Qi −bt)Φ(νi) + σiφ(νi).
+(7)
+The standardized offset is νi = (Qi −bt)/σi; Φ and φ de-
+note the standard normal cumulative distribution and density
+functions. For fixed reference and standard deviation (SD),
+∂Gi/∂Qi = Φ(νi), so the conservative pressure changes
+continuously around bt. The predicted SD determines the
+smoothing width, and the mean-only truncation is recovered
+in the zero-variance limit. Gradients through σi are disabled
+in Gi to avoid directly shrinking the return dispersion; the
+SD remains trainable in the Bellman term.
+At
+the
+recorded
+execution
+pair,
+write
+Qcert
+i
+=
+Qθi(st, acert
+t
+) and σcert
+i
+= σθi(st, acert
+t
+). The complete critic
+objective is
+Ltask,i = βcal,nED,a
+
+Gi(st, a; bt) −Qcert
+i
+
++ ED,a′,Z′
+(Y Z
+t −Qcert
+i
+)2
+2(σcert
+i
+)2
++ log σcert
+i
+
+,
+(8)
+where βcal,n ≥0 controls calibration at update n. The first
+expectation samples current policy actions at replay states
+and uses only records with available bt; its unweighted value
+is RGCal,i. The second uses all replay transitions to fit
+the Gaussian return distribution. Its mean gradient is scaled
+by the inverse predicted variance. Together, these terms
+fit recorded execution outcomes while calibrating candidate
+values against observed behavior.
+The Bellman target follows the same protected execution
+rule as data collection. For (s′, ξ′) = (st+1, ξt+1), we use
+a′ ∼π ¯ϕ(· | s′),
+a′cert = Fξ′(a′),
+Z′ ∼Z(· | s′, a′cert),
+Y Z
+t
+= rt + γ(1 −dt)Z′.
+(9)
+3
+
+
+Bars denote target quantities. At each (s′, a′cert), Z is the
+Gaussian distribution of the target critic with the smaller
+mean, using that same critic’s variance [22]. The sample Z′
+represents the continuation return under protected execution;
+terminal transitions use Y Z
+t
+= rt. The objective is used for
+both offline initialization and online refinement, with actor
+parameters, Bellman targets, and recorded behavior returns
+fixed during critic updates.
+B. Adaptive Guidance for Autonomous Policy Improvement
+Calibrated critics support policy improvement from pro-
+tected experience, but successful execution can still rely on
+repeated corrections. Moreover, minimizing a finite-horizon
+MPC cost need not maximize long-horizon task return. We
+therefore use corrections as local guidance while allowing
+the policy to discover higher-return behavior within the
+prescribed safety constraints.
+Learning from task values and corrections. Online
+records provide two complementary learning signals. For
+ι = 0, the task critic guides improvement of the policy action;
+for ι = 1, the executed correction provides a feasible action
+target. Including the entropy term in (1), we use
+LQ(ϕ) = −EDon
+ ¯Qθ(s, µϕ(s, z)) | ι = 0
+
+−αEs∼Don[H(πϕ(· | s))] ,
+(10)
+Lcorr(ϕ) = EDon
+
+∥µϕ(s, z) −acert∥2
+Wa | ι = 1
+
+.
+(11)
+The clipped value is ¯Qθ = mini Qθi, α is the entropy
+coefficient, and Wa ≻0 weights the corrective error. The
+recorded generator input z is reused for these paired updates,
+associating each correction with the action that triggered it.
+Entropy is evaluated using fresh samples from the current
+raw policy. The intervention labels select replay records;
+updated actions are checked again during execution.
+Anticipating future interventions. An earlier position
+or speed choice can determine whether a later correction
+is needed. Motivated by intervention-value learning [7], we
+estimate discounted future filter use:
+P π(st, araw
+t
+)
+= (1 −γP )Eπ,F
+" ∞
+X
+ℓ=0
+γℓ
+P ιt+ℓ
+ st, araw
+t
+#
+.
+(12)
+The discount factor satisfies γP
+∈[0, 1); subsequent
+actions follow π, and transitions follow certified execution.
+Interventions after termination are zero, giving P π ∈[0, 1].
+To propagate delayed interventions, we use contiguous seg-
+ments of K transitions ending at termination or a collection
+boundary. The observed interventions provide a partial target,
+and the endpoint estimate supplies the remaining continua-
+tion:
+yP
+t = (1 −γP )
+K−1
+X
+ℓ=0
+γℓ
+P ιt+ℓ
++ γK
+P (1 −dt+K−1)Ea′[Pψ(st+K, a′)],
+LP (ψ) = 1
+2EDon
+
+(Pψ(st, araw
+t
+) −yP
+t )2
+.
+(13)
+The bootstrap action a′ ∼πϕ(· | st+K) is sampled from
+the raw policy. True termination removes the continuation
+term. Targets are fixed during regression, and Pψ is bounded
+in [0, 1]. Setting K = 1 gives the one-step target; longer
+segments propagate observed intervention signals farther
+in each update. These targets approximate current-policy
+evaluation from collected data.
+The complete actor objective is
+Lπ(ϕ) = LQ(ϕ)
++ λF,n
+h
+βcorrLcorr(ϕ) + Es,a[Pψ(s, a)]
+i
+,
+(14)
+where s ∼Don, a ∼πϕ(· | s), and βcorr > 0. Task values
+favor higher returns, corrections teach feasible adjustments,
+and Pψ discourages actions leading to later assistance. The
+critics, correction targets, and coefficients are fixed during
+actor optimization; gradients pass through the generated
+actions.
+Relaxing corrective guidance. Corrective supervision
+helps the policy acquire feasible behavior, but its influence
+should diminish as the policy learns to operate with less
+assistance. We therefore reuse the intervention-to-go estimate
+in (12) to regulate guidance strength. At round n, we evaluate
+Pψ(s, a) on states from the latest online batch and raw
+actions a ∼πϕ(· | s) sampled from the current policy.
+The average predicted dependence is smoothed and used to
+update the guidance weight:
+¯Pn = (1 −βP ) ¯Pn−1 + βP Es,a[Pψ(s, a)],
+λF,n+1 = Π[0,λmax]
+
+λF,n + ηλ( ¯Pn −κλλF,n)
+
+.
+(15)
+The operator Π denotes interval projection, with βP ∈
+(0, 1], ηλ, κλ > 0, and 0 < ηλκλ < 1. The feedback statistic
+is computed without gradient propagation, and λF,n+1 is
+held fixed during the subsequent actor updates. Predicted
+intervention demand counteracts weight decay; vanishing
+feedback gives λF,n →0. Together with the decaying cali-
+bration weight βcal,n, this reduces the influence of recovery
+supervision and value regularization, allowing continued task
+improvement under unchanged execution constraints.
+C. Safety and Asymptotic Guidance Analysis
+SOAR-Flow separates execution protection from learning
+guidance. The following result characterizes sampling-time
+safety and the asymptotic removal of auxiliary contributions
+to policy and value updates.
+Theorem 1: Certified
+Safety
+and
+Vanishing
+Auxiliary
+Guidance. Starting from a feasible ξ0 ∈C, suppose CBF–
+MPC remains feasible and the realized transitions satisfy
+hj(ξt+1) ≥ρjhj(ξt) −ϵj,t, with 0 ≤ρj < 1 and 0 ≤
+ϵj,t ≤¯ϵj. Then
+hj(ξt) ≥ρt
+jhj(ξ0) −1 −ρt
+j
+1 −ρj
+¯ϵj.
+(16)
+In particular, zero residual bounds preserve nonnegative
+barriers at every sampling instant throughout online learning.
+Let the guidance weight follow (15), with ¯P0 ∈[0, 1],
+λF,0
+∈
+[0, λmax], and 0
+<
+ηλκλ
+<
+1. Suppose
+4
+
+
+Fig. 2: MetaDrive scenario and experimental workstation.
+¯Pn
+→
+0, βcal,n
+→
+0, and the actor gradients of
+Lcorr and Es,a[Pψ(s, a)], as well as the critic-mean gradi-
+ents ∇θiQθi(s, a) at all calibration samples, are uniformly
+bounded along the learning iterates. Then λF,n →0 and
+∥∇ϕLπ −∇ϕLQ∥→0,
+∥βcal,n∇θiRGCal,i∥→0.
+(17)
+All gradients follow the fixed-target, fixed-coefficient, and
+fixed-calibration-scale conventions specified above.
+The barrier bound follows by iterating the realized CBF
+inequality. The guidance recursion has contraction factor
+1 −ηλκλ ∈(0, 1), while ∂Gi/∂Qi = Φ(νi) ∈[0, 1] bounds
+the calibration gradient under the stated assumptions. Thus,
+the direct influence of corrective, dependence, and calibra-
+tion terms vanishes as predicted dependence and calibration
+weights tend to zero. The task and entropy objective remains
+active without a persistent gradient penalty for departing
+from the guardian’s particular recovery choices, preserving
+scope for higher-return behavior within the certified region
+while execution constraints remain enforced.
+IV. SIMULATION EXPERIMENTS
+We evaluate whether SOAR-Flow improves an initialized
+driving policy while limiting training violations and reducing
+reliance on safety corrections across different simulated
+scenarios. Baseline comparisons and ablations examine the
+contributions of value calibration and adaptive guidance.
+A. Experimental Setup
+We conduct experiments in SafeMetaDriveEnv of
+MetaDrive [23], where scenario seeds specify different road
+layouts and obstacle configurations. Fig. 2 shows a sce-
+nario and the experimental workstation. An MPC controller
+collects offline trajectories on ten fixed scenario seeds to
+initialize the Flow policy and Gaussian task critics. Twenty
+additional seeds, excluded from offline training, are used for
+online fine-tuning and evaluation. The actor receives a 259-
+dimensional observation comprising 19 ego-state and naviga-
+tion variables, including speed, heading, steering state, road-
+boundary distances, and upcoming checkpoints, together
+with 240 light detection and ranging (LiDAR)-like range
+measurements. Four additional safety-context variables are
+provided only to the task critics. The normalized actor output
+at = [alon
+t
+, alat
+t ] ∈[−1, 1]2 is decoded into a local target in
+the ego frame:
+xref
+t
+= 1
+2(alon
+t
++ 1)L,
+yref
+t
+= alat
+t W,
+(18)
+with L = 10 m and W = 3.7 m. CBF–MPC certifies
+or corrects the reference before a nominal nonlinear model
+predictive control (NMPC) tracker produces steering and
+longitudinal commands. Task reward and safety cost are
+recorded separately. The maximum commanded speed is
+10.75 m/s. Online training uses 106 environment steps per
+run and five independent training seeds.
+Comparisons and metrics. Baselines include fixed CBF–
+MPC, offline Flow-BC, Cal-QL [2], PROTO-SAC [16],
+Gaussian-DSAC, and Flow-Q-only. Ablations examine cor-
+rective learning, intervention-to-go, and calibration. PO eval-
+uation disables CBF correction but retains NMPC, whereas
+SF evaluation retains certification. PO reports episodic return,
+SS, and evaluation safety cost. SS requires arrival without
+collision, road departure, or nonzero episode cost. Protected
+training reports cumulative safety cost. In SF evaluation,
+certification-based intervention counts and rates are defined
+using ιt. Repeated trials are averaged within each training
+seed, followed by the mean and sample SD across seeds.
+B. Results and Analysis
+Online improvement. Fig. 3(a) and Table I present the
+learning curves and final comparison. The final return listed
+for SOAR-Flow is 352.3 ± 2.1, compared with 309.1 ± 4.8
+for Flow-BC and 343.5±3.0 for Gaussian-DSAC. This value
+0
+0.2
+0.4
+0.6
+0.8
+1.0
+Environment steps (×106)
+240
+260
+280
+300
+320
+340
+360
+Episodic return
+(a) Episodic return (PO).
+0
+0.2
+0.4
+0.6
+0.8
+1.0
+Environment steps (×106)
+0
+5
+10
+15
+20
+25
+Cumulative cost
+(b) Training cost (SF).
+0
+0.2
+0.4
+0.6
+0.8
+1.0
+Environment steps (×106)
+0
+2
+4
+6
+8
+10
+Correction rate (%)
+(c) Correction rate (SF).
+Ours
+Gaussian-DSAC
+PROTO-SAC
+Cal-QL
+Flow-Q-only
+Flow-BC
+CBF-MPC
+Fig. 3: Simulation learning curves.
+5
+
+
+TABLE I: Comparison in the simulation experiment, including safe success (SS).
+Method
+Return ↑
+SS (%) ↑
+Eval. Cost ↓
+Train Cost ↓
+Corr. Rate (%) ↓
+CBF–MPC
+350.0±0.6
+100.0±0.0
+0.00±0.00
+–
+–
+Flow-BC
+309.1±4.8
+70.0±7.1
+5.42±0.76
+–
+3.33±0.35
+Cal-QL [2]
+335.9±3.5
+88.0±3.2
+1.94±0.54
+6.94±1.46
+5.25±0.40
+PROTO-SAC [16]
+340.3±3.4
+91.6±2.6
+1.14±0.48
+4.66±1.02
+3.86±0.40
+Gaussian-DSAC
+343.5±3.0
+96.0±3.2
+0.38±0.28
+0.85±0.32
+2.68±0.28
+Flow-Q-only
+278.2±12.1
+42.0±9.5
+6.24±0.87
+18.22±3.20
+37.11±4.40
+Ours w/o correction
+335.8±4.3
+86.4±4.8
+1.82±0.60
+2.26±0.55
+4.98±0.75
+Ours w/o P
+341.6±3.6
+91.6±3.8
+0.82±0.35
+1.32±0.35
+1.98±0.53
+Ours w/o calibration
+338.0±4.5
+92.0±3.2
+1.20±0.35
+1.50±0.40
+2.50±0.45
+Ours w/ mean calibration
+348.0±2.8
+98.0±2.0
+0.20±0.12
+0.50±0.18
+1.20±0.20
+Ours
+352.3±2.1
+100.0±0.0
+0.00±0.00
+0.18±0.10
+0.72±0.12
+is close to the fixed CBF–MPC reference of 350.0 ± 0.6,
+whereas Flow-Q-only falls below the offline baseline to
+278.2±12.1. The main contrast is improvement over offline
+initialization; the fixed controller provides a performance
+reference rather than a learning curve.
+Safety and dependence. Fig. 3(b–c) and Table I sum-
+marize training cost and correction demand. SOAR-Flow
+is listed with a training cost of 0.18 ± 0.10 and a cor-
+rection rate of 0.72 ± 0.12%, compared with 0.85 ± 0.32
+and 2.68 ± 0.28% for Gaussian-DSAC. The table also lists
+100% SS and zero evaluation cost under PO evaluation.
+These metrics distinguish protected collection from execution
+without reference correction: low training cost alone does not
+establish autonomous task completion.
+Ablations. The ablation comparison is presented in Ta-
+ble I. The variants without corrective learning and without
+P have correction rates of 4.98% and 1.98%, respectively,
+compared with 0.72% for the full method. Removing cali-
+bration and using mean-only calibration give return entries of
+338.0 and 348.0, respectively. Mean-only calibration narrows
+the return gap, but its listed correction rate remains higher at
+1.20%. The full-method entry combines the highest return
+with the lowest training cost among these variants. PO
+safe-success entries are also lower without correction or P,
+linking the tabulated comparison to task completion as well
+as correction demand.
+V. REAL-WORLD EXPERIMENTS
+We examine protected online adaptation on a UGV and
+the development of driving behavior requiring fewer safety
+corrections. A frozen-policy test on a held-out cornering task
+further assesses execution beyond the training layouts.
+Fig. 4: UGV experimental platform.
+A. Experimental Setup
+Our UGV in Fig. 4 is equipped with LiDAR, cameras,
+radar, and an integrated navigation system (INS). Policy
+inputs combine ego motion, surrounding obstacle distances,
+and navigation checkpoints [4]. Policy inference and NMPC
+run onboard at 10 Hz and 20 Hz, respectively. The actor
+specifies a local reference; following certification, NMPC
+generates steering and longitudinal commands transmitted
+through the base adapter unit (BAU).
+Offline data are collected by a human driver in the two-
+sided obstacle-bypass layout of Fig. 5(a). We record 24
+demonstration trajectories, with 12 passing on each side,
+to pretrain the UGV Flow policy and Gaussian critics.
+Online refinement alternates between Blocked-Side Bypass in
+Fig. 5(b), where one demonstrated passing route is blocked,
+and 8-shaped Maneuver in Fig. 5(c), which requires suc-
+cessive turns in opposite directions around two obstacles.
+The first task changes which demonstrated bypass remains
+feasible; the second requires the exit from one bypass to
+accommodate the following turn. A single policy is updated
+across both tasks under CBF–MPC protection, with their ex-
+perience stored in the same online replay buffer. Checkpoints
+TABLE II: UGV comparison. SS is reported as a percentage; other metrics are mean ± SD.
+Blocked-Side Bypass
+8-shaped Maneuver
+Held-out Cornering
+Method
+SS (%) ↑
+Return ↑
+Corr. Rate (%) ↓SS (%) ↑
+Time (s) ↓
+Min. Clr. (m) ↑
+SS (%) ↑
+CBF–MPC
+100
+345.7±1.5
+–
+95
+16.72±0.31
+0.779±0.018
+85
+Flow-BC
+85
+311.2±3.8
+4.31±0.41
+65
+18.21±0.56
+0.681±0.039
+55
+Gaussian-DSAC
+95
+343.9±2.6
+2.46±0.32
+90
+15.96±0.29
+0.776±0.017
+90
+Ours
+100
+350.8±1.8
+0.68±0.11
+100
+15.36±0.24 0.801±0.019
+95
+6
+
+
+Start
+Goal
+O1
+Start
+Finish
+Early
+Late
+O1
+O2
+Start
+Finish
+Early
+Intermediate
+Late (PO)
+O1
+O2
+Start
+I to II
+II to III
+I to II
+II to III
+(a) Multimodal initialization.
+(b) Blocked-side refinement.
+(d) Held-out cornering outcomes.
+(e) Blocked-side episodic return.
+(f) Blocked-side correction rate.
+Late / final
+Early
+Intermediate
+Correction
+Obstacle / buffer
+Left-pass demo
+Right-pass demo
+Success (d)
+Collision (d)
+(e–f):
+Ours
+Gaussian-DSAC
+Flow-BC
+CBF–MPC
+Transparent UGV poses show progression.
+UGV interaction steps
+UGV interaction steps
+(c) 8-shaped refinement.
+Fig. 5: UGV refinement with SOAR-Flow. (a) Multimodal initialization. (b–c) Recorded blocked-side and 8-shaped
+trajectories at different refinement stages. Red segments indicate corrections; the late 8-shaped run uses PO execution
+with MPC tracking retained. (d) Held-out SOAR-Flow success and fixed CBF–MPC collision. (e–f) Blocked-side curves;
+vertical dashed lines mark training stages.
+are evaluated on both tasks without parameter updates to
+assess performance on each layout. The final policy is frozen
+and tested zero-shot on Cornering with Obstacle Avoidance
+in Fig. 5(d), which combines a 90◦bend with two obstacles.
+This layout is excluded from demonstrations, online training,
+tuning, and checkpoint selection. The UGV protocol uses
+three independent training seeds.
+Comparisons and metrics. UGV comparisons use CBF–
+MPC, Flow-BC, and Gaussian-DSAC. We use the PO and SF
+evaluation modes and SS criterion described in Sec. IV-A.
+Each method’s reported SS is computed from 20 evaluation
+trials per task. Learned-policy SS and return use PO; cor-
+rection rates use SF. Fixed CBF–MPC runs independently.
+Table II groups results by task, with continuous metrics
+reported as mean ± SD.
+B. Results and Analysis
+Online adaptation. Fig. 5(e–f) and Table II show blocked-
+side adaptation. SOAR-Flow achieves 100% SS and a return
+of 350.8 ± 1.8, compared with 343.9 ± 2.6 for Gaussian-
+DSAC. Its correction rate is 0.68 ± 0.11%, versus 2.46 ±
+0.32% for Gaussian-DSAC and 4.31 ± 0.41% for Flow-BC.
+The 39.6 return gain over Flow-BC accompanies reduced
+correction demand after one demonstrated route is blocked.
+Autonomous execution and efficiency. Fig. 6 shows 8-
+shaped refinement from corrected early and intermediate
+runs to late execution without CBF correction, with nominal
+MPC tracking retained. The first turn must prepare for
+the following opposite-direction turn. In Table II, SOAR-
+Flow reaches 100% 8-shaped SS, compared with 95% for
+CBF–MPC and 90% for Gaussian-DSAC. Its completion
+time is 15.36 ± 0.24 s, versus 16.72 ± 0.31 s for CBF–
+MPC, a reduction of 1.36 s (approximately 8.1%). The
+corresponding minimum clearances are 0.801±0.019 m and
+0.779±0.018 m. Thus, shorter completion time accompanies
+slightly larger mean clearance.
+Zero-shot cornering. On held-out cornering, SOAR-Flow
+attains 95% SS, compared with 85% for fixed CBF–MPC,
+55% for Flow-BC, and 90% for Gaussian-DSAC. Fig. 5(d)
+contrasts SOAR-Flow clearing both obstacles with fixed
+CBF–MPC contacting the downstream obstacle, highlighting
+the need to preserve clearance for subsequent avoidance. The
+frozen policy transfers without further updates, although not
+every evaluation succeeds.
+VI. CONCLUSION
+This paper presented SOAR-Flow for safe online refine-
+ment of offline-initialized Flow-based driving policies un-
+der CBF–MPC protection. Gaussian-return-aware calibration
+uses recorded behavioral outcomes to regulate critic updates,
+while paired corrections and intervention-to-go learning
+guide policy improvement. Intervention-responsive guidance
+and decaying calibration weights reduce auxiliary influences
+under the stated conditions. The analysis establishes condi-
+tional sample-time safety of protected execution and vanish-
+ing auxiliary gradients. Together, these components connect
+protected data collection with continued task optimization,
+aiming to reduce reliance on particular recovery behaviors
+while retaining the prescribed execution constraints.
+7
+
+
+(a) Early CBF-MPC correction
+(b) Intermediate refinement
+(c) Autonomous refinement
+Reversal approach (onboard)
+Reversal (onboard)
+Crossover (time-lapse)
+Protected execution
+Reversal approach (onboard)
+Reversal (onboard)
+Crossover (time-lapse)
+Protected execution
+Reversal approach (onboard)
+Reversal (onboard)
+Crossover (time-lapse)
+Without correction
+Exit (time-lapse)
+Exit (time-lapse)
+Exit (time-lapse)
+Fig. 6: 8-shaped refinement with SOAR-Flow: early protected execution, intermediate refinement, and late execution without
+CBF correction. Red segments mark correction intervals in the early and intermediate runs.
+REFERENCES
+[1] B. R. Kiran, I. Sobh, V. Talpaert, P. Mannion, A. A. Al Sallab, S. Yo-
+gamani, and P. P´erez, “Deep reinforcement learning for autonomous
+driving: A survey,” IEEE Transactions on Intelligent Transportation
+Systems, vol. 23, no. 6, pp. 4909–4926, 2022.
+[2] M. Nakamoto, Y. Zhai, A. Singh, M. S. Mark, Y. Ma, C. Finn,
+A. Kumar, and S. Levine, “Cal-QL: Calibrated offline RL pre-training
+for efficient online fine-tuning,” in Advances in Neural Information
+Processing Systems, 2023.
+[3] S. Park, Q. Li, and S. Levine, “Flow Q-learning,” in Proceedings of
+the International Conference on Machine Learning, ser. Proceedings
+of Machine Learning Research, vol. 267, 2025, pp. 48 104–48 127.
+[4] Z. Li, Y. Wang, H. Wang, Z. Li, P. Li, W. Liu, and Z. Zuo,
+“From learning to mastery: Achieving safe and efficient real-world
+autonomous driving with human-in-the-loop reinforcement learning,”
+arXiv:2510.06038, 2025.
+[5] H. Li, K. Lei, S. Zang, K. Hu, Y. Liang, B. An, X. Li, and H. Xu,
+“Failure-aware RL: Reliable offline-to-online reinforcement learning
+with self-recovery for real-world manipulation,” arXiv:2601.07821,
+2026.
+[6] F. Pizarro Bejarano, L. Brunke, and A. P. Schoellig, “Safety filtering
+while training: Improving the performance and sample efficiency
+of reinforcement learning agents,” IEEE Robotics and Automation
+Letters, 2025.
+[7] Q.
+Li,
+Z.
+Peng,
+and
+B.
+Zhou,
+“Efficient
+learning
+of
+safe
+driving policy via Human-AI copilot optimization,” in International
+Conference on Learning Representations, 2022. [Online]. Available:
+https://arxiv.org/abs/2202.10341
+[8] J. Duan, Y. Guan, S. E. Li, Y. Ren, and B. Cheng, “Distributional
+soft actor-critic: Off-policy reinforcement learning for addressing
+value estimation errors,” IEEE Transactions on Neural Networks and
+Learning Systems, vol. 33, no. 11, pp. 6584–6598, 2022.
+[9] J. Achiam, D. Held, A. Tamar, and P. Abbeel, “Constrained policy
+optimization,” in Proceedings of the International Conference on
+Machine Learning, ser. Proceedings of Machine Learning Research,
+vol. 70, 2017, pp. 22–31.
+[10] B. Thananjeyan, A. Balakrishna, and S. Nair, “Recovery RL: Safe
+reinforcement learning with learned recovery zones,” IEEE Robotics
+and Automation Letters, vol. 6, no. 3, pp. 4915–4922, 2021.
+[11] K. P. Wabersich and M. N. Zeilinger, “A predictive safety filter for
+learning-based control of constrained nonlinear dynamical systems,”
+Automatica, vol. 129, p. 109597, 2021.
+[12] X. Dai, Z. Yang, D. Yu, F. Liu, H. Sadeghian, S. Haddadin, and
+S. Hirche, “SafeFlow: Safe robot motion planning with flow matching
+via control barrier functions,” arXiv:2504.08661, 2025, version 3.
+[13] L. Yang, B. Werner, M. de Sa, and A. D. Ames, “CBF-RL: Safety
+filtering reinforcement learning in training with control barrier func-
+tions,” in Proceedings of the IEEE International Conference on
+Robotics and Automation, 2026, arXiv:2510.14959.
+[14] A. Kumar, A. Zhou, G. Tucker, and S. Levine, “Conservative Q-
+learning for offline reinforcement learning,” in Advances in Neural
+Information Processing Systems, vol. 33, 2020, pp. 1179–1191.
+[15] I. Kostrikov, A. Nair, and S. Levine, “Offline reinforcement learning
+with implicit Q-learning,” in International Conference on Learning
+Representations, 2022.
+[16] J. Li, X. Hu, H. Xu, J. Liu, X. Zhan, and Y.-Q. Zhang, “PROTO:
+Iterative policy regularized offline-to-online reinforcement learning,”
+arXiv:2305.15669, 2023.
+[17] K. Lei, Z. He, C. Lu, K. Hu, Y. Gao, and H. Xu, “Uni-O4: Unifying
+online and offline deep reinforcement learning with multi-step on-
+policy optimization,” in International Conference on Learning Repre-
+sentations, 2024.
+[18] K. Lei, H. Li, D. Yu, Z. Wei, L. Guo, Z. Jiang, Z. Wang, S. Liang,
+and H. Xu, “RL-100: Performant robotic manipulation with real-world
+reinforcement learning,” arXiv:2510.14830, 2025.
+[19] T. Haarnoja, A. Zhou, P. Abbeel, and S. Levine, “Soft actor-critic: Off-
+policy maximum entropy deep reinforcement learning with a stochastic
+actor,” in Proceedings of the International Conference on Machine
+Learning, ser. Proceedings of Machine Learning Research, vol. 80,
+2018, pp. 1861–1870.
+[20] Y. Lipman, R. T. Q. Chen, H. Ben-Hamu, M. Nickel, and M. Le,
+“Flow matching for generative modeling,” in International Conference
+on Learning Representations, 2023.
+[21] A. Agrawal and K. Sreenath, “Discrete control barrier functions for
+safety-critical control of discrete systems with application to bipedal
+robot navigation,” in Proceedings of Robotics: Science and Systems,
+Cambridge, MA, USA, 2017.
+[22] J. Duan, W. Wang, L. Xiao, J. Gao, S. E. Li, C. Liu, Y.-Q. Zhang,
+B. Cheng, and K. Li, “Distributional soft actor-critic with three
+refinements,” IEEE Transactions on Pattern Analysis and Machine
+Intelligence, vol. 47, no. 5, pp. 3935–3946, 2025.
+[23] Q. Li, Z. Peng, L. Feng, Q. Zhang, Z. Xue, and B. Zhou, “MetaDrive:
+Composing diverse driving scenarios for generalizable reinforcement
+learning,” IEEE Transactions on Pattern Analysis and Machine Intel-
+ligence, vol. 45, no. 3, pp. 3461–3475, 2023.
+8

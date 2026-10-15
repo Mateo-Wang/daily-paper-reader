@@ -1,0 +1,2771 @@
+FOCUS: From Privileged States to RGB-D
+with Controlled Modality Switching and
+Representation Alignment
+Filip Grigorov
+University of Toronto
+Canada
+filip.grigorov@mail.utoronto.ca
+Kourosh Darvish
+University of Toronto
+Canada
+kourosh.darvish@utoronto.ca
+Nandita Vijaykumar
+University of Toronto
+Canada
+nandita.vijaykumar@utoronto.ca
+Abstract:
+Vision-based reinforcement learning for robotic manipulation is
+sample-inefficient because RGB-D observations are high-dimensional and noisy.
+Privileged state information available in simulation can accelerate training, but
+its absence at test time creates a train–test modality gap. We propose FOCUS, a
+single-stage PPO framework that trains the critic on privileged state while auto-
+matically regulating whether the actor collects rollouts from RGB-D or privileged-
+state latents. Regulation is driven by the KL divergence between the action distri-
+butions induced by the two modalities, while representation alignment encourages
+consistent action selection across them. Together, these mechanisms limit RGB-D
+rollouts when the actor’s action distributions from RGB-D and privileged-state la-
+tents disagree. As they align, RGB-D exposure increases, shifting on-policy train-
+ing toward the RGB-D inputs used at test time. Across five manipulation tasks,
+FOCUS raises average test success from 0.71 to 0.93 relative to the strongest
+RGB-D-at-test baseline on each task. When accounting for each method’s com-
+plete training pipeline, budget-normalized training-success AUC increases from
+0.47 to 0.65. On Pick-and-Place, test success rises from 0.47 to 0.86, while AUC
+increases from 0.12 to 0.61, a 5.0× improvement in learning efficiency over the
+fixed interaction budget.
+Keywords: Vision-Based Reinforcement Learning, Learning Representations for
+Robotic Perception and Control, Robotic Manipulation
+1
+Introduction
+Reinforcement learning enables robots to learn closed-loop manipulation policies through trial-and-
+error interaction and optimize them directly for task success. However, reinforcement learning for
+robotics remains limited by poor sample efficiency, sensitivity to reward design, and the cost and
+safety risks of real-world trial-and-error data collection [1]. Simulation-based RL mitigates some of
+these issues through resettable environments, parallel rollouts, controlled task variation, and access
+to training-only privileged information.
+Learning manipulation policies directly from RGB-D observations is difficult because visual inputs
+are high-dimensional and noisy [2, 3, 4]. In some settings, visual observations may also provide
+an incomplete view of task-relevant state [5, 2]. In simulation, however, training can access com-
+pact privileged state information, such as object and gripper poses, contact signals, and task-goal
+variables, that helps determine which action should be taken [6]. This creates an opportunity to use
+arXiv:2610.11119v1  [cs.RO]  8 Oct 2026
+
+
+privileged state during RL training to improve sample efficiency while still producing an RGB-D
+policy that does not require privileged state at test time.
+The difficulty is addressing the modality gap between privileged-state training and RGB-D-based
+action selection at test time. While privileged states can accelerate policy learning, reliance on
+them during training can produce representations and action decisions that are poorly matched to
+the RGB-D observations available at test time. Conversely, training only from RGB-D avoids this
+mismatch but can be sample-inefficient. The problem we address is therefore how to adapt the actor
+from privileged-state rollouts toward RGB-D control during RL training while avoiding premature
+RGB-D exposure.
+Prior work improves sample efficiency with privileged information during training in several ways.
+Asymmetric actor–critic methods give privileged state to the critic while training the actor from
+visual inputs [7]. This can improve value estimation and the resulting policy updates, but the ac-
+tor still generates rollouts from high-dimensional visual observations throughout training. More
+broadly, asymmetric learning methods use full-state information during training to improve policies
+that operate from partial observations [8]. However, these methods do not explicitly regulate visual
+rollout exposure according to whether privileged-state and visual inputs induce compatible action
+distributions. Teacher–student and distillation methods transfer knowledge from a trained teacher
+to a student model or policy [9, 10, 11]. In robotics, privileged simulator state is often used to train
+a teacher policy or world model that is then transferred to a vision-based student [12, 13, 14, 15].
+Such pipelines typically separate privileged teacher training from visual student transfer. In con-
+trast, FOCUS performs this transition online within a single PPO run by using cross-modal policy
+disagreement to regulate whether rollouts are generated from privileged-state or RGB-D latents.
+Other privileged-learning methods use training-only information to guide visual attention, provide
+auxiliary learning signals, or regularize reliance on privileged inputs [16, 17, 18]. Separately, vi-
+sual RL methods improve learning from pixels through representation learning and data augmen-
+tation [19, 20, 3]. These directions are complementary, but they do not use cross-modal action
+agreement to regulate which modality generates on-policy rollouts. We ask whether privileged in-
+formation can be used online for this purpose.
+In this work, our goal is to improve the sample efficiency and training reliability of RGB-D policies
+in simulated PPO-based manipulation without requiring RGB-D-based rollout collection from the
+start or separating privileged training and RGB-D transfer into distinct stages. We propose FOCUS,
+a single-stage RL framework applied to PPO [21] for privileged-to-vision transfer in robotic manip-
+ulation. FOCUS is based on two complementary ideas. First, we use cross-modal representation
+alignment to reduce mismatch between training-time and test-time inputs. Second, we introduce
+an online KL-guided switching mechanism that regulates when the actor uses RGB-D rather than
+privileged-state latents. An upper-quantile KL budget reduces RGB-D exposure when rare high-
+disagreement states remain. This progressively shifts on-policy training toward the RGB-D inputs
+available at test time while retaining privileged-state value estimation.
+Contributions.
+(1) We formulate FOCUS as a single-stage PPO-based method that makes privileged-state and RGB-
+D actor representations compatible while adaptively regulating whether on-policy rollouts are gen-
+erated from privileged-state or RGB-D latents.
+(2) We introduce KL-guided modality switching, which uses disagreement between the action dis-
+tributions produced by the same policy from privileged-state- and RGB-D-derived actor inputs to
+regulate RGB-D-based rollout collection. An upper-quantile KL budget reduces the probability of
+RGB-D rollouts when rare high-disagreement states remain.
+(3) Across five IsaacLab manipulation tasks, FOCUS raises average test success from 0.71 to 0.93
+relative to the strongest RGB-D-at-test baseline on each task, while end-to-end budget-normalized
+training-success AUC increases from 0.47 to 0.65. On Pick-and-Place, test success increases from
+0.47 to 0.86 and AUC from 0.12 to 0.61 (5.0×). Replacing adaptive KL-controlled exposure with
+a fixed ramp reduces Pick-and-Place AUC to 0.36, while the lightweight switch-plus-policy-KL
+2
+
+
+variant (FOCUS-simple) matches or exceeds FOCUS on two of three discriminative tasks for each
+metric, suggesting simplified future variants.
+2
+Related Work
+We review prior work related to privileged-to-vision transfer, focusing on teacher–student distilla-
+tion, asymmetric actor–critic methods, and privileged-information-guided learning.
+Teacher–Student and Distillation.
+Knowledge distillation transfers behavior or representations
+from a teacher to a student [9, 10, 11]. In robotic learning with privileged information, a policy or
+world model is often first trained using privileged state, and its knowledge is then transferred to an
+RGB- or depth-based student [12, 13, 14, 15]. Such pipelines typically separate privileged train-
+ing from visual transfer. Related asymmetric imitation methods use a privileged expert to guide a
+policy that operates from limited observations [8]. Recent methods reduce this separation through
+joint teacher-student training or adaptive data sharing [22, 23, 24], but still organize learning around
+distinct teacher and student policies and do not directly use their current behavioral agreement to de-
+termine which observation pathway collects on-policy experience. FOCUS instead uses privileged-
+state and RGB-D paths within a single actor and regulates their rollout use according to policy
+disagreement, limiting premature RGB-D rollout collection while allowing the RGB-D path to learn
+directly from task rewards. By reducing low-quality RGB-D rollouts early in training, this design
+aims to improve sample efficiency while preserving or improving RGB-D test-time success.
+Asymmetric Actor–Critic and Privileged Critics.
+Asymmetric actor–critic methods provide
+privileged information to the critic while training the actor from observations available at test time
+[7, 25, 26]. The privileged critic can improve sample efficiency by providing more informative
+value estimates without making the actor depend on privileged information at test time. Related
+dual-critic methods combine privileged-state and observation-based critics to improve learning un-
+der partial observability [27]. However, the actor must still learn perception and control jointly
+from RGB-D from the start of training, so an immature visual pathway can generate low-quality
+on-policy experience and slow learning. FOCUS retains a privileged-state critic, but additionally
+provides privileged-state and RGB-D actor paths and regulates which path generates rollouts ac-
+cording to their policy disagreement. This aims to reduce inefficient early RGB-D experience while
+improving RGB-D-only success at test time.
+Privileged-Information-Guided Learning and Visual RL.
+Privileged information has been used
+during training to guide visual attention, strengthen auxiliary learning components, or regularize
+reliance on privileged inputs [16, 17, 18]. These methods can improve sample efficiency and final
+visual-policy performance, but they do not explicitly align privileged-state and RGB-D actor paths
+at the level of action selection or use their agreement to control rollout generation.
+Separately, visual RL methods improve learning from pixels through reconstruction, latent dynam-
+ics models, contrastive representation learning, and data augmentation [2, 28, 19, 20, 3]. These
+methods directly optimize the test-time visual policy and can improve both learning speed and final
+success, but still rely on RGB-D-generated experience from the start of training. FOCUS combines
+privileged-state and RGB-D actor paths, using action-level alignment and policy disagreement to
+limit inefficient early RGB-D rollouts while continuing to optimize RGB-D-only test-time perfor-
+mance.
+Fusion and Modality Routing.
+Gated fusion, Transformer-based attention, multimodal trans-
+formers, FiLM conditioning, and representation switching provide useful mechanisms for com-
+bining or selecting representations [29, 30, 31, 32, 33]. However, they do not address replacing
+training-only privileged state with RGB-D-based action selection at test time.
+3
+
+
+3
+Methodology
+3.1
+Problem setup and method overview
+At environment step t, the simulator provides xt = [spriv
+t
+, sprop
+t
+, ot, at−1], where spriv
+t
+is privileged
+simulator state, sprop
+t
+is proprioceptive state, ot is an RGB-D observation, and at−1 is the previous
+action. At test time, privileged state is unavailable, so the policy acts from yt = [sprop
+t
+, ot, at−1].
+FOCUS uses a state encoder Es, an RGB-D encoder Eo, an actor πθ, and a critic Vϕ. The encoders
+produce
+zt,o = Eo(ot),
+zt,s = Es(spriv
+t
+).
+(1)
+A shared fusion module combines the modality latent with proprioception sprop
+t
+and the previous
+action at−1 before it is passed to the actor or critic. We absorb this module into the actor and critic
+notation below for compactness.
+As shown in Figure 1, the KL-guided switch selects either the privileged-state latent zt,s or the
+RGB-D latent zt,o for the current actor rollout. We denote the selected latent by zselected
+t
+. During
+training, the actor therefore generates each rollout according to
+πθ
+ · | zselected
+t
+, sprop
+t
+, at−1
+
+,
+(2)
+while the critic remains anchored to privileged state,
+Vϕ(zt,s, sprop
+t
+, at−1) .
+(3)
+This retains privileged information for value estimation while regulating when the RGB-D pathway
+generates on-policy experience.
+FOCUS aligns privileged-state zt,s and RGB-D zt,o representations during training so that their
+fused actor inputs induce compatible action distributions, enabling RGB-D-based action selec-
+tion at test time. It combines KL-guided RGB-D exposure, representation alignment that encour-
+ages matched privileged-state and RGB-D actor inputs to induce similar actions, and an additional
+control-agreement objective that regularizes agreement in policy outputs and value estimates.
+3.2
+KL-guided modality switching
+FOCUS controls which observation pathway generates each actor rollout. For each rollout, it uses
+cross-modal policy disagreement to determine the probability of selecting the RGB-D pathway, and
+keeps the selected modality fixed throughout the rollout. It measures how much the actor’s action
+distribution changes when the privileged-state input is replaced by the RGB-D input, and converts
+this disagreement into an RGB-D rollout probability λr. A single Bernoulli variable is sampled per
+rollout and held fixed throughout that rollout, so the actor does not switch observation pathways
+between timesteps. We use this KL only as a measure of cross-modal behavioral compatibility, not
+as a certificate of task competence.
+For each sampled transition, the same actor can be evaluated using either the privileged-state or
+RGB-D latent while keeping proprioception and the previous action fixed. We denote the resulting
+action distributions by
+πs(· | t) = πθ(· | zt,s, sprop
+t
+, at−1) ,
+(4)
+and
+πo(· | t) = πθ(· | zt,o, sprop
+t
+, at−1) .
+(5)
+We use the privileged-state pathway as a training-time anchor and compute, for each timestep in the
+collected rollout, the policy disagreement induced by replacing it with the RGB-D pathway:
+K(xt) = KL(πo(· | t) ∥πs(· | t)) .
+(6)
+The resulting timestep-wise KL values are aggregated into running statistics that determine the
+rollout-level RGB-D exposure probability.
+4
+
+
+Sec. 3.2
+Privileged state,
+stpriv
+RGB-D, ot
+Cross-modal policy
+disagreement
+(same actor)
+ K(xt)=KL(πo||πs)
+stprop, at-1
+Actor, πθ
+Critic, Vφ
+Training
+objectives
+Sec. 3.3–3.4
+ztselected
+zt,s
+zt,o
+stprop, at-1
+privileged-state latent, zt,s
+RGB-D latent, zt,o
+State
+encoder, Es
+RGB-D
+encoder, Eo
+Running KL statistics,
+k̂mean(r-1), k̂q(r-1)
+RGB-D
+exposure
+controller
+KL rollout
+switch, mr ∼
+Bernoulli(λr)
+RGB-D, ot
+Actor πθ
+stprop, at-1
+RGB-D latent, zt,o
+RGB-D
+encoder, Eo
+(a) Training: privileged state and RGB-D available
+(b) Inference/Test: RGB-D only (no privileged state)
+at
+at
+{K(xt)}t∈B
+RGB-D rollout prob, λr
+Figure 1: Overview of FOCUS. During training, cross-modal policy disagreement is aggregated into running
+statistics that determine the RGB-D exposure probability λr for subsequent actor rollouts. A KL-guided rollout
+switch samples either the privileged-state or RGB-D pathway and keeps the selected pathway fixed throughout
+the rollout, while the critic remains anchored to privileged state. At inference, privileged state and the switching
+mechanism are removed, and the actor operates only from RGB-D, proprioception, and the previous action.
+At the beginning of rollout r, the switch uses running estimates of cross-modal disagreement ob-
+tained from the preceding rollout updates. Let ˆkmean(r −1) and ˆkq(r −1) denote the running
+mean and upper-q-quantile estimates of K(xt), with q = 0.9 in our experiments. These statistics
+determine two RGB-D exposure factors for rollout r:
+λmean(r) = min
+(
+εmean
+max(ˆkmean(r −1), Kmin)
+, 1
+)
+,
+λq(r) = min
+(
+εq
+max(ˆkq(r −1), Kmin)
+, 1
+)
+,
+(7)
+where εmean and εq are fixed hyperparameters specifying the mean and upper-quantile disagreement
+levels at which RGB-D exposure begins to be reduced, and Kmin > 0 is a numerical floor. When
+the measured disagreement is at or below the corresponding ε, the exposure factor is one and when
+above it, exposure decreases inversely with disagreement. For example, disagreement equal to 2ε
+yields an exposure factor of 0.5. The upper-quantile term therefore limits RGB-D exposure when
+a subset of states still exhibits large cross-modal disagreement. We combine this KL-controlled
+exposure with a warmup schedule w(r) and a maximum exposure λmax, and smooth the resulting
+target probability over training:
+λtarget(r) = min{w(r)λmax, λmean(r), λq(r)}.
+(8)
+The controller state is smoothed at each controller update j as
+λ(j+1) = (1 −α)λ(j) + α λtarget(r).
+(9)
+We denote by λr the current controller value when rollout r is sampled. RGB-D exposure therefore
+increases when the two modalities agree and decreases when mismatch becomes too large. The
+quantile term limits RGB-D exposure when a subset of samples still exhibits large policy disagree-
+ment.
+At the start of each rollout, we sample a single Bernoulli variable mr ∼Bernoulli(λr) and keep it
+fixed throughout the rollout. The actor then receives
+zselected
+t
+= mr zt,o + (1 −mr) zt,s.
+(10)
+5
+
+
+This keeps the actor input modality fixed within each rollout, providing regulated RGB-D exposure
+without mixing privileged-state- and RGB-D-based actions within the same trajectory.
+During optimization of rollout r, we evaluate the cross-modal policy disagreement over its mini-
+batches and update ˆkmean(r) and ˆkq(r). Once the rollout update is complete, these running statistics
+inform the RGB-D exposure probability for the next rollout.
+3.3
+Representation alignment objective
+The representation objective trains the RGB-D pathway to induce control behavior compatible with
+the privileged-state pathway. Our primary term is a policy-output alignment loss. For corresponding
+privileged-state and RGB-D inputs, we evaluate the same actor using zt,s and zt,o while keeping
+proprioception and the previous action fixed, and denote the resulting action distributions by πs and
+πo. During this loss, the actor and fusion network are frozen, so the RGB-D encoder is updated to
+reduce their policy disagreement:
+Lπ,repr = 1
+2KL(πs∥πo) + 1
+2KL(πo∥πs).
+(11)
+This objective reduces cross-modal policy disagreement. Its KL(πo∥πs) component corresponds to
+the directional policy disagreement monitored by the KL-guided switch.
+The full formulation additionally includes auxiliary representation regularizers. When enabled, a
+cross-attention aligner fφ produces paired aligned targets
+(ˆzt,s, ˆzt,o) = fφ(zt,s, zt,o),
+(12)
+which support an aligner-guided auxiliary loss Lalign. We additionally use raw-latent regularization
+Lraw and a decoder objective Ldec.
+The full objective is
+Lrepr = λπ,reprLπ,repr + Lalign + Lraw + Ldec.
+(13)
+3.4
+Cross-modal control regularization
+Unlike the representation objective in Section 3.3, which freezes the actor and fusion module and
+updates the RGB-D representation pathway, these auxiliary terms regularize the control pathway
+during RL optimization. They encourage the privileged-state and RGB-D pathways to induce com-
+patible policy outputs and value predictions, using the privileged-state outputs as stop-gradient an-
+chors.
+We denote by Vs and Vo the value predictions obtained by evaluating the critic from the privileged-
+state and RGB-D pathways, respectively. The RGB-D-conditioned value Vo is used only for this
+auxiliary agreement objective. Rollout value estimation, return computation, and PPO advantages
+remain anchored to Vs. We define
+Lπ = E[KL(πs∥πo)] ,
+(14)
+LV = 1
+2 E
+
+(Vs −Vo)2
+.
+(15)
+When enabled, these agreement terms augment the PPO objective, with λπ(t) and λV (t) denoting
+their corresponding scheduled weights:
+LRL = LPPO + λπ(t)Lπ + λV (t)LV .
+(16)
+3.5
+Training procedure
+Training uses a single on-policy PPO loop with separate RL and representation optimizers. The over-
+all rollout flow is illustrated in Figure 1, with the complete training procedure given in Appendix A.
+The RL optimizer steps the actor-critic and privileged-state pathway, while the representation op-
+timizer steps the RGB-D encoder and auxiliary representation components. Implementation-level
+6
+
+
+optimizer routing is provided in Appendix K. For each rollout, the KL-guided switch selects either
+the privileged-state or RGB-D pathway for the actor and keeps that selection fixed throughout the
+rollout, while the critic remains anchored to the privileged-state pathway. Cross-modal policy dis-
+agreement measured during training updates the running statistics used to regulate RGB-D exposure
+in subsequent rollouts.
+4
+Experimental Setup
+Tasks and baselines.
+We evaluate on Reach-Cube, Lift-Cube, Push-Cube, Open-Drawer, and two-
+block Pick-and-Place (PnP) in IsaacLab (See Appendix I). We compare FOCUS against states-only
+as a privileged-observability reference, RGB-D-only, RGB-D-asymmetric, and a 3-stage teacher-
+student baseline that trains a privileged-state PPO teacher, distills an RGB-D student from simulator
+rollouts, and then fine-tunes the student with PPO. These baselines are matched IsaacLab instan-
+tiations of the corresponding paradigms rather than direct reproductions of every specialized prior
+system.
+Protocol and metrics.
+All methods are trained with two training seeds and evaluated with five
+evaluation seeds per checkpoint. Entries report mean ± standard deviation over training seeds af-
+ter averaging evaluation seeds. Test performance is measured by test episode success rate over a
+fixed 9000-step evaluation rollout. End-to-end training efficiency is measured primarily by budget-
+normalized Training Success AUC, computed as 1
+T
+R T
+0 s(t) dt, where s(t) is training success occu-
+pancy and T is the task-specific training horizon. This metric is computed over the complete train-
+ing procedure: for FOCUS, both privileged-state and RGB-D rollouts are included, while teacher–
+student includes teacher PPO, RGB-D distillation, and student PPO fine-tuning. Train Step@50 is
+reported as a supplementary diagnostic in Appendix E. Appendix L lists additional diagnostics and
+metrics implemented in IsaacLab.
+Implementation details.
+All methods use a single 128×128 RGB-D camera with matched prepro-
+cessing and shared core implementation choices unless otherwise stated (See Appendix J). Tables 7
+and 5 summarize architecture and hyperparameters.
+4.1
+Main Results
+Table 1 reports test success, Table 2 reports budget-normalized Training Success AUC, and Figure 3
+shows training curves on the more discriminative tasks. Supplementary Train Step@50 results and
+full five-task training curves are provided in Appendices E and F, respectively.
+On Lift-Cube, FOCUS improves test success from 0.35 to 0.98 and normalized training success
+AUC from 0.16 to 0.45. On Push-Cube, it improves test success from 0.75 to 0.85 and normalized
+training success AUC from 0.29 to 0.34. On Pick-and-Place, it improves test success from 0.47
+to 0.86 and normalized training success AUC from 0.12 to 0.61, a 5.0× increase in this end-to-
+end training-efficiency metric. Reach-Cube is solved by all methods, while Open-Drawer is less
+diagnostic because dense reward shaping lets several methods approach saturation.
+Across the evaluation tasks, FOCUS improves both average RGB-D test success and average end-
+to-end training efficiency. Relative to the strongest RGB-D-at-test baseline on each task, average
+test success improves from 0.71 to 0.93. When comparing complete training pipelines, budget-
+normalized Training Success AUC improves from 0.47 to 0.65. These averages exclude the states-
+only reference, which uses privileged state at test time.
+The states-only policy is a privileged-observability reference rather than an oracle upper bound. On
+Lift-Cube, FOCUS attains higher mean success than this reference, but the two states-only training
+runs show substantial variation. Given the limited number of training seeds, we do not interpret this
+gap as evidence that RGB-D observations are intrinsically superior to privileged state. The asymmet-
+ric actor-critic baseline also exhibits unstable behavior on some tasks, including low performance on
+7
+
+
+Figure 2: Representative successful test-time rollouts of FOCUS. Sequential frames show FOCUS exe-
+cuting Lift-Cube (top), Push-Cube (middle), and Pick-and-Place (bottom) using the deployment observation
+pathway. At test time, privileged state and modality switching are removed, and the policy acts from RGB-D
+observations, proprioception, and the previous action. Frames are labeled by normalized rollout time t/T.
+Table 1: Test episode success rate over a 9k-step evaluation rollout. An episode is counted as successful if the
+task succeeds at least once before termination. Higher is better.
+Method
+Reach
+Lift
+Push
+Open - Drawer
+Pick - and -
+Place†
+states-only
+1.000 ± 0.000
+0.555 ± 0.628
+0.972 ± 0.040
+1.000 ± 0.000
+1.000 ± 0.000
+RGB-D-only
+1.000 ± 0.000
+0.233 ± 0.024
+0.753 ± 0.098
+0.983 ± 0.024
+0.453 ± 0.122
+RGB-D-asymmetric
+1.000 ± 0.000
+0.350 ± 0.338
+0.192 ± 0.059
+0.811 ± 0.157
+0.467 ± 0.660
+teacher-student (3-stage, final student)
+1.000 ± 0.000
+0.181 ± 0.122
+0.595 ± 0.032
+0.978 ± 0.031
+0.289 ± 0.110
+FOCUS (ours)
+1.000 ± 0.000
+0.975 ± 0.012
+0.850 ± 0.071
+0.978 ± 0.018
+0.858 ± 0.069
+† For Pick-and-Place, evaluation requires 4 consecutive on-target steps; training uses a one-step success signal.
+Push-Cube and substantial variation on Pick-and-Place, and the present evaluation does not isolate
+the source of this behavior. Teacher-student reaches high success during its final student PPO stage,
+but its end-to-end training-success AUC is lower when the preceding teacher and distillation stages
+are included.
+Qualitative test-time behavior
+Figure 2 shows representative successful test-time rollouts of FO-
+CUS on Lift-Cube, Push-Cube, and Pick-and-Place. The sequences illustrate the manipulation be-
+havior underlying the quantitative success rates in Table 1.
+4.2
+Ablation Study
+We ablate the modality-switching and alignment components of FOCUS. Fixed schedule ramp
+removes KL feedback from the modality switch and increases the RGB-D rollout probability
+according only to the predefined warmup schedule w(r), while retaining rollout-level modality
+sampling. w/o KL upper-quantile budget retains KL-guided switching but removes the upper-
+tail constraint, so RGB-D exposure is regulated only by the running mean policy disagreement,
+λbudget(r) = λmean(r). FOCUS-simple retains the KL-guided rollout switch and policy-output
+8
+
+
+Table 2: Budget-normalized Training Success AUC summarizes sample efficiency over the full training
+trajectory. AUC is divided by each method’s task-specific simulator-interaction horizon. For teacher-student,
+we report both the final student phase alone as a diagnostic and the comparable end-to-end 3-stage cost used in
+our conclusions. Higher is better.
+Method
+Reach
+Lift
+Push
+Open - Drawer
+Pick - and - Place
+states-only
+0.966 ± 0.002
+0.211 ± 0.268
+0.447 ± 0.007
+0.912 ± 0.016
+0.656 ± 0.009
+RGB-D-only
+0.889 ± 0.003
+0.023 ± 0.002
+0.288 ± 0.036
+0.859 ± 0.021
+0.094 ± 0.056
+RGB-D-asymmetric
+0.891 ± 0.020
+0.158 ± 0.190
+0.094 ± 0.003
+0.886 ± 0.015
+0.122 ± 0.171
+teacher-student (final student)
+0.958 ± 0.010
+0.258 ± 0.321
+0.233 ± 0.012
+0.930 ± 0.013
+0.155 ± 0.003
+teacher-student (3-stage, e2e)
+0.411 ± 0.004
+0.111 ± 0.137
+0.100 ± 0.005
+0.399 ± 0.006
+0.071 ± 0.001
+FOCUS (ours)
+0.969 ± 0.001
+0.451 ± 0.040
+0.337 ± 0.167
+0.864 ± 0.025
+0.612 ± 0.037
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+1.6
+Training steps
+1e7
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(a) Lift-Cube
+0
+2
+4
+6
+8
+Training steps
+1e6
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(b) Push-Cube
+0.0
+0.5
+1.0
+1.5
+2.0
+2.5
+Training steps
+1e7
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(c) Pick-and-Place
+Figure 3: Training success EMA on the more discriminative tasks. Teacher–student curves show the final
+student PPO phase, while Table 2 reports end-to-end normalized AUC. Full curves and Step@50 are provided
+in Appendices F and E, respectively.
+representation loss Lπ,repr, while removing the auxiliary representation and control-agreement
+terms.
+Table 3 summarizes ablations on the three more discriminative tasks. The main trend is that con-
+trolled RGB-D rollout exposure and policy-level image-state agreement are the most reliable ingre-
+dients in our evaluation. A fixed exposure ramp can reach high test success on some tasks, but gives
+lower normalized AUC on Pick-and-Place than FOCUS (0.361 vs. 0.612) and lower test success on
+Push-Cube (0.822 vs. 0.850), indicating that adaptive exposure provides a better sample-efficiency
+and success trade-off than a predetermined schedule on these tasks.
+Figure 4 provides a representative Push-Cube diagnostic. The KL-guided switch keeps RGB-D ex-
+posure from saturating too early, which lowers exposure-weighted upper-tail KL mismatch relative
+to a fixed ramp and a variant without the upper-quantile budget. This controlled exposure coincides
+with higher training success, supporting tail-aware control as a way to avoid premature reliance on
+RGB-D rollouts.
+FOCUS-simple keeps only the KL-guided switch and image-encoder policy-output KL term, dis-
+abling all other representation and RL agreement losses. It remains competitive, reaching 1.000 test
+success on Lift-Cube and 0.994 on Pick-and-Place. This ablation suggests that controlled visual
+exposure and image-encoder alignment through policy-output KL are the most reliable contributors
+in our evaluation. We therefore treat the remaining auxiliary losses as optional task-dependent terms
+within the FOCUS formulation, rather than as universally required components.
+5
+Conclusion
+We introduced FOCUS, a single-stage PPO-based framework that regulates whether privileged-state
+or RGB-D latents generate on-policy actor rollouts during training, while using RGB-D for action
+selection at test time. Across five IsaacLab manipulation tasks, FOCUS improves average test suc-
+cess relative to the strongest RGB-D-at-test baseline on each task from 0.71 to 0.93. When com-
+paring complete training pipelines, budget-normalized training success AUC improves from 0.47
+to 0.65. Ablations suggest that controlled RGB-D rollout exposure and image-encoder alignment
+9
+
+
+Table 3: Ablations on the three more discriminative tasks. All variants use the same training budget for
+Push/Lift/PnP (1500/1500/2500 training iterations), are trained with two seeds, and are evaluated with five test
+seeds. AUC is budget-normalized by each task horizon. Higher is better for test success and normalized AUC.
+Variant
+Test success
+Norm. Training Success AUC
+Push
+Lift
+Pick - and -
+Place†
+Push
+Lift
+Pick - and -
+Place
+FOCUS
+0.850
+± 0.071
+0.975
+± 0.012
+0.858
+± 0.069
+0.337
+± 0.167
+0.451
+± 0.040
+0.612
+± 0.037
+Training-objective ablations
+w/o decoder
+0.669
+± 0.090
+0.986
+± 0.020
+0.997
+± 0.003
+0.406
+± 0.104
+0.472
+± 0.003
+0.666
+± 0.080
+w/o aligner (fφ bypass)
+0.854
+± 0.038
+0.964
+± 0.011
+0.458
+± 0.458
+0.445
+± 0.013
+0.464
+± 0.030
+0.283
+± 0.283
+w/o RL agreement
+0.856
+± 0.032
+0.950
+± 0.063
+0.822
+± 0.050
+0.345
+± 0.063
+0.415
+± 0.102
+0.631
+± 0.064
+w/o image policy KL
+0.097
+± 0.043
+0.975
+± 0.027
+0.586
+± 0.242
+0.422
+± 0.126
+0.266
+± 0.196
+0.580
+± 0.029
+Switching and visual-pathway ablations
+fixed schedule ramp
+0.822
+± 0.031
+0.997
+± 0.004
+0.953
+± 0.042
+0.281
+± 0.063
+0.184
+± 0.218
+0.361
+± 0.175
+w/o KL upper-quantile budget
+0.653
+± 0.020
+0.970
+± 0.043
+0.961
+± 0.028
+0.371
+± 0.096
+0.317
+± 0.216
+0.480
+± 0.155
+top-view only
+0.670
+± 0.067
+0.756
+± 0.039
+0.922
+± 0.006
+0.471
+± 0.039
+0.499
+± 0.003
+0.587
+± 0.069
+RGB-D encoder from scratch
+0.716
+± 0.001
+0.950
+± 0.016
+0.983
+± 0.017
+0.406
+± 0.014
+0.381
+± 0.020
+0.664
+± 0.020
+FOCUS-simple:
+KL-guided
+switch
++
+policy-output KL
+0.831
+± 0.138
+1.000
+± 0.000
+0.994
+± 0.008
+0.411
+± 0.074
+0.529
+± 0.034
+0.568
+± 0.021
+† For Pick-and-Place, evaluation requires 4 consecutive on-target steps; training uses a one-step success signal.
+0.00
+0.25
+0.50
+0.75
+1.00
+λr
+(a) RGB-D rollout probability
+0.0
+0.5
+1.0
+1.5
+KLp90
+(b) Upper-tail policy KL
+0
+50
+100
+150
+200
+250
+Training step (×103)
+0.0
+0.2
+0.4
+0.6
+0.8
+λr ⋅KLp90
+(c) Exposure-weighted KL
+0
+50
+100
+150
+200
+250
+Training step (×103)
+0.00
+0.25
+0.50
+0.75
+1.00
+Success
+(d) Training success
+KL-guided switch
+Fixed schedule ramp
+KL-guided switch w/o upper-quantile budget
+Figure 4: Representative Push-Cube switch diagnostic. The KL-guided switch reduces exposure-weighted
+upper-tail mismatch, λr ·KLp90, relative to a fixed ramp and a variant without the upper-quantile budget, while
+improving training success. Here, KLp90 denotes the 90th percentile of cross-modal policy KL, and λr is the
+Bernoulli probability that the actor uses RGB-D latents for an entire rollout.
+through policy-output KL are the most reliable contributors, while the remaining auxiliary losses
+have task-dependent effects and motivate simpler future variants.
+6
+Limitations
+This study is limited to simulation, relatively short-horizon manipulation, and two training seeds,
+reflecting the engineering cost and long runtimes of full RGB-D PPO training. The method is also
+sensitive to task-specific reward engineering, which may affect the learned behavior and compa-
+rability across tasks. Some runs converge to locally successful but suboptimal behaviors. Given
+10
+
+
+the limited evaluation suite, ablations should be interpreted as component-level trends rather than
+universal claims about which auxiliary losses are necessary. FOCUS addresses the privileged-state-
+to-RGB-D observation gap and is orthogonal to the sim-to-real gap. Appearance shift, sensing
+noise, calibration error, latency, and dynamics mismatch would still require dedicated sim-to-real
+methods or real-world fine-tuning. Future work should evaluate FOCUS on physical robots, broader
+manipulation suites, and less engineered training signals. More extensive task and seed coverage
+is also needed to isolate when the auxiliary alignment components are necessary versus when the
+lightweight FOCUS-simple core is sufficient.
+11
+
+
+Acknowledgments
+This work was carried out in the embARC Research Group at the University of Toronto. This
+research is part of the University of Toronto’s Acceleration Consortium, which receives funding
+from the CFREF-2022-00042 Canada First Research Excellence Fund. We thank Callum Sharrock
+for his contributions to this work during his internship in the lab.
+References
+[1] G. Dulac-Arnold, N. Levine, D. J. Mankowitz, J. Li, C. Paduraru, S. Gowal, and T. Hester.
+Challenges of real-world reinforcement learning: definitions, benchmarks and analysis. Ma-
+chine Learning, 110:2419–2468, 2021. doi:10.1007/s10994-021-05961-4.
+[2] D. Yarats, A. Zhang, I. Kostrikov, B. Amos, J. Pineau, and R. Fergus. Improving sample
+efficiency in model-free reinforcement learning from images, 2020. URL https://arxiv.
+org/abs/1910.01741.
+[3] D. Yarats, R. Fergus, A. Lazaric, and L. Pinto. Mastering visual continuous control: Im-
+proved data-augmented reinforcement learning, 2021.
+URL https://arxiv.org/abs/
+2107.09645.
+[4] V. Mnih, K. Kavukcuoglu, D. Silver, A. Graves, I. Antonoglou, D. Wierstra, and M. Ried-
+miller. Playing atari with deep reinforcement learning, 2013. URL https://arxiv.org/
+abs/1312.5602.
+[5] S. Levine, C. Finn, T. Darrell, and P. Abbeel. End-to-end training of deep visuomotor policies,
+2015. URL https://arxiv.org/abs/1504.00702.
+[6] Y. Cai, X. Liu, A. Oikonomou, and K. Zhang. Provable partially observable reinforcement
+learning with privileged information, 2024. URL https://arxiv.org/abs/2412.00985.
+[7] L. Pinto, M. Andrychowicz, P. Welinder, W. Zaremba, and P. Abbeel. Asymmetric actor critic
+for image-based robot learning, 2017. URL https://arxiv.org/abs/1710.06542.
+[8] A. Warrington, J. W. Lavington, A. ´Scibior, M. Schmidt, and F. Wood. Robust asymmetric
+learning in pomdps, 2021. URL https://arxiv.org/abs/2012.15566.
+[9] G. Hinton, O. Vinyals, and J. Dean. Distilling the knowledge in a neural network, 2015. URL
+https://arxiv.org/abs/1503.02531.
+[10] A. A. Rusu, S. Gomez Colmenarejo, C. Gulcehre, G. Desjardins, J. Kirkpatrick, R. Pascanu,
+V. Mnih, K. Kavukcuoglu, and R. Hadsell. Policy distillation, 2016. URL https://arxiv.
+org/abs/1511.06295.
+[11] E. Parisotto, J. L. Ba, and R. Salakhutdinov. Actor-mimic: Deep multitask and transfer rein-
+forcement learning, 2016. URL https://arxiv.org/abs/1511.06342.
+[12] J. Yamada, M. Rigter, J. Collins, and I. Posner. Twist: Teacher-student world model distillation
+for efficient sim-to-real transfer, 2023. URL https://arxiv.org/abs/2311.03622.
+[13] T. G. W. Lum, M. Matak, V. Makoviychuk, A. Handa, A. Allshire, T. Hermans, N. D. Ratliff,
+and K. V. Wyk.
+Dextrah-g: Pixels-to-action dexterous arm-hand grasping with geometric
+fabrics, 2024. URL https://arxiv.org/abs/2407.02274.
+[14] R. Singh, A. Allshire, A. Handa, N. Ratliff, and K. V. Wyk. Dextrah-rgb: Visuomotor policies
+to grasp anything with dexterous hands, 2024. URL https://arxiv.org/abs/2412.01791.
+12
+
+
+[15] K. Srinivasan, J. Xu, H. Ang, E. Heiden, D. Fox, J. Bohg, and A. Garg.
+ACGD: Visual
+multitask policy learning with asymmetric critic guided distillation. In IEEE/RSJ Interna-
+tional Conference on Intelligent Robots and Systems (IROS), pages 583–590. IEEE, 2025.
+doi:10.1109/IROS60139.2025.11247025. URL https://doi.org/10.1109/IROS60139.
+2025.11247025.
+[16] S. Salter, D. Rao, M. Wulfmeier, R. Hadsell, and I. Posner. Attention-privileged reinforce-
+ment learning. In Proceedings of the 2020 Conference on Robot Learning, volume 155 of
+Proceedings of Machine Learning Research, pages 394–408, 2021.
+[17] E. S. Hu, J. Springer, O. Rybkin, and D. Jayaraman. Privileged sensing scaffolds reinforcement
+learning, 2024. URL https://arxiv.org/abs/2405.14853.
+[18] P.-A. Kamienny, K. Arulkumaran, F. Behbahani, W. Boehmer, and S. Whiteson. Privileged
+information dropout in reinforcement learning, 2020. URL https://arxiv.org/abs/2005.
+09220.
+[19] A. Srinivas, M. Laskin, and P. Abbeel. Curl: Contrastive unsupervised representations for
+reinforcement learning, 2020. URL https://arxiv.org/abs/2004.04136.
+[20] M. Laskin, K. Lee, A. Stooke, L. Pinto, P. Abbeel, and A. Srinivas. Reinforcement learning
+with augmented data, 2020. URL https://arxiv.org/abs/2004.14990.
+[21] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization
+algorithms, 2017. URL https://arxiv.org/abs/1707.06347.
+[22] F. Wu, X. Nal, J. Jang, W. Zhu, Z. Gu, A. Wu, and Y. Zhao.
+Learn to Teach: Sample-
+efficient privileged learning for humanoid locomotion over diverse terrains. IEEE Robotics
+and Automation Letters, 10(9):9048–9055, 2025.
+doi:10.1109/LRA.2025.3592131.
+URL
+https://arxiv.org/abs/2402.06783.
+[23] H. Wang, H. Luo, W. Zhang, and H. Chen. Cts: Concurrent teacher-student reinforcement
+learning for legged locomotion. IEEE Robotics and Automation Letters, 9(11):9191–9198,
+2024. doi:10.1109/LRA.2024.3457379.
+[24] N. Messikommer, J. Xing, E. Aljalbout, and D. Scaramuzza.
+Student-informed teacher
+training.
+In International Conference on Learning Representations, 2025.
+URL https:
+//openreview.net/forum?id=iBqKEehlUp.
+[25] W. Yue, Y. Zhou, X. Zhang, Y. Hua, Z. Wang, and G. Kou. Aacc: Asymmetric actor-critic in
+contextual reinforcement learning, 2022. URL https://arxiv.org/abs/2208.02376.
+[26] G. Lambrechts, D. Ernst, and A. Mahajan. A theoretical justification for asymmetric actor-
+critic algorithms, 2025. URL https://arxiv.org/abs/2501.19116.
+[27] J. Li, E. Zhao, T. Wei, J. Xing, and S. Xiang. Dual critic reinforcement learning under par-
+tial observability. In The Thirty-eighth Annual Conference on Neural Information Processing
+Systems, 2024. URL https://openreview.net/forum?id=GruuYVTGXV.
+[28] A. X. Lee, A. Nagabandi, P. Abbeel, and S. Levine. Stochastic latent actor-critic: Deep re-
+inforcement learning with a latent variable model, 2020. URL https://arxiv.org/abs/
+1907.00953.
+[29] J. Arevalo, T. Solorio, M. Montes-y G´omez, and F. A. Gonz´alez. Gated multimodal units for
+information fusion. arXiv preprint arXiv:1702.01992, 2017.
+[30] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, L. Kaiser, and I. Polo-
+sukhin. Attention is all you need, 2017. URL https://arxiv.org/abs/1706.03762.
+13
+
+
+[31] Y.-H. H. Tsai, S. Bai, P. P. Liang, J. Z. Kolter, L.-P. Morency, and R. Salakhutdinov. Multimodal
+transformer for unaligned multimodal language sequences, 2019. URL https://arxiv.org/
+abs/1906.00295.
+[32] E. Perez, F. Strub, H. de Vries, V. Dumoulin, and A. Courville. Film: Visual reasoning with a
+general conditioning layer, 2017. URL https://arxiv.org/abs/1709.07871.
+[33] H. van Seijen, B. Bakker, and L. Kester. Switching between different state representations
+in reinforcement learning. In Proceedings of the 26th IASTED International Conference on
+Artificial Intelligence and Applications (AIA), pages 226–231. ACTA Press, 2008.
+[34] K. He, X. Zhang, S. Ren, and J. Sun. Deep residual learning for image recognition. In Pro-
+ceedings of the IEEE Conference on Computer Vision and Pattern Recognition, 2016.
+[35] Q. Wang, B. Wu, P. Zhu, P. Li, W. Zuo, and Q. Hu. Eca-net: Efficient channel attention for
+deep convolutional neural networks. In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, 2020.
+[36] S. Woo, J. Park, J.-Y. Lee, and I. S. Kweon. Cbam: Convolutional block attention module. In
+Proceedings of the European Conference on Computer Vision, 2018.
+14
+
+
+Appendix Overview
+This appendix provides implementation and analysis details supporting the main paper. Appendix A
+gives the full training algorithm, Appendix B analyzes the KL-guided modality switch, Appendix C
+defines the representation-alignment objective, and Appendix D describes latent post-processing.
+Appendix I gives task-suite and protocol details, and Appendix J summarizes implementation de-
+tails including RGB-D preprocessing. We also include Train Step@50 results, full training curves,
+qualitative activation and latent visualizations, architecture and hyperparameter details, logged di-
+agnostics, and task reward definitions for reproducibility.
+A
+Algorithm overview
+For implementation-level detail, we explicitly denote by gψ the shared fusion module that combines
+a modality latent with proprioception and the previous action before it is passed to the actor or critic:
+gψ : (zt, sprop
+t
+, at−1) 7→˜zt.
+The same fusion module gψ, with shared parameters ψ, is used for both actor and critic inputs
+and across the privileged-state and RGB-D pathways. The actor receives the selected modality
+latent, whereas the critic always receives the privileged-state latent. In the main text, we absorb this
+implementation detail into the actor and critic notation.
+Algorithm 1: Training Recipe for FOCUS
+Act (rollout collection).
+λr ←CURRENTMODALITYPROBABILITY()
+mr ∼Bernoulli(λr)
+// snapshot current smoothed controller state
+for t = 1, . . . , T do
+observe (spriv
+t
+, sprop
+t
+, ot, at−1)
+zs,t ←Es(spriv
+t
+);
+zo,t ←Eo(ot)
+zpre
+t
+←(1 −mr)zs,t + mrzo,t
+˜zact
+t
+←gψ(zpre
+t , sprop
+t
+, at−1)
+˜zcrt
+t
+←gψ(zs,t, sprop
+t
+, at−1)
+at ∼πθ(· | ˜zact
+t
+)
+step env; store (mr, λr, spriv
+t
+, ot, sprop
+t
+, at−1, at, rt, dt)
+compute returns/advantages using state-anchored critic
+Update (on-policy optimization).
+for PPO epochs/minibatches do
+load minibatch (incl. stored mr and λr)
+recompute (zs,t, zo,t) and form (˜zact
+t
+, ˜zcrt
+t
+) using stored mr
+update {Eo, fφ, Ds} with Lπ,repr (+ optional Lalign, Lraw, Ldec)
+update {πθ, gψ, Es} with LPPO (+ optional Lπ, LV )
+update (kmean, kq90) from KL(πo∥πs)
+B
+KL-Controlled Modality Switching
+This appendix characterizes policy divergence induced by stochastic modality switching and moti-
+vates KL-budgeted exposure control.
+B.1
+Setup
+For the theoretical analysis, we make the implementation-level shared fusion module explicit so that
+we can distinguish raw encoder latents from the effective inputs presented to the actor.
+We analyze the policy as a function of its effective actor input. At timestep t, let
+˜z s
+t := gψ(zt,s, sprop
+t
+, at−1),
+˜z o
+t := gψ(zt,o, sprop
+t
+, at−1),
+15
+
+
+denote the fused actor inputs obtained from the state and RGB-D pathways.
+We consider a shared diagonal-Gaussian policy
+π(· | ˜z) = N(µ(˜z), Σ),
+where the mean µ(˜z) depends on the effective actor input ˜z, while the covariance Σ ≻0 is shared
+across modalities. In our implementation, Σ is diagonal and is parameterized by a learned global
+standard-deviation parameter, so it does not depend on the input. Let σ2
+min denote the smallest
+eigenvalue of Σ.
+Define the fused modality gap
+∆˜zt := ˜z o
+t −˜z s
+t .
+These inputs induce the modality-conditioned policies
+πs(· | t) := π(· | ˜z s
+t ),
+πo(· | t) := π(· | ˜z o
+t ).
+B.2
+Stochastic switching
+For analysis, we consider Bernoulli switching at a generic timestep t. In implementation, the sam-
+pled mask is held fixed over an entire rollout r.
+Using the rollout-wise mask
+mr ∼Bernoulli(λr),
+define the switched effective actor input
+˜z pre
+t
+= (1 −mr)˜z s
+t + mr˜z o
+t = ˜z s
+t + mr ∆˜zt.
+Defining Kt ≡K(xt), with
+Kt := KL(πo(· | t)∥πs(· | t)) ,
+the expected divergence satisfies
+Emr[KL(π(· | ˜z pre
+t
+)∥πs(· | t))] = λr Kt,
+and is therefore linear in the switching probability. The auxiliary result below relates Kt to fused-
+input mismatch under a local Lipschitz assumption.
+B.3
+KL-budgeted exposure control
+At the beginning of rollout r, let ˆkmean(r −1) and ˆkq(r −1) denote the running estimates of the
+mean and an upper quantile (e.g., q = 0.9) of Kt obtained from preceding rollout updates. Given
+budgets εmean, εq > 0, define
+λbudget(r) = min
+(
+εmean
+max(ˆkmean(r −1), Kmin)
+,
+εq
+max(ˆkq(r −1), Kmin)
+, 1
+)
+.
+With warmup w(r) ∈[0, 1] and cap λmax ≤1, the target exposure is
+λtarget(r) = min{w(r)λmax, λbudget(r)},
+and the controller state is smoothed at each controller update j via
+λ(j+1) = (1 −α)λ(j) + α λtarget(r).
+For rollout r, let jr denote the controller update immediately preceding rollout sampling, and define
+λr := λ(jr).
+16
+
+
+Proposition 1 (Exposure-weighted KL control). Consider a rollout batch at rollout r, and let
+Kt = KL(πo(· | t)∥πs(· | t))
+denote the cross-modal policy mismatch for the matched state and RGB-D observations at timestep
+t. For the Bernoulli switch mr ∼Bernoulli(λr),
+Emr [KL(π(· | ˜z pre
+t
+)∥πs(· | t))|t] = λrKt.
+If the applied exposure satisfies
+λr ≤min
+(
+εmean
+max(ˆkmean(r), Kmin)
+,
+εq
+max(ˆkq(r), Kmin)
+, 1
+)
+,
+then the exposure-weighted mean mismatch satisfies
+Et [Emr [KL(π(· | ˜z pre
+t
+)∥πs(· | t))|t]] = λrˆkmean(r) ≤εmean,
+up to estimation error. Moreover, the q-quantile of the exposure-weighted conditional mismatch
+satisfies
+Qq(Emr [KL(π(· | ˜z pre
+t
+)∥πs(· | t))|t]) = λrˆkq(r) ≤εq.
+Thus, the mean constraint controls average modality-induced policy drift, while the quantile con-
+straint suppresses exposure to rare high-mismatch states.
+Proof. For fixed timestep t, the switched input equals ˜z s
+t when mr = 0 and ˜z o
+t when mr = 1.
+Therefore, the KL divergence to the state-conditioned action distribution is 0 with probability 1−λr
+and Kt with probability λr. Hence,
+Emr [KL(π(· | ˜z pre
+t
+)∥πs(· | t))|t] = (1 −λr) · 0 + λrKt = λrKt.
+Averaging this conditional expectation over timesteps in the rollout batch gives
+Et[λrKt] = λrˆkmean(r),
+where ˆkmean(r) estimates the batch mean of Kt.
+Under the stated exposure condition,
+λrˆkmean(r) ≤εmean,
+up to estimation error and the use of Kmin for numerical stability.
+Similarly, because λr is fixed for the rollout, the q-quantile over timesteps of the exposure-weighted
+conditional mismatch is
+Qq(λrKt) = λrQq(Kt) ≈λrˆkq(r).
+The quantile-budget constraint then gives
+λrˆkq(r) ≤εq.
+This proves the stated mean and tail exposure bounds.
+In implementation, the controller uses the lagged running statistics ˆkmean(r−1) and ˆkq(r−1) when
+determining the exposure for rollout r. Thus, the proposition gives the exact conditional bound for
+a fixed rollout batch, while the implemented controller realizes this bound approximately, subject to
+changes in the running KL statistics between rollouts and EMA tracking error.
+17
+
+
+B.4
+Why representation alignment can reduce policy mismatch
+The switching rule itself uses the measured policy KL Kt, so it does not require the following bound.
+The bound is included only to motivate why aligning the fused state and RGB-D representations can
+reduce the measured cross-modal policy mismatch.
+For diagonal Gaussians N(µa, diag(σ2
+a)) and N(µb, diag(σ2
+b)),
+KL(a∥b) =
+m
+X
+j=1
+"
+log σb,j
+σa,j
++ σ2
+a,j + (µa,j −µb,j)2
+2σ2
+b,j
+−1
+2
+#
+.
+(17)
+In the shared-covariance case used here, this expression simplifies to a quadratic form in the mean
+difference.
+Lemma 1 (Local KL sensitivity to fused-input mismatch). Assume that the actor uses a Gaussian
+policy with shared covariance,
+π(· | ˜z) = N(µ(˜z), Σ),
+where Σ ≻0 does not depend on the input. Let σ2
+min denote the smallest eigenvalue of Σ. Assume
+that µ is Lipschitz along the line segment
+˜z s
+t + λ
+ ˜z o
+t −˜z s
+t
+
+: λ ∈[0, 1]
+	
+with constant Lµ. Then
+KL(πo(· | t)∥πs(· | t)) ≤
+L2
+µ
+2σ2
+min
+∥˜z o
+t −˜z s
+t ∥2 .
+Proof. Let
+µo = µ(˜z o
+t ),
+µs = µ(˜z s
+t ),
+so that
+πo(· | t) = N(µo, Σ),
+πs(· | t) = N(µs, Σ).
+For two m-dimensional Gaussians N(µo, Σ) and N(µs, Σ) with the same positive-definite covari-
+ance, the KL divergence is
+KL(N(µo, Σ)∥N(µs, Σ)) = 1
+2
+
+tr(Σ−1Σ) + (µs −µo)⊤Σ−1(µs −µo) −m + log det Σ
+det Σ
+
+.
+The trace term satisfies tr(Σ−1Σ) = m, and the log-determinant term is zero because the two
+covariances are identical. Therefore the KL reduces to
+KL(πo∥πs) = 1
+2(µo −µs)⊤Σ−1(µo −µs).
+Since Σ ≻0 and its smallest eigenvalue is σ2
+min, every eigenvalue of Σ−1 is at most σ−2
+min. Equiva-
+lently,
+Σ−1 ⪯σ−2
+minI.
+Thus, for any vector v,
+v⊤Σ−1v ≤σ−2
+min∥v∥2.
+Applying this inequality with v = µo −µs gives
+KL(πo∥πs) ≤
+1
+2σ2
+min
+∥µo −µs∥2.
+It remains to relate the difference in policy means to the difference between the fused actor inputs.
+By the assumed Lipschitz continuity of µ along the segment connecting ˜z s
+t and ˜z o
+t ,
+∥µo −µs∥= ∥µ(˜z o
+t ) −µ(˜z s
+t )∥≤Lµ ∥˜z o
+t −˜z s
+t ∥.
+Substituting this bound into the KL inequality yields
+KL(πo(· | t)∥πs(· | t)) ≤
+L2
+µ
+2σ2
+min
+∥˜z o
+t −˜z s
+t ∥2 ,
+which proves the claim.
+18
+
+
+C
+Detailed representation alignment objective
+Let
+zt,s = Es(spriv
+t
+),
+zt,o = Eo(ot)
+denote the raw latent representations produced by the state and RGB-D encoders. The representation
+alignment objective updates the RGB-D encoder and, when enabled, the cross-attention aligner and
+state decoder. Its purpose is to make matched privileged-state and RGB-D observations produce
+compatible latent representations for control.
+Optional aligner and aligned targets.
+When enabled, a lightweight cross-attention aligner fφ
+produces
+(ˆzt,s, ˆzt,o) = fφ(zt,s, zt,o).
+These aligned latents are used as aligned targets for representation learning. In practice, we post-
+process [see Appendix D] both raw and aligned latents before applying several of the losses:
+z′
+s = post process(zt,s),
+z′
+o = post process(zt,o),
+zT
+s = post process(ˆzt,s),
+zT
+o = post process(ˆzt,o).
+Loss decomposition.
+The full representation objective is
+Lrepr = Lalign + Lraw + λπ,reprLπ,repr + Ldec.
+(18)
+The four groups are defined below.
+Aligned-target regularization.
+This group uses the aligner outputs as a supervisory signal. It
+aligns the post-alignment latents and regularizes the raw latents toward that aligned structure.
+Lalign = Lsim + Lreg + Lmse + λbyolLbyol + λdistillLdistill.
+(19)
+Here, Lsim is a similarity-based alignment loss on the aligned latents, Lreg is an alignment regu-
+larizer, and Lmse is a direct feature-matching term. We also use a BYOL-style term on the aligner
+outputs,
+Lbyol = BYOL(ˆzt,s, ˆzt,o) ,
+and a cosine target-matching term that pushes the raw latents toward the aligned targets:
+Ldistill = 1
+2 E
+
+1 −⟨z′
+s, zT
+s ⟩
+
++ 1
+2 E
+
+1 −⟨z′
+o, zT
+o ⟩
+
+.
+Raw-latent regularization.
+This group acts directly on the encoder outputs before control. It
+keeps the raw latent space comparable across modalities and discourages collapse:
+Lraw = λrawLraw sim + λNCELNCE + λVICRegLVICReg.
+(20)
+Lraw sim is a raw-latent similarity term. For InfoNCE, we use matched state-image pairs from the
+same timestep:
+LNCE = −1
+B
+B
+X
+b=1
+log
+exp(sim(z(b)
+s , z(b)
+o )/τ)
+PB
+k=1 exp(sim(z(b)
+s , z(k)
+o )/τ)
+.
+We also apply VICReg-style regularization on the post-processed raw latents:
+LVICReg = ∥z′
+s −z′
+o∥2
+2 + 1
+2(Lvar(z′
+s) + Lvar(z′
+o)) + λcov(Lcov(z′
+s) + Lcov(z′
+o)) .
+Policy-conditioned alignment.
+To tie representation learning to control, we add a symmetric KL
+term between the state-conditioned and image-conditioned policies:
+Lπ,repr = 1
+2 KL(π(· | ˜z s)∥π(· | ˜z o)) + 1
+2 KL(π(· | ˜z o)∥π(· | ˜z s)) .
+(21)
+During this step, the actor and fusion module are frozen. Gradients from Lπ,repr therefore update the
+RGB-D encoder rather than the control policy. This makes the RGB-D encoder learn representations
+that are not only close to state representations, but also useful for action selection.
+19
+
+
+Optional decoding.
+The optional decoder reconstructs privileged-state targets from both modali-
+ties:
+ˆst,s = Ds(zt,s),
+ˆst,o = Ds(zt,o).
+This yields
+Ldec = Lstate dec + λconfLconf,
+(22)
+where
+Lstate dec = 1
+2∥ˆst,s −spriv
+t
+∥2
+2 + 1
+2∥ˆst,o −spriv
+t
+∥2
+2,
+and
+Lconf = ∥ˆst,s −ˆst,o∥2
+2.
+This term preserves control-relevant state information in both modalities. It can also serve as a
+simple interpretability probe of what the latent space retains.
+Implementation weights.
+In the implementation used here, the full loss is
+Lrepr = Lsim + Lreg + Lmse + 0.02 Lbyol + 0.02 Ldistill
++ 0.01 Lraw sim + 0.05 LNCE + 0.3 LVICReg + 0.01 Lπ,repr
++ Lstate dec + 0.2 Lconf.
+(23)
+These weights match the current implementation. If different weights are used in a variant or abla-
+tion, we report them in the corresponding experimental settings table.
+D
+Latent post-processing
+For a minibatch Z ∈RM×d (rows are latent vectors), we apply a two-stage normalization consisting
+of global standardization followed by row-wise ℓ2 normalization:
+bZ = Z −mean(Z)
+std(Z) + δ ,
+post process(Z)i =
+bZi·
+∥bZi·∥2 + ε
+,
+i = 1, . . . , M,
+(24)
+where mean(Z) and std(Z) are the scalar (global) mean and standard deviation over all Md entries
+of Z, and δ, ε > 0 are small stability constants (we use δ = 10−12, ε = 10−6). This operation is
+applied whenever alignment or contrastive losses require scale-invariant latent comparisons.
+20
+
+
+E
+Train Step@50 Results
+Table 4: Train Step@50% success occupancy reports the first training point at which success occupancy
+reaches 50%. Lower is better. Parentheses indicate the number of training seeds that reached the threshold,
+e.g., 693 (1/2). “Not reached” means no seed reached the threshold. For teacher-student, “final student” reports
+final fine-tuning, while “3-stage, e2e” counts the full pipeline.
+Method
+Reach
+Lift
+Push
+Open - Drawer
+Pick - and - Place
+states-only
+18.5 ± 6.4 (2/2)
+693 (1/2)
+556.5 ± 27.6 (2/2)
+31.5 ± 3.5 (2/2)
+522.0 ± 46.7 (2/2)
+RGB-D-only
+15.5 ± 9.2 (2/2)
+Not reached (0/2)
+1447.5 ± 20.5 (2/2)
+51.5 ± 4.9 (2/2)
+Not reached (0/2)
+RGB-D-asymmetric
+12.5 ± 5.0 (2/2)
+1098 (1/2)
+Not reached (0/2)
+50.0 ± 4.2 (2/2)
+1611 (1/2)
+teacher-student (final student)
+1.0 ± 1.4 (2/2)
+262 (1/2)
+Not reached (0/2)
+5.0 ± 5.7 (2/2)
+Not reached (0/2)
+teacher-student (3-stage, e2e)
+2001.0 ± 1.4 (2/2)
+2262 (1/2)
+Not reached (0/2)
+2005.0 ± 5.7 (2/2)
+Not reached (0/2)
+FOCUS (ours)
+11.5 ± 3.5 (2/2)
+461.5 ± 112.4 (2/2)
+461.5 ± 19.1 (2/2)
+91.5 ± 20.5 (2/2)
+470.0 ± 107.5 (2/2)
+F
+Additional Training Curves
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Training steps
+1e7
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(a) Reach-Cube
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+1.6
+Training steps
+1e7
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(b) Lift-Cube
+0
+2
+4
+6
+8
+Training steps
+1e6
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(c) Push-Cube
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+Training steps
+1e7
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(d) Open-Drawer
+0.0
+0.5
+1.0
+1.5
+2.0
+2.5
+Training steps
+1e7
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+EMA success rate
+States only
+RGB-D only
+RGB-D asymmetric
+Teacher-student
+FOCUS (ours)
+(e) Pick-and-Place
+Figure 5: Full training success EMA curves for all tasks. Curves show training-time success. For teacher-
+student, curves show the final student PPO phase; Table 2 reports end-to-end normalized AUC in the main
+paper.
+21
+
+
+G
+Per episode success rate curves
+This appendix reports per-episode training success curves for all five tasks. Unlike the EMA curves
+in the main text, these plots show the raw training success signal and therefore expose short-term
+variance, instability, and plateau behavior. Earlier rises and higher final plateaus indicate better
+sample efficiency and more reliable training.
+0
+200
+400
+600
+800
+1000
+1200
+1400
+Training steps
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Per-episode success rate
+RGB asymmetric
+RGB only
+States only
+Teacher-student
+FOCUS (ours)
+(a) Reach-Cube.
+0
+200
+400
+600
+800
+1000
+1200
+1400
+Training steps
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Per-episode success rate
+RGB asymmetric
+RGB only
+States only
+Teacher-student
+FOCUS (ours)
+(b) Lift-Cube.
+0
+200
+400
+600
+800
+1000
+1200
+1400
+Training steps
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Per-episode success rate
+RGB asymmetric
+RGB only
+States only
+Teacher-student
+FOCUS (ours)
+(c) Push-Cube.
+0
+200
+400
+600
+800
+1000
+1200
+1400
+Training steps
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Per-episode success rate
+RGB asymmetric
+RGB only
+States only
+Teacher-student
+FOCUS (ours)
+(d) Open-Drawer.
+0
+500
+1000
+1500
+2000
+2500
+Training steps
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Per-episode success rate
+RGB asymmetric
+RGB only
+States only
+Teacher-student
+FOCUS (ours)
+(e) Pick-and-Place.
+Figure 6: Per-episode training success rate for all tasks. Earlier rises and higher plateaus indicate better
+sample efficiency.
+22
+
+
+before
+after
+Lift
+Push
+Open
+(a) RGB encoder branch
+before
+after
+Lift
+Push
+Open
+(b) Depth encoder branch
+Figure 7: Encoder activation visualizations (channel-averaged intermediate feature magnitudes) before and
+after image exposure for Lift, Push, and Open-Drawer.
+H
+Visualizations
+This appendix collects qualitative probes of the learned visual and latent representations. These plots
+are intended as supporting diagnostics only. They are not part of the main quantitative evidence.
+H.1
+Activation probe
+We first report an activation probe in Figure 7, where we visualize intermediate image-encoder acti-
+vations as a lightweight probe of the learned visual representation. We use forward activations rather
+than Grad-CAM, since they are inexpensive to log and more compatible with our two-optimizer
+setup.
+Qualitatively, the depth branch tends to emphasize geometric structure around the gripper, object,
+and drawer regions, while the RGB branch responds more broadly to appearance, contours, and
+scene boundaries. The activation patterns before and after image exposure remain broadly similar.
+We do not interpret these maps as a formal explanation of policy behavior. Instead, we use them as
+a simple check that the learned visual representation remains focused on task-relevant parts of the
+scene.
+23
+
+
+H.2
+Additional activation visualizations
+Figure 8 provides additional activation maps from the alternative visualization pipeline. As above,
+these plots are qualitative diagnostics of the learned visual representation. They are useful for check-
+ing whether the encoder continues to attend to task-relevant regions after the transition to RGB-D
+control.
+before
+after
+Lift
+Pick-and-Place
+before
+after
+Push
+Open
+Figure 8: RGB-D encoder activation probe (channel-averaged intermediate feature magnitudes) before and
+after image exposure for Lift, Push, Pick-and-Place, and Open-Drawer. These plots are qualitative diagnostics
+of the learned visual representation.
+24
+
+
+H.3
+t-SNE latent visualizations
+Figure 9 shows t-SNE projections of the state and image latent representations before and after
+alignment for Lift, Push, Pick-and-Place, and Open-Drawer. These plots are also qualitative. Their
+purpose is to give a rough visual summary of how the two modalities relate in the latent space over
+training.
+Across the harder tasks, the later projections often show tighter cross-modal grouping than the ear-
+lier ones, which is consistent with improved latent compatibility between state and RGB-D. At the
+same time, these plots should be interpreted cautiously, since t-SNE depends on the projection pro-
+cedure and does not provide a quantitative measure of alignment. We therefore treat these plots as
+supporting diagnostics rather than primary evidence. Our main quantitative evidence comes from
+the task-performance and ablation results in the main paper.
+before
+after
+Lift
+Pick-and-Place
+before
+after
+Push
+Open
+Figure 9: t-SNE projections of state and image latent representations before and after alignment for Lift,
+Push, Pick-and-Place, and Open-Drawer. These plots are qualitative and are included only as supporting diag-
+nostics.
+25
+
+
+I
+Protocol details
+We evaluate on five IsaacLab manipulation tasks: Reach-Cube, Lift-Cube, Push-Cube, Open-
+Drawer, and two-block Pick-and-Place. Simulation runs at 100Hz, control at 50Hz, and episodes
+last 5s unless stated otherwise. All methods use matched task definitions, observation preprocessing,
+action spaces, and evaluation protocols.
+The tasks were selected to cover different levels of visual and control difficulty. Reach-Cube is a
+saturation and sanity-check task. Lift-Cube tests visually grounded grasping and lifting. Push-Cube
+tests contact-rich object-goal control. Open-Drawer evaluates articulated-object interaction under
+dense reward shaping. Pick-and-Place is the most demanding task, requiring grasping, transport,
+and placement.
+J
+Implementation details
+RGB-D observations are rendered from tiled cameras, which are used in IsaacLab to accelerate
+parallel simulation, and are flattened before being passed to the policy implementation. Because
+tiled-camera rendering can introduce cross-environment visual artifacts, some task configurations
+apply a camera decontamination step before constructing the RGB-D observation. This step is used
+only to remove artifacts of vectorized rendering and is not a source of task information.
+The deployable observation interface remains RGB-D, proprioception, and the previous action. The
+actor is not given object poses, privileged simulator state, contact state, semantic labels, segmenta-
+tion IDs, or task variables at test time.
+In the affected simulator configurations, the cleanup mask removes pixels that do not belong to the
+agent’s rendered environment before RGB-D construction. This is equivalent in purpose to standard
+deployable camera preprocessing such as invalid-depth removal, depth-range truncation, workspace
+cropping, or background clipping using camera calibration. The cleanup is applied identically to all
+vision-based methods on a given task, including RGB-D-only, RGB-D-asymmetric, teacher-student,
+and FOCUS.
+When such simulator-specific cleanup is unavailable, the same observation contract can be imple-
+mented with depth truncation and workspace cropping alone. Thus, this preprocessing is a shared
+rendering-artifact correction rather than a method-specific component or a source of privileged task
+information.
+26
+
+
+K
+Additional implementation defaults
+Table 5: Main default hyperparameters for FOCUS unless otherwise noted.
+Training and PPO defaults
+Latent dimension d
+256
+PPO epochs
+1
+PPO mini-batches
+1
+Clip parameter ϵ
+0.2
+Discount γ
+0.998
+GAE parameter λ
+0.95
+Max grad norm
+1.0
+Optimizer defaults
+RL optimizer
+Adam
+Actor-critic learning rate
+1 × 10−3
+Fusion learning rate
+3 × 10−4
+State encoder learning rate
+3 × 10−4
+Representation optimizer
+Adam
+RGB-D encoder learning rate
+1 × 10−4
+Cross-attention aligner learning rate 2 × 10−4
+Modality switching defaults
+Max image exposure λmax
+1.0
+Switch warmup (start, duration)
+50k, 30k steps
+Mean-KL budget εmean
+0.03
+Quantile-KL budget εq (q = 0.9)
+0.05
+Switch-controller EMA rate
+0.02
+Policy-KL EMA rate
+0.10
+Policy-KL tail EMA rate
+0.05
+Main alignment / regularization weights
+RL policy-agreement λπ,RL(t)
+cosine warmup to 0.02 (10k / 50k)
+Value-agreement λV (t)
+cosine warmup to 0.05 (5k / 25k)
+Decoder reconstruction weight
+1.0
+Latent conformity weight
+0.2
+Distillation weight λd
+0.02
+VICReg weight λv
+0.3
+InfoNCE (raw) weight λraw
+0.05
+Image policy-agreement λπ,img
+0.01
+Table 6: Additional implementation defaults complementing Table 5.
+Additional PPO / optimization details
+Value loss weight αval
+1.0
+Entropy weight βent
+0.0
+Clipped value loss
+enabled
+PPO KL target κPPO
+0.01 when adaptive LR scheduling is enabled
+RL optimizer details
+Adam, betas (0.9, 0.999), weight decay 0
+Representation optimizer details Adam, betas (0.9, 0.999), weight decay 10−5
+State decoder learning rate
+1 × 10−4
+Additional representation-loss details
+BYOL weight λbyol
+0.02
+Raw-similarity weight λraw-sim
+0.01
+BYOL EMA momentum τ(t)
+linear ramp 0.996 →0.999 over 100k steps
+27
+
+
+Table 7: Torch-level architecture components used in the main experiments (latent dim d=256).
+Architecture summary (latent dim d=256)
+State encoder Es
+Linear(states→d) →Swish →LayerNorm.
+RGB-D encoder Eo
+Shared-trunk ResNet-18 RGB-D encoder.
+Separate RGB/depth stems (RGB
+Conv1 from pretrained ResNet-18 [34]; depth Conv1 initialized from averaged
+RGB weights, with optional validity-mask channel) →summed stems →shared
+ResNet-18 trunk (BN/ReLU/MaxPool, Layer1–Layer4) →ECA channel atten-
+tion [35] (+ optional CBAM-style SpatialGate [36]) →AdaptiveAvgPool2d(1, 1)
+→Linear(512→d) →LayerNorm (projection: Identity).
+Fusion gψ
+Residual fusion of a chosen latent z ∈Rd with proprioception and previous action:
+concat([z; sprop
+t
+; at−1]) →LayerNorm →Linear(m →d) (zero-init) →residual
+add z+∆. (Same fusion block used for actor and critic inputs; critic always uses
+zt,s.)
+Aligner fφ
+Symmetric cross-attention aligner operating on raw latents (zt,s, zt,o) (2 heads).
+Per stream:
+CrossAttn(q=z, kv=zother) →concat([z; att]) →LayerNorm →
+Linear(2d→d) →gated residual update.
+State decoder Ds
+Residual MLP decoder from raw latent to privileged-state target: [d →512 →
+1024 →1024 →512 →dstate] with Swish activations, Dropout(0.1) after the first
+layer, final LayerNorm, and residual Linear(d→dstate).
+Scratch CNN Eo abla-
+tion
+For the “RGB-D encoder from scratch” ablation, the ResNet-based Eo is re-
+placed by a lightweight two-branch RGB-D CNN. The RGB and depth streams
+each use three stride-2 Conv–Swish blocks with channels 32, 64, 128, followed by
+AdaptiveAvgPool2d(4, 4), flattening, Linear(· →d), and LayerNorm. The two d-
+dimensional branch features are concatenated and passed through a two-layer MLP
+to produce the final d-dimensional image latent. The same RGB-D preprocessing
+contract is used as in the ResNet-based encoder.
+28
+
+
+L
+Logged metrics and diagnostics
+Table 8: Train/test metrics and additional diagnostics logged by our protocol.
+Signal (TB tag)
+Phase
+What it captures
+Performance & sample efficiency
+Train/success rate ema
+train
+smoothed training success vs. env steps
+Train/steps to 50pct
+train
+Steps@50 (time-to-threshold)
+Test/Success rate
+test
+evaluation success rate over episodes/seeds
+Test/rewards mean
+test
+mean episode return (task-specific scale)
+PPO update stability
+Stability/ratio std mean
+train
+mean ratio dispersion within PPO update
+Stability/ratio std p95
+train
+upper-tail ratio volatility (95th percentile)
+Stability/ratio std time>0.3
+train
+fraction of updates with ratio-std above threshold
+Stability/kl spike rate tail
+train
+frequency of large KL spikes (tail events)
+Stability/neg jump rate tail
+train
+tail rate of negative update “jumps” (debug)
+Stability/dReturn var tail
+train
+tail variability proxy of returns/advantages (debug)
+StabilityLate/neg jump rate
+train
+late-training negative jump rate (debug)
+StabilityLate/dReturn var
+train
+late-training return-variance proxy (debug)
+Cross-modal policy mismatch
+Diag/policy KL image to state
+train
+KL(π(· | ˜z o) ∥π(· | ˜z s)) (behavioral gap)
+Diag/policy KL state to image
+train
+KL(π(· | ˜z s) ∥π(· | ˜z o))
+Diag/KL i s p90
+train
+upper-tail policy KL, 90th percentile (rare mismatch)
+Diag/KL i s p95
+train
+upper-tail policy KL, 95th percentile (rarer mismatch)
+Diag/KL i s tail frac gt 0.25
+train
+tail exceedance rate: Pr[KLo→s > 0.25] (example threshold)
+Diag/pi mean diff all
+train
+policy mean disagreement summary across modalities (debug)
+Diag/mu diff norm
+train
+∥∆µ∥between modality-conditioned Gaussians
+Diag/logstd diff norm
+train
+∥∆log σ∥between modality-conditioned Gaussians
+Diag/std image mean
+train
+mean action std under image-conditioned policy
+Diag/std state mean
+train
+mean action std under state-conditioned policy
+Cross-modal value mismatch
+Diag/value gap mse half
+train
+1
+2 E
+h
+(V (˜z s) −V (˜z o))2i
+(critic disagreement)
+Latent / fusion mismatch (pre- and post-fusion)
+Diag/gap raw latents
+train
+latent mismatch before alignment/fusion (raw encoder outputs)
+Diag/gap aligned latents
+train
+latent mismatch after alignment module (if enabled)
+Diag/gap actor input
+train
+mismatch at final actor input after fusion
+Diag/fusion gap raw
+train
+raw fusion input gap (debug)
+Diag/fusion gap fused
+train
+fused feature gap (debug)
+Diag/fusion gap fused over raw
+train
+ratio of fused gap to raw gap (debug)
+Diag/fusion delta gap
+train
+change in gap induced by fusion (debug)
+Diag/fusion delta norm i
+train
+magnitude of fusion update on image pathway (debug)
+Diag/fusion delta norm s
+train
+magnitude of fusion update on state pathway (debug)
+Diag/fusion fc weight norm
+train
+fusion layer weight norm (debug / drift)
+Diag/zs norm
+train
+∥zs∥(state latent norm tracker)
+Diag/zi norm
+train
+∥zo∥(image latent norm tracker)
+Sensitivity diagnostics
+Diag/jacobian sensitivity
+train
+local action sensitivity to latent mismatch
+Diag/actor L eff along dz
+train
+effective gain ∥∆µ∥/∥∆z∥along modality gap
+Representation losses (alignment branch)
+AlignLoss/alignment regularization
+train
+total representation/alignment regularizer (summary)
+AlignLoss/distillation loss
+train
+distillation/teacher matching term (if used)
+AlignLoss/feats mse loss
+train
+feature-space MSE (debug / ablation)
+AlignLoss/similarity loss
+train
+similarity-based alignment loss (debug)
+AlignLoss/sim score
+train
+similarity score summary (higher is better)
+AlignLoss/raw latents similarity loss
+train
+raw-latent similarity loss (pre-align)
+AlignLoss/raw latents sim score
+train
+raw-latent similarity score (pre-align)
+AlignLoss/vicreg loss
+train
+VICReg regularization term (if used)
+Alignment quality (retrieval / Procrustes summaries)
+PreAlign/procrustes rmse rl
+train
+Procrustes RMSE between pre-align latents (RL-side)
+PreAlign/recall at 1 rl
+train
+retrieval recall@1 for pre-align latents (debug)
+PreAlign/std image rl
+train
+pre-align image latent std (debug)
+PreAlign/std state rl
+train
+pre-align state latent std (debug)
+PostAlign/procrustes rmse
+train
+Procrustes RMSE between post-align latents (debug)
+PostAlign/recall at 1
+train
+retrieval recall@1 for post-align latents (debug)
+RL-side agreement / weighting (if enabled)
+RL align/L align RL
+train
+total RL-side alignment/consistency term (summary)
+RL align/policy consistency KL
+train
+policy agreement regularizer (KL)
+RL align/value consistency MSE
+train
+value agreement regularizer (MSE)
+RL align/lambda pi
+train
+weight schedule/value for policy-consistency term
+RL align/lambda V
+train
+weight schedule/value for value-consistency term
+M
+Engineered rewards for each task
+29
+
+
+Listing 1: Reward terms and corresponding implementations for the Lift-Cube task.
+@configclass
+class RewardsCfg:
+reaching_object = RewTerm(
+func=mdp.object_ee_distance_exp,
+params={"std": 0.1},
+weight=10.0,
+)
+grasp_reward = RewTerm(
+func=mdp.grasp_reward_from_pnp,
+params={
+"open_joint_pos": 0.04,
+"distance_threshold": 0.07,
+"near_close_reward": 1.0,
+"far_open_reward": 1.0,
+},
+weight=8.0,
+)
+lifting_object = RewTerm(
+func=mdp.object_is_lifted,
+params={"minimal_height": 0.04},
+weight=15.0,
+)
+dense_object_is_lifted = RewTerm(
+func=mdp.object_is_lifted_dense,
+params={
+"minimal_height": 0.02,
+"target_height": 0.10,
+"sigmoid_scale": 40.0,
+"object_cfg": SceneEntityCfg("object"),
+},
+weight=5.0,
+)
+object_goal_tracking = RewTerm(
+func=mdp.object_goal_distance_V2,
+params={
+"std": 0.3,
+"minimal_height": 0.04,
+"command_name": "object_pose",
+},
+weight=16.0,
+)
+object_goal_tracking_fine_grained = RewTerm(
+func=mdp.object_goal_distance_V2,
+params={
+"std": 0.05,
+"minimal_height": 0.04,
+"command_name": "object_pose",
+},
+weight=10.0,
+)
+success_rate = RewTerm(
+func=mdp.success_rate,
+params={
+"std": 0.1,
+"command_name": "object_pose",
+},
+weight=1e-16,
+)
+def object_is_lifted(
+env: ManagerBasedRLEnv,
+minimal_height: float,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+return torch.where(object.data.root_link_pos_w[:, 2] > minimal_height, 1.0, 0.0)
+def object_is_lifted_dense(
+env: ManagerBasedRLEnv,
+minimal_height: float,
+target_height: float = 0.2,
+30
+
+
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+sigmoid_scale: float = 50.0,
+bonus_weight: float = 0.5,
+) -> torch.Tensor:
+object = env.scene[object_cfg.name]
+z_pos = object.data.root_link_pos_w[:, 2]
+lift_progress = torch.sigmoid(sigmoid_scale * (z_pos - minimal_height))
+lifted_above_target = (z_pos > target_height).float()
+bonus = lifted_above_target * bonus_weight
+return lift_progress + bonus
+def grasp_reward_from_pnp(
+env: ManagerBasedRLEnv,
+open_joint_pos: float = 0.04,
+distance_threshold: float = 0.02,
+near_close_reward: float = 1.0,
+far_open_reward: float = 1.0,
+asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+robot = env.scene[asset_cfg.name]
+object: RigidObject = env.scene[object_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+object_pos = object.data.root_link_pos_w
+ee_tcp_pos = ee_frame.data.target_pos_w[..., 0, :]
+distance = torch.norm(ee_tcp_pos - object_pos, dim=-1)
+is_near = distance < distance_threshold
+is_far = ~is_near
+gripper_joint_pos = robot.data.joint_pos[:, asset_cfg.joint_ids]
+closure_amount = torch.sum(open_joint_pos - gripper_joint_pos, dim=-1) / open_joint_pos
+closure_amount = torch.clamp(closure_amount, 0.0, 1.0)
+reward = (
+is_near.float() * closure_amount * near_close_reward +
+is_far.float() * (1.0 - closure_amount) * 0.1 * far_open_reward
+)
+return reward
+def object_ee_distance_exp(
+env: ManagerBasedRLEnv,
+std: float,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+cube_pos_w = object.data.root_link_pos_w
+ee_w = ee_frame.data.target_pos_w[..., 0, :]
+object_ee_distance = torch.norm(cube_pos_w - ee_w, dim=1)
+return torch.exp(-object_ee_distance / std)
+def object_goal_distance_V2(
+env: ManagerBasedRLEnv,
+std: float,
+minimal_height: float,
+command_name: str,
+robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+) -> torch.Tensor:
+robot: RigidObject = env.scene[robot_cfg.name]
+object: RigidObject = env.scene[object_cfg.name]
+command = env.command_manager.get_command(command_name)
+des_pos_b = command[:, :3]
+des_pos_w, _ = combine_frame_transforms(
+robot.data.root_state_w[:, :3],
+robot.data.root_state_w[:, 3:7],
+des_pos_b,
+31
+
+
+)
+object_pos = object.data.root_link_pos_w[:, :3]
+object_z = object_pos[:, 2]
+distance = torch.norm(des_pos_w - object_pos, dim=1)
+height_factor = torch.clamp((object_z - minimal_height) / 0.05, 0.0, 1.0)
+dist_reward = torch.exp(-distance / std)
+return height_factor * dist_reward
+Listing 2: Reward configuration and reward functions for the Pick-and-Place task.
+@configclass
+class RewardsCfg:
+pick_and_place_reward = RewTerm(
+func=mdp.rewards.pick_and_place_reward,
+params={
+"force_threshold": 0.3,
+"closure_thr": 0.5,
+"lift_height": 0.03,
+"place_horizontal_threshold": 0.07,
+"place_height_threshold": 0.06,
+"place_bonus": 3.0,
+"reach_scale": 5.0,
+"transport_scale": 5.0,
+"object_cfg": SceneEntityCfg("object"),
+"target_cfg": SceneEntityCfg("target_object"),
+"asset_cfg": SceneEntityCfg("robot", joint_names=["panda_finger_.*"]),
+"ee_frame_cfg": SceneEntityCfg("ee_frame"),
+},
+weight=10.0,
+)
+def is_grasping(
+env,
+sensor_cfg: SceneEntityCfg = SceneEntityCfg("object_contact_sensor"),
+asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+open_joint_pos: float = 0.04,
+force_threshold: float = 2.0,
+closure_thr: float = 0.6,
+) -> torch.Tensor:
+sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+f = sensor.data.net_forces_w.norm(dim=-1)
+contact_detected = (f > force_threshold).any(dim=-1)
+robot = env.scene[asset_cfg.name]
+finger_q = robot.data.joint_pos[:, asset_cfg.joint_ids]
+open_amt = finger_q.mean(dim=-1).clamp(0.0, open_joint_pos) / open_joint_pos
+closed = open_amt < (1.0 - closure_thr)
+return contact_detected & closed
+def pick_and_place_reward(
+env: ManagerBasedRLEnv,
+force_threshold: float = 0.1,
+place_horizontal_threshold: float = 0.07,
+place_height_threshold: float = 0.06,
+place_bonus: float = 3.0,
+reach_scale: float = 5.0,
+transport_scale: float = 5.0,
+lift_height: float = 0.03,
+lift_bonus: float = 2.0,
+closure_thr: float = 0.6,
+close_reward_scale: float = 2.0,
+close_distance_scale: float = 0.05,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+target_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+sensor_cfg: SceneEntityCfg = SceneEntityCfg("object_contact_sensor"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+obj: RigidObject = env.scene[object_cfg.name]
+tgt: RigidObject = env.scene[target_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+robot = env.scene[asset_cfg.name]
+32
+
+
+obj_pos = obj.data.root_link_pos_w[:, :3]
+tgt_pos = tgt.data.root_link_pos_w[:, :3]
+ee_pos = ee_frame.data.target_pos_w[..., 0, :]
+reach_dist = torch.norm(ee_pos - obj_pos, dim=-1)
+reach_reward = 1.0 - torch.tanh(reach_scale * reach_dist)
+grasped = is_grasping(
+env,
+sensor_cfg=sensor_cfg,
+asset_cfg=asset_cfg,
+open_joint_pos=0.04,
+force_threshold=force_threshold,
+closure_thr=closure_thr,
+)
+finger_q = robot.data.joint_pos[:, asset_cfg.joint_ids]
+open_amt = finger_q.mean(dim=-1).clamp(0.0, 0.04) / 0.04
+near_object = torch.exp(-reach_dist / close_distance_scale)
+closing_reward = (~grasped).float() * near_object * (1.0 - open_amt) * close_reward_scale
+obj_rel_z = obj_pos[:, 2] - tgt_pos[:, 2]
+is_lifted = obj_rel_z > lift_height
+is_lifted_soft = torch.clamp(
+(obj_rel_z - (lift_height * 0.5)) / (lift_height * 0.5),
+0.0, 1.0,
+)
+lift_reward = grasped.float() * is_lifted_soft * lift_bonus
+carry_gate = torch.norm(ee_pos - obj_pos, dim=-1) < 0.08
+carrying = grasped & is_lifted & carry_gate
+transport_dist = torch.norm(obj_pos - tgt_pos, dim=-1)
+transport_reward = carrying.float() * (
+1.5 * (1.0 - torch.tanh(transport_scale * transport_dist))
++ 3.0 * torch.exp(-transport_dist / 0.05)
+)
+xy_dist = torch.norm(obj_pos[:, :2] - tgt_pos[:, :2], dim=-1)
+height_diff = (obj_pos[:, 2] - tgt_pos[:, 2]).abs()
+in_position = (xy_dist < place_horizontal_threshold) & (height_diff < place_height_threshold)
+hover_bonus = carrying.float() * in_position.float()
+release_approach_reward = carrying.float() * in_position.float() * open_amt * 4.0
+fully_open = open_amt > 0.40
+pick_latch = getattr(env.cfg, "grasp_hold_ctr", None)
+if pick_latch is None or pick_latch.shape != grasped.shape:
+pick_latch = torch.zeros_like(grasped, dtype=torch.bool, device=grasped.device)
+pick_latch = pick_latch | carrying
+setattr(env.cfg, "grasp_hold_ctr", pick_latch)
+release_reward = (pick_latch & in_position & fully_open).float() * place_bonus
+return (
+reach_reward
++ closing_reward
++ lift_reward
++ transport_reward
++ hover_bonus
++ release_approach_reward
++ release_reward
+)
+def pick_and_place_reward_states(
+env: ManagerBasedRLEnv,
+force_threshold: float = 0.1,
+place_horizontal_threshold: float = 0.07,
+place_height_threshold: float = 0.06,
+place_bonus: float = 3.0,
+reach_scale: float = 5.0,
+transport_scale: float = 5.0,
+lift_height: float = 0.03,
+lift_bonus: float = 2.0,
+closure_thr: float = 0.6,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+target_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+33
+
+
+asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+sensor_cfg: SceneEntityCfg = SceneEntityCfg("object_contact_sensor"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+obj: RigidObject = env.scene[object_cfg.name]
+tgt: RigidObject = env.scene[target_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+robot = env.scene[asset_cfg.name]
+obj_pos = obj.data.root_link_pos_w[:, :3]
+tgt_pos = tgt.data.root_link_pos_w[:, :3]
+ee_pos = ee_frame.data.target_pos_w[..., 0, :]
+finger_q = robot.data.joint_pos[:, asset_cfg.joint_ids]
+open_amt = finger_q.mean(dim=-1).clamp(0.0, 0.04) / 0.04
+reach_dist = torch.norm(ee_pos - obj_pos, dim=-1)
+reach_reward = 1.0 - torch.tanh(reach_scale * reach_dist)
+near_object = torch.exp(-reach_dist / 0.05)
+closing_reward = near_object * (1.0 - open_amt) * 2.0
+grasped = is_grasping(
+env,
+sensor_cfg=sensor_cfg,
+asset_cfg=asset_cfg,
+open_joint_pos=0.04,
+force_threshold=force_threshold,
+closure_thr=closure_thr,
+)
+obj_rel_z = obj_pos[:, 2] - tgt_pos[:, 2]
+is_lifted = obj_rel_z > lift_height
+is_lifted_soft = torch.clamp(
+(obj_rel_z - (lift_height * 0.5)) / (lift_height * 0.5),
+0.0, 1.0,
+)
+lift_reward = grasped.float() * is_lifted_soft * lift_bonus
+transport_dist = torch.norm(obj_pos - tgt_pos, dim=-1)
+transport_reward = (grasped & is_lifted).float() * (
+(1.0 - torch.tanh(transport_scale * transport_dist))
++ 2.0 * torch.exp(-transport_dist / 0.05)
+)
+xy_dist = torch.norm(obj_pos[:, :2] - tgt_pos[:, :2], dim=-1)
+height_diff = (obj_pos[:, 2] - tgt_pos[:, 2]).abs()
+in_position = (xy_dist < place_horizontal_threshold) & (height_diff < place_height_threshold)
+hover_bonus = (grasped & is_lifted).float() * in_position.float()
+release_approach_reward = (grasped & is_lifted).float() * in_position.float() * open_amt * 2.0
+fully_open = open_amt > 0.70
+release_reward = (in_position & fully_open).float() * place_bonus
+return (
+reach_reward
++ closing_reward
++ lift_reward
++ transport_reward
++ hover_bonus
++ release_approach_reward
++ release_reward
+)
+Listing 3: Reward terms and corresponding implementations for the Push-Cube task.
+@configclass
+class RewardsCfg:
+reaching_object = RewTerm(
+func=mdp.object_ee_distance,
+params={"std": 0.1},
+weight=20.0,
+)
+object_to_target_distance = RewTerm(
+func=mdp.distance_obj_to_target_reward,
+params={
+34
+
+
+"sigma": 0.2,
+"object_cfg": SceneEntityCfg("object"),
+"target_object_cfg": SceneEntityCfg("target_object"),
+},
+weight=1.0,
+)
+gripper_fingers_reward = RewTerm(
+func=mdp.gripper_fingers_close_reward,
+params={
+"ee_frame_cfg": SceneEntityCfg("ee_frame"),
+"max_distance": 0.02,
+},
+weight=1.0,
+)
+ee_to_object_distance = RewTerm(
+func=mdp.ee_to_object_distance_penalty,
+params={"distance_threshold": 0.03},
+weight=-1e-3,
+)
+def object_ee_distance(
+env: ManagerBasedRLEnv,
+std: float,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+cube_pos_w = object.data.root_pos_w
+ee_w = ee_frame.data.target_pos_w[..., 0, :]
+object_ee_distance = torch.norm(cube_pos_w - ee_w, dim=1)
+return 1 - torch.tanh(object_ee_distance / std)
+def distance_obj_to_target_reward(
+env: ManagerBasedRLEnv,
+sigma: float = 0.2,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+target_object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+target_object: RigidObject = env.scene[target_object_cfg.name]
+object_pos = object.data.root_pos_w
+target_pos = target_object.data.root_pos_w
+distance = torch.norm(object_pos - target_pos, dim=1)
+shaped_distance = torch.tanh(torch.clamp(distance, min=0.02) / sigma)
+reward = 1.0 - shaped_distance
+return reward
+def gripper_fingers_close_reward(
+env: ManagerBasedRLEnv,
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+max_distance: float = 0.02,
+) -> torch.Tensor:
+ee_fingertips_w = env.scene[ee_frame_cfg.name].data.target_pos_w[..., 1:, :]
+lfinger_pos = ee_fingertips_w[..., 0, :]
+rfinger_pos = ee_fingertips_w[..., 1, :]
+finger_distance = torch.norm(lfinger_pos - rfinger_pos, dim=1)
+reward = torch.clamp(1.0 - finger_distance / max_distance, 0.0, 1.0)
+return reward
+def ee_to_object_distance_penalty(
+env: ManagerBasedRLEnv,
+distance_threshold: float = 0.03,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+target_object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+35
+
+
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+target_object: RigidObject = env.scene[target_object_cfg.name]
+object_pos = object.data.root_pos_w
+ee_tcp_pos = ee_frame.data.target_pos_w[..., 0, :]
+target_object_pos = target_object.data.root_pos_w
+ee_distance = torch.norm(ee_tcp_pos - object_pos, dim=1)
+distance_to_target = torch.norm(target_object_pos[:, 0:3] - object_pos, dim=1)
+penalty = (ee_distance > distance_threshold) * 0.02 / (
+torch.clamp(distance_to_target, min=0.02)
+)
+return penalty
+Listing 4: Reward configuration and reward functions for the Reach-Cube task.
+@configclass
+class RewardsCfg:
+reaching_object = RewTerm(
+func=mdp.object_ee_distance,
+params={"std": 0.1},
+weight=9.0,
+)
+success_rate = RewTerm(
+func=mdp.object_ee_distance_success_rate,
+params={"std": 0.1},
+weight=1e-16,
+)
+def object_ee_distance(
+env: ManagerBasedRLEnv,
+std: float,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+cube_pos_w = object.data.root_pos_w
+ee_w = ee_frame.data.target_pos_w[..., 0, :]
+object_ee_distance = torch.norm(cube_pos_w - ee_w, dim=1)
+return 1 - torch.tanh(object_ee_distance / std)
+def object_ee_distance_success_rate(
+env: ManagerBasedRLEnv,
+std: float,
+object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+) -> torch.Tensor:
+object: RigidObject = env.scene[object_cfg.name]
+ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+cube_pos_w = object.data.root_pos_w
+ee_w = ee_frame.data.target_pos_w[..., 0, :]
+object_ee_distance = torch.norm(cube_pos_w - ee_w, dim=1)
+success_f = (object_ee_distance < 0.3).float()
+if env.cfg.success_rate is None:
+env.cfg.success_rate = success_f.clone()
+else:
+env.cfg.success_rate += success_f
+env.cfg.success_rate_count += 1
+env.cfg.last_step_success = success_f
+return torch.zeros_like(1 - torch.tanh(object_ee_distance / std), device=env.device)
+Listing 5: Reward configuration and reward functions for the Open-Drawer task.
+@configclass
+class RewardsCfg:
+36
+
+
+approach_ee_handle = RewTerm(
+func=mdp.approach_ee_handle,
+weight=2.0,
+params={"threshold": 0.2},
+)
+align_ee_handle = RewTerm(
+func=mdp.align_ee_handle,
+weight=0.5,
+)
+approach_gripper_handle = RewTerm(
+func=mdp.approach_gripper_handle,
+weight=5.0,
+params={"offset": MISSING},
+)
+align_grasp_around_handle = RewTerm(
+func=mdp.align_grasp_around_handle,
+weight=0.125,
+)
+grasp_handle = RewTerm(
+func=mdp.grasp_handle,
+weight=0.5,
+params={
+"threshold": 0.03,
+"open_joint_pos": MISSING,
+"asset_cfg": SceneEntityCfg("robot", joint_names=MISSING),
+},
+)
+open_drawer_bonus = RewTerm(
+func=mdp.open_drawer_bonus,
+weight=7.5,
+params={"asset_cfg": SceneEntityCfg("cabinet", joint_names=["drawer_top_joint"])},
+)
+multi_stage_open_drawer = RewTerm(
+func=mdp.multi_stage_open_drawer,
+weight=1.0,
+params={"asset_cfg": SceneEntityCfg("cabinet", joint_names=["drawer_top_joint"])},
+)
+success_rate = RewTerm(
+func=mdp.open_drawer_success_rate,
+weight=1e-16,
+params={
+"asset_cfg": SceneEntityCfg("cabinet", joint_names=["drawer_top_joint"]),
+},
+)
+def approach_ee_handle(env: ManagerBasedRLEnv, threshold: float) -> torch.Tensor:
+ee_tcp_pos = env.scene["ee_frame"].data.target_pos_w[..., 0, :]
+handle_pos = env.scene["cabinet_frame"].data.target_pos_w[..., 0, :]
+distance = torch.norm(handle_pos - ee_tcp_pos, dim=-1, p=2)
+reward = 1.0 / (1.0 + distance**2)
+reward = torch.pow(reward, 2)
+return torch.where(distance <= threshold, 2 * reward, reward)
+def align_ee_handle(env: ManagerBasedRLEnv) -> torch.Tensor:
+ee_tcp_quat = env.scene["ee_frame"].data.target_quat_w[..., 0, :]
+handle_quat = env.scene["cabinet_frame"].data.target_quat_w[..., 0, :]
+ee_tcp_rot_mat = matrix_from_quat(ee_tcp_quat)
+handle_mat = matrix_from_quat(handle_quat)
+handle_x, handle_y = handle_mat[..., 0], handle_mat[..., 1]
+ee_tcp_x, ee_tcp_z = ee_tcp_rot_mat[..., 0], ee_tcp_rot_mat[..., 2]
+align_z = torch.bmm(ee_tcp_z.unsqueeze(1), -handle_x.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+align_x = torch.bmm(ee_tcp_x.unsqueeze(1), -handle_y.unsqueeze(-1)).squeeze(-1).squeeze(-1)
+return 0.5 * (torch.sign(align_z) * align_z**2 + torch.sign(align_x) * align_x**2)
+def align_grasp_around_handle(env: ManagerBasedRLEnv) -> torch.Tensor:
+handle_pos = env.scene["cabinet_frame"].data.target_pos_w[..., 0, :]
+37
+
+
+ee_fingertips_w = env.scene["ee_frame"].data.target_pos_w[..., 1:, :]
+lfinger_pos = ee_fingertips_w[..., 0, :]
+rfinger_pos = ee_fingertips_w[..., 1, :]
+is_graspable = (rfinger_pos[:, 2] < handle_pos[:, 2]) & (lfinger_pos[:, 2] > handle_pos[:, 2])
+return is_graspable
+def approach_gripper_handle(env: ManagerBasedRLEnv, offset: float = 0.04) -> torch.Tensor:
+handle_pos = env.scene["cabinet_frame"].data.target_pos_w[..., 0, :]
+ee_fingertips_w = env.scene["ee_frame"].data.target_pos_w[..., 1:, :]
+lfinger_pos = ee_fingertips_w[..., 0, :]
+rfinger_pos = ee_fingertips_w[..., 1, :]
+lfinger_dist = torch.abs(lfinger_pos[:, 2] - handle_pos[:, 2])
+rfinger_dist = torch.abs(rfinger_pos[:, 2] - handle_pos[:, 2])
+is_graspable = (rfinger_pos[:, 2] < handle_pos[:, 2]) & (lfinger_pos[:, 2] > handle_pos[:, 2])
+return is_graspable * ((offset - lfinger_dist) + (offset - rfinger_dist))
+def grasp_handle(
+env: ManagerBasedRLEnv,
+threshold: float,
+open_joint_pos: float,
+asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+ee_tcp_pos = env.scene["ee_frame"].data.target_pos_w[..., 0, :]
+handle_pos = env.scene["cabinet_frame"].data.target_pos_w[..., 0, :]
+gripper_joint_pos = env.scene[asset_cfg.name].data.joint_pos[:, asset_cfg.joint_ids]
+distance = torch.norm(handle_pos - ee_tcp_pos, dim=-1, p=2)
+is_close = distance <= threshold
+return is_close * torch.sum(open_joint_pos - gripper_joint_pos, dim=-1)
+def open_drawer_bonus(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+drawer_pos = env.scene[asset_cfg.name].data.joint_pos[:, asset_cfg.joint_ids[0]]
+is_graspable = align_grasp_around_handle(env).float()
+return (is_graspable + 1.0) * drawer_pos
+def multi_stage_open_drawer(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+drawer_pos = env.scene[asset_cfg.name].data.joint_pos[:, asset_cfg.joint_ids[0]]
+is_graspable = align_grasp_around_handle(env).float()
+open_easy = (drawer_pos > 0.01) * 0.5
+open_medium = (drawer_pos > 0.2) * is_graspable
+open_hard = (drawer_pos > 0.3) * is_graspable
+return open_easy + open_medium + open_hard
+def open_drawer_success_rate(
+env: ManagerBasedRLEnv,
+asset_cfg: SceneEntityCfg,
+threshold: float = 0.01,
+) -> torch.Tensor:
+drawer_pos = env.scene[asset_cfg.name].data.joint_pos[:, asset_cfg.joint_ids[0]]
+is_graspable = align_grasp_around_handle(env).float()
+success_f = (drawer_pos > threshold).float()
+if env.cfg.success_rate is None:
+env.cfg.success_rate = success_f.clone()
+else:
+env.cfg.success_rate += success_f
+env.cfg.success_rate_count += 1
+env.cfg.last_step_success = success_f
+return torch.zeros_like((is_graspable + 1.0) * drawer_pos, device=env.device)
+38

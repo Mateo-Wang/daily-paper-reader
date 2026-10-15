@@ -1,0 +1,1919 @@
+Reflect-VLA: Internalizing Reflective Guidance via Dual-Path On-Policy
+Self-Distillation for Autonomous Driving
+Yuechen Luo1,∗, He Chong1,∗, Fang Li2,∗, Shaoqing Xu2,∗,†, Hexin Zhang3, Ruiqi Zhang1,
+Ziying Song4, Lei Yang5, Zhi-xin Yang2,B, Fuxi Wen1,B
+1Tsinghua University 2University of Macau 3University of Science and Technology of China
+4Beijing Jiaotong University 5Nanyang Technological University
+https://github.com/luo-yc17/Reflect-VLA
+Abstract
+Reinforcement Learning (RL) substantially improves planning
+performance in autonomous-driving Vision-Language-Action
+(VLA) models. However, existing RL methods rely on scalar
+trajectory rewards that measure overall quality but fail to iden-
+tify specific planning errors or provide actionable correction
+signals. In long-tail scenarios, errors in scene understanding,
+behavior selection, and trajectory execution are compressed
+into a single score. We observe that Reflective Guidance turns
+trajectory evaluation into explicit diagnoses and corrective
+instructions, substantially improving planning accuracy. Yet
+such guidance requires an initial prediction and its evalua-
+tion results, making it unavailable for direct single-pass infer-
+ence. We propose Reflect-VLA, which treats Reflective Guid-
+ance as training-time privileged information and internal-
+izes its planning benefits through Dual-Path On-Policy Self-
+Distillation (Dual-OPSD). Unlike scalar-reward optimiza-
+tion, Dual-OPSD uses the driving score only to route student-
+generated trajectories. It distills dense token-level corrective
+distributions from the teacher for risky trajectories while ap-
+plying self-imitation to preserve reliable ones. To provide re-
+liable corrective distributions on student rollouts, the teacher
+is progressively constructed through Driving-Knowledge Pre-
+training, Planning-and-Refinement SFT, and Self-Refinement
+Rejection Sampling. At inference time, Reflect-VLA gener-
+ates trajectories in a single pass without explicit guidance
+or iterative refinement. Experiments on NAVSIM v1/v2 and
+Bench2Drive demonstrate competitive planning performance
+while reducing training time by over 90% compared with RL.
+1
+Introduction
+Autonomous driving is shifting from conventional modular
+pipelines toward end-to-end Vision-Language-Action (VLA)
+systems (Jiang et al. 2025b). Unlike modular systems (Hu
+et al. 2023; Jiang et al. 2023; Chen et al. 2024) that coordinate
+perception, prediction, and planning through handcrafted
+interfaces, VLA models integrate visual observations, lan-
+guage instructions and action generation within a unified
+architecture. Recent driving VLA methods commonly adopt
+a multi-stage training paradigm (Li et al. 2025c; Zhou et al.
+2025b; Luo et al. 2025a, 2026b; Lu et al. 2026). They first ac-
+quire domain knowledge from large-scale driving question-
+answering data, then learn trajectory generation through su-
+pervised fine-tuning, and finally improve the policy using
+∗These authors contributed equally.
+†Project leader.
+BCorresponding author.
+Figure 1: From Reflective Guidance to Internalized Plan-
+ning. (a) Reflective Guidance corrects an unsafe initial tra-
+jectory during iterative inference, revealing substantial plan-
+ning gains. (b) Reflect-VLA transfers these gains through
+Dual-OPSD by aligning teacher and student token distribu-
+tions along student-generated trajectories. (c) Across differ-
+ent model scales, Reflect-VLA improves planning perfor-
+mance over SFT while requiring substantially less training
+time than RL, enabling guidance-free single-pass planning.
+reinforcement learning or planning-oriented objectives.
+Despite progress, VLA models struggle to learn from plan-
+ning failures, especially in complex and long-tail scenarios.
+A scalar planning score can identify a poor trajectory but can-
+not reveal whether the error arises from scene understanding,
+behavior selection, or trajectory execution, nor indicate how
+arXiv:2610.13453v1  [cs.RO]  9 Oct 2026
+
+
+to correct it. Trajectory-level rewards collapse these hetero-
+geneous failure modes into a single value, leaving the model
+without a direction for improvement. ELF-VLA (Luo et al.
+2026a) alleviates this problem by introducing structured fail-
+ure information, showing that detailed feedback can guide
+the correction of failed trajectories. However, how to con-
+vert feedback-assisted correction into an intrinsic single-pass
+planning capability remains underexplored.
+We begin with a key observation: Reflective Guidance
+provides substantial planning gains. As illustrated in Fig. 1,
+a VLA model may produce an incorrect trajectory during di-
+rect inference, yet generate a markedly better trajectory when
+provided with evaluation-derived diagnoses and corrective
+suggestions (Yang et al. 2026; He et al. 2026; Chen et al.
+2026b). Constructing the guidance requires both an initial
+trajectory and its evaluation results, whereas an autonomous
+driving system must produce an executable plan before act-
+ing. The central challenge is therefore not to perform itera-
+tive refinement at inference time, but to transfer the planning
+preferences induced by Reflective Guidance into the model’s
+direct trajectory-generation policy.
+To this end, we propose Reflect-VLA, a training frame-
+work that treats Reflective Guidance as privileged informa-
+tion and internalizes its planning benefits through Dual-Path
+On-Policy Self-Distillation (Dual-OPSD). Starting from
+the same VLA checkpoint, the model supplied with Reflec-
+tive Guidance acts as the frozen teacher, while the model
+receiving standard inputs acts as the student. The student
+first generates trajectories from the input available at deploy-
+ment. A planning score then routes each trajectory to one of
+two learning paths. For risky or suboptimal trajectories, the
+teacher provides dense token-level distributions that encode
+corrective planning preferences. For reliable trajectories, a
+self-imitation objective preserves the student’s existing deci-
+sions. The scalar score is therefore used only for trajectory-
+quality-aware routing, while the teacher distribution supplies
+the fine-grained supervision required for correction.
+Effective self-distillation requires a teacher that can re-
+fine trajectories drawn from the student’s rollout distribu-
+tion. We construct this teacher using a progressive strategy
+comprising Driving-Knowledge Pretraining, Planning-and-
+Refinement SFT, and Self-Refinement Rejection Sampling.
+The first two stages establish driving knowledge, direct tra-
+jectory generation, and guidance-assisted refinement. The
+final stage exposes the teacher to student-generated failures
+and retains verified refinements, reducing the distribution
+gap between offline refinement data and on-policy trajecto-
+ries. After Dual-OPSD, Reflect-VLA performs single-pass
+trajectory generation without Reflective Guidance, an online
+planning evaluator, or an iterative correction procedure.
+Our main contributions are summarized as follows:
+• We construct Reflective Guidance that converts trajectory
+evaluation results into structured, trajectory-specific diag-
+noses and corrective suggestions, and use it as privileged
+information available only during training.
+• We propose Dual-OPSD, a trajectory-quality-aware self-
+distillation method that transfers corrective distributions
+for risky trajectories while preserving reliable planning.
+• We develop a progressive teacher-construction strategy
+that combines driving-knowledge pretraining, planning-
+and-refinement supervision, and self-refinement rejection
+sampling to support stable guidance internalization and
+efficient single-pass planning.
+2
+Related Work
+2.1
+VLA models for autonomous driving
+VLMs and VLA models have been increasingly studied for
+autonomous driving, with applications ranging from scene
+understanding (Jiang et al. 2024, 2025a; Marcu et al. 2024)
+to direct trajectory prediction (Xing et al. 2025; Zhao et al.
+2025; Liu et al. 2025; Fu et al. 2025). To improve inter-
+pretability and planning accuracy, several methods introduce
+explicit intermediate reasoning, such as Chain-of-Thought
+reasoning (Liu et al. 2025; Zhao et al. 2025; Luo et al.
+2025b). Their training pipelines typically begin with su-
+pervised fine-tuning on driving data and subsequently ap-
+ply reinforcement learning, including Group Relative Pol-
+icy Optimization, to improve planning performance (Luo
+et al. 2025a; Zhou et al. 2025b). Although scalar planning
+rewards provide a direct measure of trajectory quality, they
+offer limited supervision when diverse failure causes receive
+similarly low scores (Chen et al. 2026a). This issue is es-
+pecially pronounced in long-tail scenarios, where repeated
+low-reward rollouts can make policy optimization inefficient.
+ELF-VLA (Luo et al. 2026a) addresses this limitation by us-
+ing teacher-generated feedback to diagnose planning failures
+and construct improved training samples. Our work instead
+focuses on internalizing the benefit of such structured guid-
+ance so that it is no longer required during inference.
+2.2
+On-Policy Distillation and On-Policy
+Self-Distillation
+On-policy distillation (OPD) and on-policy self-distillation
+(OPSD) are post-training approaches that supervise a stu-
+dent on trajectories sampled from its own policy (Agarwal
+et al. 2024; Zhao et al. 2026). Unlike off-policy distillation,
+this formulation queries a teacher with student-generated
+prefixes, thereby providing token-level supervision over the
+distribution encountered during training. OPD commonly
+relies on a separately trained teacher, whereas OPSD can
+derive the teacher from the same model by conditioning
+it on privileged information (Ye et al. 2026; Sang et al.
+2026), such as ground-truth answers, additional instructions,
+or preference information. Recent work has combined dense
+token-level signals from OPD with reinforcement learning
+for VLA post-training (Zhong et al. 2026), but its applica-
+tion to autonomous-driving planning remains limited. We
+formulate Reflective Guidance as privileged information and
+use it to obtain corrective teacher distributions on student-
+generated trajectories. Dual-OPSD further accounts for tra-
+jectory quality by distilling corrections only when needed
+and preserving decisions that are already reliable.
+3
+Method
+Figure 2 illustrates the overall framework of our Reflect-
+VLA, which comprises a three-stage training pipeline that
+
+
+Figure 2: Overview of Reflect-VLA. Reflective Guidance is constructed from trajectory evaluation and used as privileged
+information to train a refinement-capable teacher. Dual-OPSD then transfers corrective distributions to the student on risky
+trajectories while preserving reliable student trajectories. Only the student is used for single-pass inference.
+equips the model with trajectory prediction and refinement
+capabilities, followed by the proposed Dual-Path On-Policy
+Self-Distillation.
+3.1
+VLA Inputs Formulation
+We formulate end-to-end driving planning as conditional
+autoregressive trajectory generation. The standard driving
+input is
+qbase = (Icam, qcmd, qego, qhis) ,
+(1)
+where Icam denotes the front-view camera observation, qcmd
+is the high-level navigation command (e.g., Go Straight,
+Turn Left, and Turn Right), qego contains the ego-vehicle
+state (e.g., velocity and acceleration), and qhis represents the
+historical ego trajectory. Given qbase, the VLA autoregres-
+sively predicts future waypoints:
+o = {(xt, yt, ht)}T
+t=1 ∼πθ(o | qbase),
+(2)
+where (xt, yt, ht) denotes the position and heading at
+the t-th future timestep. To cast continuous trajectory
+prediction as autoregressive token generation, we con-
+vert the absolute waypoints into relative displacements
+{(∆xt, ∆yt, ∆ht)}T
+t=1 and discretize these relative displace-
+ments into special trajectory tokens. Details are provided in
+Appendix D.
+To improve the planner’s reasoning ability during training,
+we augment the base input with Reflective Guidance, forming
+the guidance-conditioned input
+qgui =
+ qbase, oinit, g
+
+,
+(3)
+where oinit is the low-quality initial trajectory predicted un-
+der qbase, and g denotes the designed Reflective Guidance
+Corpus, which comprises four components: (1) Trajectory
+Verdict, summarizing the overall trajectory evaluation; (2)
+Planning Diagnosis, identifying the dominant causes of plan-
+ning failures; (3) Expert Alignment, relating these failures
+to discrepancies from expert trajectory; and (4) Refinement
+Directive, suggesting high-level corrective actions. The Re-
+flective Guidance is designed to expose the reasoning process
+behind trajectory refinement, thereby guiding the model to
+generate safer and higher-quality trajectories. Details of the
+guidance construction are provided in Appendix D.
+During training, the model is conditioned on either qbase or
+qgui. With qbase, it learns direct trajectory generation, whereas
+the additional reflective guidance in qgui enables trajectory
+diagnosis and correction. Our goal is to distill the planning
+capability elicited by the guidance-conditioned input into di-
+rect trajectory generation through OPSD, enabling the model
+to retain strong planning and reasoning abilities even without
+guidance during inference:
+o∗= arg max
+o
+P(o | qbase).
+(4)
+3.2
+Data Construction
+To develop both direct trajectory prediction and guidance-
+conditioned trajectory refinement capabilities, we first pre-
+pare the corresponding training data as follows.
+Pretraining and Base Data.
+We first collect a diverse
+set of open-source driving QA datasets, including Lin-
+goQA (Marcu et al. 2024), DriveGPT4 (Xu et al. 2024),
+Senna (Jiang et al. 2024), DriveLM (Sima et al. 2024),
+NuScenes-QA (Qian et al. 2024), NuInstruct (Ding et al.
+2024), and DriveLMM (Ishaq et al. 2025). Pretraining on
+
+
+these datasets equips the general VLM with domain-specific
+knowledge for autonomous driving, including road seman-
+tics, traffic regulations, and driving-intent understanding.
+We then construct the base planning dataset, with each
+sample containing a front-view camera image, a high-level
+navigation command, the ego-vehicle state, a historical tra-
+jectory, and a ground-truth future trajectory represented as
+discretized special trajectory tokens.
+Guidance-conditioned Refinement Data.
+To enable the
+model to refine low-quality initial trajectories, we further
+construct a guidance-conditioned refinement dataset. Specif-
+ically, for each driving scenario, we first build a candidate
+trajectory set Ocan = Oplan ∪Orule, where Oplan denotes
+the trajectories generated by a classical planner, while Orule
+consists of trajectories obtained through rule-based pertur-
+bation. Each candidate is assessed using the NAVSIM eval-
+uator (Dauner et al. 2024), together with map constraints
+and trajectory-level analysis. Based on the resulting scores,
+low-quality candidates are selected as the initial trajecto-
+ries oinit for refinement. In particular, the NAVSIM evalu-
+ator provides the Predictive Driver Model Score (PDMS),
+which comprehensively measures collision safety, drivable-
+area compliance, time-to-collision, ego progress, and over-
+all trajectory quality. The Reflective Guidance g is derived
+from the evaluation results, transforming scalar scores into
+structured, trajectory-specific corrective supervision. Conse-
+quently, training samples in the guidance-conditioned refine-
+ment dataset can be represented as:
+Drefine = {(qgui, oref)} = {(qbase, oinit, g, oref)}.
+(5)
+where oref denotes the target refined trajectory, which can
+either be the ground-truth trajectory or a high-quality refined
+trajectory verified by the trajectory evaluator.
+Self-Refinement Rejection Sampling.
+Training on the
+constructed planning and refinement data enables the model
+to leverage guidance for trajectory correction. However, be-
+cause the initial trajectories in this dataset are generated of-
+fline, they may not fully capture the failure patterns encoun-
+tered during model rollout. To mitigate this distribution mis-
+match, we introduce Self-Refinement Rejection Sampling.
+Specifically, the model first predicts an initial trajectory from
+the base input. When the trajectory is identified as problem-
+atic, the same model subsequently refines its prediction in
+response to the corresponding guidance. We retain only re-
+fined trajectories that satisfy the validity constraints and out-
+perform their initial counterparts, and use these high-quality
+samples to further optimize the model.
+3.3
+Three-stage SFT for Planning and Refinement
+We adopt a progressive three-stage training strategy con-
+sisting of driving-knowledge pretraining, planning-and-
+refinement supervised fine-tuning, and self-refinement rejec-
+tion sampling. In the first stage, the model acquires essential
+domain knowledge for autonomous driving. In the second
+stage, it is trained on a mixture of base planning data and
+guidance-conditioned refinement data, enabling both direct
+trajectory generation and trajectory refinement. In the final
+stage, Self-refinement rejection sampling trains the model
+to correct failures from its own unguided rollouts, thereby
+yielding a more reliable teacher for subsequent on-policy
+self-distillation.
+3.4
+Dual-Path On-Policy Self-Distillation
+After the three-stage training process, the model acquires
+the ability to refine trajectories with reflective guidance. In-
+spired by on-policy self-distillation for LLMs (Zhao et al.
+2026), where a single model serves as both teacher and stu-
+dent under different input contexts, we propose Dual-Path
+Online Policy Self-Distillation (Dual-OPSD), which dis-
+tills the planning capability elicited by guidance-conditioned
+inputs into the model’s direct trajectory generation behavior.
+In Dual-OPSD, the same model serves as both the student
+and the teacher under different input contexts. With only the
+base input qbase, it acts as the student and performs on-policy
+rollout:
+oS ∼πθ(·|qbase),
+(6)
+The generated trajectory is then evaluated by the NAVSIM
+evaluator. According to the resulting PDMS r, the rollout
+samples are divided into reliable trajectories O+ and risky
+trajectories O−using a predefined threshold s:
+oS ∈
+O+,
+r ≥s,
+O−,
+r < s,
+(7)
+This categorization enables two complementary optimiza-
+tion paths. For reliable trajectories in O+, we adopt a self-
+preservation objective to maintain the student’s existing plan-
+ning capability:
+Lpreserve = −
+X
+t
+log πθ(oS
+t |qbase, oS
+<t),
+(8)
+where the generated trajectory serves as the self-supervised
+target. This prevents unnecessary modification of already
+valid behaviors during distillation.
+For risky trajectories in O−, we construct the correspond-
+ing guidance g based on the student rollout and evaluation
+results. A frozen version of the same model serves as the
+teacher and receives the privileged input qT = (qbase, oS, g),
+while the student remains restricted to qbase. The teacher’s
+corrective planning preferences are transferred to the stu-
+dent by minimizing the token-level reverse KL divergence
+between their predictive distributions:
+Ldistill =
+X
+t
+DKL
+ πstu(·|qbase, oS
+<t)∥πtea(·|qT , oS
+<t)
+
+, (9)
+The overall Dual-OPSD objective combines the two path-
+ways:
+LDual-OPSD = 1{r≥s} ∗Lpreserve + 1{r<s} ∗Ldistill.
+(10)
+By adaptively preserving reliable behaviors and distill-
+ing corrective preferences on failed rollouts, Dual-OPSD en-
+ables the model to progressively internalize the reflective
+planning capability acquired by the guidance-conditioned
+teacher while maintaining guidance-free inference.
+
+
+Method
+Image
+Lidar
+NC↑
+DAC↑
+TTC↑
+CF↑
+EP↑
+PDMS↑
+End-to-End Methods
+UniAD (Hu et al. 2023)
+✓
+97.8
+91.9
+92.9
+100
+78.8
+83.4
+TransFuser (Chitta et al. 2022)
+✓
+✓
+97.7
+92.8
+92.9
+100
+84.0
+84.0
+DiffusionDrive (Liao et al. 2025)
+✓
+✓
+98.2
+96.2
+94.7
+100
+82.2
+88.1
+WoTE (Li et al. 2025b)
+✓
+✓
+98.5
+96.8
+94.9
+99.9
+81.9
+88.3
+DVGT-2 (Zuo et al. 2026)
+✓
+98.7
+97.9
+95.8
+100
+84.3
+90.3
+Vision-Language-Action Methods
+AutoVLA-3B (Zhou et al. 2025b)
+✓
+98.4
+95.6
+98.0
+99.9
+81.9
+89.1
+AutoDrive-R2-7B (Yuan et al. 2025)
+✓
+98.5
+95.9
+95.4
+100
+82.7
+89.1
+DriveVLA-W0-7B (Li et al. 2025a)
+✓
+98.7
+99.1
+94.9
+99.3
+83.3
+90.2
+AdaThinkDrive-8B (Luo et al. 2025a)
+✓
+98.4
+97.8
+95.2
+100
+84.4
+90.3
+ReCogDrive-2B (Li et al. 2025c)
+✓
+97.9
+97.3
+94.6
+100
+87.3
+90.8
+ELF-VLA-8B (Luo et al. 2026a)
+✓
+98.9
+98.1
+96.0
+100
+85.3
+91.0
+Qwen3.5-0.8B (RL)
+✓
+98.6
+96.6
+94.8
+100
+83.7
+88.8
+Qwen3.5-2B (RL)
+✓
+98.4
+97.0
+94.1
+100
+84.5
+89.2
+Qwen3.5-4B (RL)
+✓
+99.1
+98.0
+95.9
+100
+86.0
+91.2
+Reflect-VLA-0.8B
+✓
+98.8
+96.7
+95.8
+100
+83.2
+89.3
+Reflect-VLA-2B
+✓
+98.9
+97.0
+96.3
+100
+84.2
+90.0
+Reflect-VLA-4B
+✓
+98.9
+98.0
+96.7
+100
+86.0
+91.5
+Table 1: Comparison with state-of-the-art methods on NAVSIMv1 with PDMS.
+Method
+NC ↑
+DAC ↑
+DDC ↑
+TLC ↑
+EP ↑
+TTC ↑
+LK ↑
+HC ↑
+EC ↑
+EPDMS ↑
+Ego Status
+93.1
+77.9
+92.7
+99.6
+86.0
+91.5
+89.4
+98.3
+85.4
+64.0
+TransFuser (Chitta et al. 2022)
+96.9
+89.9
+97.8
+99.7
+87.1
+95.4
+92.7
+98.3
+87.2
+76.7
+DiffusionDrive (Liao et al. 2025)
+98.2
+95.9
+99.4
+99.8
+87.5
+97.3
+96.8
+98.3
+87.7
+84.5
+HydraMDP++ (Li et al. 2024)
+98.5
+98.5
+99.5
+99.7
+87.4
+97.9
+95.8
+98.2
+75.7
+85.6
+DriveVLA-W0-7B (Li et al. 2025a)
+98.5
+99.1
+98.0
+99.7
+86.4
+98.1
+93.2
+97.9
+58.9
+86.1
+Reflect-VLA-0.8B
+98.8
+96.7
+99.1
+99.7
+87.5
+98.3
+96.5
+98.3
+86.2
+88.8
+Reflect-VLA-2B
+98.9
+97.0
+99.3
+99.7
+88.1
+98.4
+96.5
+98.4
+86.8
+89.5
+Reflect-VLA-4B
+98.9
+97.9
+99.6
+99.8
+88.8
+98.6
+97.9
+98.3
+87.5
+91.2
+Table 2: Comparison with state-of-the-art methods on NAVSIMv2 with EPDMS.
+4
+Experiment
+4.1
+Implementation details
+Dataset.
+We
+evaluate
+trajectory
+generation
+on
+real-
+world driving scenarios using NAVSIM v1 and NAVSIM
+v2 (Dauner et al. 2024; Cao et al. 2025), both of which pro-
+vide simulation-based planning metrics. NAVSIM v2 fur-
+ther extends the scope of evaluation to traffic-rule compli-
+ance, lane-level behavior, and temporal consistency. To as-
+sess whether the learned driving capabilities generalize to in-
+teractive decision making, we additionally evaluate Reflect-
+VLA on the closed-loop Bench2Drive benchmark (Jia et al.
+2024). Together, these benchmarks provide a comprehen-
+sive evaluation of both trajectory-level planning quality and
+closed-loop driving performance. Detailed dataset splits and
+evaluation settings are provided in Appendix D.
+Metrics.
+To evaluate trajectory prediction and closed-loop
+driving performance, we employ benchmark-specific core
+metrics. We use the Predictive Driver Model Score (PDMS)
+for NAVSIM v1 (Dauner et al. 2024) and the Extended Pre-
+dictive Driver Model Score (EPDMS) for NAVSIM v2 (Cao
+et al. 2025). For Bench2Drive, we report Driving Score (DS),
+Success Rate (SR), Efficiency (Effi), and Comfort (Comf).
+Detailed metric definitions are provided in Appendix E.
+Training Details.
+We use Qwen3.5-0.8B/2B/4B (Team
+2026) as the base model. Training consists of three stages:
+(1) driving-knowledge pretraining for 2 epochs with batch
+size 1 and a learning rate of 1 × 10−5; (2) fine-tuning on
+the planning, refinement, and rejection-sampling data for 2
+epochs with batch size 4 and a learning rate of 4×10−5; and
+(3) on-policy self-distillation for 2 epochs with batch size 2
+and learning rates of 8 × 10−6 and 2 × 10−6, respectively.
+Training is conducted on 8 NVIDIA H20 GPUs. Further
+details are provided in Appendix E.
+4.2
+Performance Comparison
+NAVSIM Benchmark.
+Table 1 and Table 2 report the plan-
+ning performance on NAVSIM v1 and NAVSIM v2, respec-
+tively. On NAVSIM v1, Reflect-VLA consistently improves
+
+
+Method
+DS↑
+SR (%)↑
+Effi↑
+Comf↑
+End-to-End Methods
+VAD (Jiang et al. 2023)
+42.35
+15.00
+157.94
+46.01
+UniAD-Base (Hu et al. 2023)
+45.81
+16.36
+129.21
+43.58
+DriveAdapter (Jia et al. 2023)
+64.22
+33.08
+70.22
+16.01
+Vision-Language-Action Methods
+ReasonPlan (Liu et al. 2025)
+64.01
+34.55
+180.64
+25.63
+MindDriver (Zhang et al. 2026)
+65.48
+39.55
+143.21
+34.63
+ORION (Fu et al. 2025)
+77.74
+54.62
+151.48
+17.38
+AutoVLA (Zhou et al. 2025b)
+78.84
+57.73
+146.93
+39.33
+Reflect-VLA-0.8B
+76.03
+54.54
+183.47
+28.06
+Reflect-VLA-2B
+77.39
+55.90
+174.15
+27.89
+Reflect-VLA-4B
+80.15
+59.09
+212.20
+21.92
+Table 3: Comparison with state-of-the-art methods on the
+Bench2Drive benchmark with DS (Driving Score), SR (Suc-
+cess Rate), Effi (Efficiency), and Comf (Comfortness).
+Method
+Student
+Teacher
+OPSD
+Reflect-VLA-0.8B
+86.3
+92.4
+89.3
+Reflect-VLA-2B
+87.4
+92.7
+90.0
+Reflect-VLA-4B
+88.4
+93.2
+91.5
+Table 4: Planning performance of the student, teacher, and
+student after Dual-OPSD on NAVSIMv1 using PDMS, where
+student and teacher refer to the same model after three-stage
+SFT performing trajectory prediction without and with guid-
+ance, respectively.
+over the corresponding RL baselines across all model scales.
+Reflect-VLA-0.8B, 2B, and 4B achieve PDMS scores of
+89.3, 90.0, and 91.5, outperforming their corresponding RL
+baselines by 0.5, 0.8, and 0.3 points, respectively. Notably,
+Reflect-VLA-4B achieves the best overall PDMS score, with
+improved TTC while maintaining strong performance on
+other metrics. These results validate the effectiveness and
+scalability of progressive guidance internalization: rather
+than relying solely on sparse scalar rewards, Reflect-VLA
+converts structured reflective guidance into fine-grained dis-
+tributional supervision, enabling the policy to directly absorb
+trajectory-correction preferences. Together with its reduced
+training cost discussed below, Reflect-VLA provides a favor-
+able balance between planning performance and optimiza-
+tion efficiency.
+Bench2Drive Benchmark.
+Table 3 shows the closed-loop
+driving performance on the Bench2Drive benchmark. Our
+Reflect-VLA-4B achieves the best Driving Score (DS) of
+80.15, Efficiency (Effi) of 212.20, and Success Rate (SR)
+of 59.09%, outperforming existing baselines, including Au-
+toVLA. This indicates that the guidance internalization pos-
+sesses strong generalization and effectiveness in closed-loop
+evaluations involving complex interactions.
+Effectiveness of Reflective Guidance.
+Table 4 compares
+the performance of the student, the guidance-conditioned
+teacher, and the student after Dual-OPSD. Across all model
+scales, reflective guidance consistently improves planning
+Base Model
+SFT
+GRPO
+OPSD
+Qwen3.5-0.8B
+0.11
+5.3
+1.3
+Qwen3.5-2B
+0.26
+22.3
+1.7
+Qwen3.5-4B
+0.43
+33.4
+2.4
+Table 5: Comparison of training time (hours) per 10k samples
+for SFT, GRPO, and OPSD across different model scales.
+performance, with the teacher outperforming the unguided
+student by 6.1, 5.3, and 4.8 PDMS for the 0.8B, 2B, and 4B
+models, respectively. After Dual-OPSD, the student gains
+3.0, 2.6, and 3.1 PDMS over its original performance, sub-
+stantially narrowing the gap to the teacher. These results
+demonstrate that Dual-OPSD effectively internalizes the
+planning knowledge elicited by reflective guidance, enabling
+Reflect-VLA to retain most of its benefits while requiring no
+guidance during inference.
+Training Efficiency.
+Table 5 compares the training time
+of SFT, GRPO, and OPSD across different model scales.
+It shows that OPSD consistently requires less training time
+than GRPO. For the 0.8B model, OPSD reduces the train-
+ing time per 10,000 samples from 5.3 to 1.3 hours, corre-
+sponding to a 4.1× speedup. This advantage increases with
+model scale: OPSD is 13.1× faster for the 2B model and
+13.9× faster for the 4B model, requiring only 1.7 and 2.4
+hours, respectively. Compared with GRPO, which requires
+expensive online exploration and iterative reward-based opti-
+mization, OPSD transfers guidance-conditioned knowledge
+through dense token-level supervision, enabling substantially
+more efficient training while maintaining competitive plan-
+ning performance.
+4.3
+Qualitative Analysis
+Figure 3 presents qualitative comparisons among the un-
+guided student, the guidance-conditioned teacher, and the
+distilled student across representative driving scenarios. In
+the first scenario, the unguided student predicts a trajectory
+with potential collision risk, whereas the teacher produces
+a safer trajectory with reduced longitudinal progress. Dual-
+OPSD internalizes this corrective behavior into the student,
+enabling safer trajectory generation without reflective guid-
+ance at inference time. The token-level distributions provide
+further insight into this transfer. Given the same student-
+generated trajectory prefix, the teacher assigns the highest
+probability to the more conservative special trajectory token
+<|x_208|>, while the student initially favors <|x_215|>. Since
+the trajectory tokens encode relative displacements quantized
+at a resolution of 0.01 m, these tokens correspond to forward
+displacements of 2.08 m and 2.15 m, respectively. By min-
+imizing the reverse KL divergence, Dual-OPSD aligns the
+student distribution with the teacher distribution and trans-
+fers this fine-grained correction preference. The second sce-
+nario shows a similar effect for a drivable-area violation:
+the teacher corrects the lateral deviation, and the distilled
+student successfully reproduces a feasible trajectory with-
+out guidance. Additional qualitative results are provided in
+Appendix F.
+
+
+Figure 3: Qualitative comparisons and token-level analysis. Left and middle: trajectories generated by the unguided student,
+guidance-conditioned teacher, and distilled student. Right: distributions over special trajectory tokens at critical decoding steps
+under the same student-generated prefix. Each token encodes a relative displacement quantized at 0.01 m resolution; e.g.,
+<|x_208|> represents a 2.08 m forward displacement for the next waypoint.
+Model
+NC↑
+DAC↑
+TTC↑
+CF↑
+EP↑
+PDMS↑
+SFT
+98.5
+96.3
+94.9
+100
+81.7
+88.1
+Pre+SFT
+98.7
+96.5
+95.4
+100
+82.1
+88.5
+Pre+SFT+RS
+98.6
+96.4
+95.3
+100
+82.2
+88.4
+Pre+SFT+OPSD
+98.9
+97.1
+95.8
+100
+84.7
+90.2
+Pre+SFT+RS+OPSD
+98.9
+98.0
+96.7
+100
+86.0
+91.5
+Table 6: Ablation study of training stages. We evaluate the
+effect of pretraining, supervised fine-tuning, rejection sam-
+pling and on-policy self-distillation on driving performance
+using NAVSIM evaluation metrics with the 4B model.
+4.4
+Ablation Studies
+Ablation on Training Stages.
+Table 6 examines the con-
+tribution of each training stage. Pretraining improves PDMS
+from 88.1 to 88.5, confirming the benefit of domain-specific
+initialization. Self-Refinement Rejection Sampling alone
+slightly reduces PDMS to 88.4, likely due to partial for-
+getting of base planning ability during further training on
+refined samples. However, combining it with OPSD raises
+the score from 90.2 to 91.5, indicating that refinement sam-
+ples derived from the model’s own rollouts better align the
+guidance-conditioned behavior with the failure distribution
+encountered during on-policy distillation, thereby providing
+more effective supervision for guidance internalization.
+Ablation on Reflective Guidance Components.
+Table 7
+evaluates the contribution of each reflective guidance compo-
+nent. The complete design achieves the best PDMS of 93.2,
+while removing any component degrades performance, con-
+firming the effectiveness of our structured guidance design.
+In particular, Expert Alignment and Planning Diagnosis yield
+ID Trajectory
+Planning
+Expert
+Refinement PDMS↑
+Verdict
+Diagnosis Alignment
+Directive
+1
+✓
+✓
+✓
+93.1
+2
+✓
+✓
+✓
+92.4
+3
+✓
+✓
+✓
+92.1
+4
+✓
+✓
+✓
+92.9
+5
+✓
+✓
+✓
+✓
+93.2
+Table 7: Ablation study of reflective guidance components
+for the teacher model. We report the NAVSIM PDMS of the
+4B teacher when conditioned on different combinations of
+guidance components.
+the largest gains, highlighting the importance of identifying
+planning failures and relating them to deviations from expert
+behavior.
+5
+Conclusion
+In this paper, we introduce Reflect-VLA, a training frame-
+work that internalizes reflective guidance into VLA mod-
+els for autonomous driving. Through dual-path on-policy
+self-distillation, Reflect-VLA transfers token-level correc-
+tive distributions from guidance-conditioned generation to
+direct trajectory prediction, enabling strong planning with-
+out explicit guidance or iterative refinement at inference
+time. Experiments on NAVSIM and Bench2Drive demon-
+strate competitive driving performance and up to a 10× train-
+ing speedup over reinforcement-learning baselines, while re-
+taining efficient, guidance-free single-pass planning across
+different model scales.
+
+
+References
+Agarwal,
+R.;
+Vieillard,
+N.;
+Zhou,
+Y.;
+Stanczyk,
+P.;
+Ramos Garea, S.; Geist, M.; and Bachem, O. 2024. On-
+policy distillation of language models: Learning from self-
+generated mistakes. In International Conference on Learning
+Representations, volume 2024, 21246–21263.
+Cao, W.; Hallgarten, M.; Li, T.; Dauner, D.; Gu, X.; Wang,
+C.; Miron, Y.; Aiello, M.; Li, H.; Gilitschenski, I.; et al. 2025.
+Pseudo-simulation for autonomous driving. arXiv preprint
+arXiv:2506.04218.
+Chen, L.; Wu, P.; Chitta, K.; Jaeger, B.; Geiger, A.; and
+Li, H. 2024. End-to-end autonomous driving: Challenges
+and frontiers. IEEE Transactions on Pattern Analysis and
+Machine Intelligence.
+Chen, Q.; Li, F.; Luo, Y.; Zhang, Z.; Sun, H.; Li, F.; Wang,
+B.; Chen, G.; Ji, Y.; Deng, J.; et al. 2026a. DriveReward:
+A Comprehensive Dataset and Generative Vision-Language
+Reward Model for Autonomous Driving.
+arXiv preprint
+arXiv:2606.08525.
+Chen, Q.; Li, F.; Xu, S.; Lai, Z.; Xie, Z.; Luo, Y.; Jiang, S.;
+Li, H.; Chen, L.; Wang, B.; et al. 2026b. VILTA: A VLM-in-
+the-loop adversary for enhancing driving policy robustness.
+In Proceedings of the AAAI Conference on Artificial Intelli-
+gence, volume 40, 2984–2992.
+Chitta, K.; Prakash, A.; Jaeger, B.; Yu, Z.; Renz, K.; and
+Geiger, A. 2022.
+Transfuser: Imitation with transformer-
+based sensor fusion for autonomous driving. IEEE transac-
+tions on pattern analysis and machine intelligence, 45(11):
+12878–12895.
+Dauner, D.; Hallgarten, M.; Li, T.; Weng, X.; Huang, Z.;
+Yang, Z.; Li, H.; Gilitschenski, I.; Ivanovic, B.; Pavone, M.;
+et al. 2024. Navsim: Data-driven non-reactive autonomous
+vehicle simulation and benchmarking. Advances in Neural
+Information Processing Systems, 37: 28706–28719.
+Ding, X.; Han, J.; Xu, H.; Liang, X.; Zhang, W.; and Li, X.
+2024. Holistic autonomous driving understanding by bird’s-
+eye-view injected multi-modal large models. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pat-
+tern Recognition, 13668–13677.
+Fu, H.; Zhang, D.; Zhao, Z.; Cui, J.; Liang, D.; Zhang, C.;
+Zhang, D.; Xie, H.; Wang, B.; and Bai, X. 2025. Orion:
+A holistic end-to-end autonomous driving framework by
+vision-language instructed action generation. arXiv preprint
+arXiv:2503.19755.
+He, C.; Luo, Y.; Li, F.; Xu, S.; and Wen, F. 2026. DriveVer:
+Lightweight Trajectory Evaluator as Test-Time Verifier for
+Autonomous Driving. arXiv preprint arXiv:2607.00399.
+Hu, Y.; Yang, J.; Chen, L.; Li, K.; Sima, C.; Zhu, X.; Chai,
+S.; Du, S.; Lin, T.; Wang, W.; et al. 2023. Planning-oriented
+autonomous driving. In Proceedings of the IEEE/CVF con-
+ference on computer vision and pattern recognition, 17853–
+17862.
+Huang, Z.; Tang, T.; Chen, S.; Lin, S.; Jie, Z.; Ma, L.; Wang,
+G.; and Liang, X. 2024. Making large language models better
+planners with reasoning-decision alignment. In European
+Conference on Computer Vision, 73–90. Springer.
+Ishaq, A.; Lahoud, J.; More, K.; Thawakar, O.; Thawkar, R.;
+Dissanayake, D.; Ahsan, N.; Li, Y.; Khan, F. S.; Cholakkal,
+H.; et al. 2025.
+Drivelmm-o1: A step-by-step reasoning
+dataset and large multimodal model for driving scenario un-
+derstanding. arXiv preprint arXiv:2503.10621.
+Jia, X.; Gao, Y.; Chen, L.; Yan, J.; Liu, P. L.; and Li, H.
+2023. Driveadapter: Breaking the coupling barrier of per-
+ception and planning in end-to-end autonomous driving. In
+Proceedings of the IEEE/CVF International Conference on
+Computer Vision, 7953–7963.
+Jia, X.; Yang, Z.; Li, Q.; Zhang, Z.; and Yan, J. 2024.
+Bench2drive: Towards multi-ability benchmarking of closed-
+loop end-to-end autonomous driving. Advances in Neural
+Information Processing Systems, 37: 819–844.
+Jiang, B.; Chen, S.; Liao, B.; Zhang, X.; Yin, W.; Zhang, Q.;
+Huang, C.; Liu, W.; and Wang, X. 2024. Senna: Bridging
+large vision-language models and end-to-end autonomous
+driving. arXiv preprint arXiv:2410.22313.
+Jiang, B.; Chen, S.; Xu, Q.; Liao, B.; Chen, J.; Zhou, H.;
+Zhang, Q.; Liu, W.; Huang, C.; and Wang, X. 2023. Vad: Vec-
+torized scene representation for efficient autonomous driv-
+ing. In Proceedings of the IEEE/CVF International Confer-
+ence on Computer Vision, 8340–8350.
+Jiang, B.; Chen, S.; Zhang, Q.; Liu, W.; and Wang, X. 2025a.
+Alphadrive: Unleashing the power of vlms in autonomous
+driving via reinforcement learning and reasoning.
+arXiv
+preprint arXiv:2503.07608.
+Jiang, S.; Huang, Z.; Qian, K.; Luo, Z.; Zhu, T.; Zhong,
+Y.; Tang, Y.; Kong, M.; Wang, Y.; Jiao, S.; et al. 2025b. A
+Survey on Vision-Language-Action Models for Autonomous
+Driving. arXiv preprint arXiv:2506.24044.
+Li, Y.; Shang, S.; Liu, W.; Zhan, B.; Wang, H.; Wang,
+Y.; Chen, Y.; Wang, X.; An, Y.; Tang, C.; et al. 2025a.
+DriveVLA-W0: World Models Amplify Data Scaling Law
+in Autonomous Driving. arXiv preprint arXiv:2510.12796.
+Li, Y.; Wang, Y.; Liu, Y.; He, J.; Fan, L.; and Zhang, Z.
+2025b. End-to-end driving with online trajectory evaluation
+via bev world model. arXiv preprint arXiv:2504.01941.
+Li, Y.; Xiong, K.; Guo, X.; Li, F.; Yan, S.; Xu, G.; Zhou, L.;
+Chen, L.; Sun, H.; Wang, B.; et al. 2025c. ReCogDrive: A Re-
+inforced Cognitive Framework for End-to-End Autonomous
+Driving. arXiv preprint arXiv:2506.08052.
+Li, Z.; Li, K.; Wang, S.; Lan, S.; Yu, Z.; Ji, Y.; Li, Z.; Zhu, Z.;
+Kautz, J.; Wu, Z.; et al. 2024. Hydra-mdp: End-to-end mul-
+timodal planning with multi-target hydra-distillation. arXiv
+preprint arXiv:2406.06978.
+Liao, B.; Chen, S.; Yin, H.; Jiang, B.; Wang, C.; Yan, S.;
+Zhang, X.; Li, X.; Zhang, Y.; Zhang, Q.; et al. 2025. Dif-
+fusiondrive: Truncated diffusion model for end-to-end au-
+tonomous driving. In Proceedings of the Computer Vision
+and Pattern Recognition Conference, 12037–12047.
+Liu, X.; Zhong, Z.; Guo, Y.; Liu, Y.-F.; Su, Z.; Zhang, Q.;
+Wang, J.; Gao, Y.; Zheng, Y.; Lin, Q.; et al. 2025. Rea-
+sonPlan: Unified Scene Prediction and Decision Reason-
+ing for Closed-loop Autonomous Driving. arXiv preprint
+arXiv:2505.20024.
+
+
+Lu, J.; Guan, J.; Huang, Z.; Li, J.; Li, G.; Kong, L.; Li, Y.;
+Wang, H.; Xu, S.; Luo, Y.; et al. 2026. Xiaomi OneVL: One-
+Step Latent Reasoning and Planning with Vision-Language
+Explanation. arXiv preprint arXiv:2604.18486.
+Luo, Y.; Li, F.; Chen, Q.; Xu, S.; Liu, J.; Song, Z.; Yang, Z.-x.;
+and Wen, F. 2026a. Unleashing vla potentials in autonomous
+driving via explicit learning from failures. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, 24833–24842.
+Luo, Y.; Li, F.; Xu, S.; Ji, Y.; Zhang, Z.; Wang, B.; Shen, Y.;
+Cui, J.; Chen, L.; Chen, G.; et al. 2026b. Last-vla: Thinking
+in latent spatio-temporal space for vision-language-action in
+autonomous driving. arXiv preprint arXiv:2603.01928.
+Luo, Y.; Li, F.; Xu, S.; Lai, Z.; Yang, L.; Chen, Q.; Luo, Z.;
+Xie, Z.; Jiang, S.; Liu, J.; et al. 2025a. AdaThinkDrive: Adap-
+tive Thinking via Reinforcement Learning for Autonomous
+Driving. arXiv preprint arXiv:2509.13769.
+Luo, Z.; Qian, K.; Wang, J.; Luo, Y.; Miao, J.; Fu, Z.;
+Wang, Y.; Jiang, S.; Huang, Z.; Hu, Y.; et al. 2025b.
+MTRDrive: Memory-Tool Synergistic Reasoning for Ro-
+bust Autonomous Driving in Corner Cases. arXiv preprint
+arXiv:2509.20843.
+Marcu, A.-M.; Chen, L.; Hünermann, J.; Karnsund, A.;
+Hanotte, B.; Chidananda, P.; Nair, S.; Badrinarayanan, V.;
+Kendall, A.; Shotton, J.; et al. 2024. LingoQA: Visual ques-
+tion answering for autonomous driving. In European Con-
+ference on Computer Vision, 252–269. Springer.
+Qian, T.; Chen, J.; Zhuo, L.; Jiao, Y.; and Jiang, Y.-G.
+2024. Nuscenes-qa: A multi-modal visual question answer-
+ing benchmark for autonomous driving scenario. In Pro-
+ceedings of the AAAI Conference on Artificial Intelligence,
+volume 38, 4542–4550.
+Sang, H.; Xu, Y.; Zhou, Z.; He, R.; Wang, Z.; and Sun,
+J. 2026. CRISP: Compressed Reasoning via Iterative Self-
+Policy Distillation. arXiv preprint arXiv:2603.05433.
+Sima, C.; Renz, K.; Chitta, K.; Chen, L.; Zhang, H.; Xie, C.;
+Beißwenger, J.; Luo, P.; Geiger, A.; and Li, H. 2024. Drivelm:
+Driving with graph visual question answering. In European
+conference on computer vision, 256–274. Springer.
+Team, Q. 2026. Qwen3.5: Accelerating Productivity with
+Native Multimodal Agents.
+Xing, S.; Qian, C.; Wang, Y.; Hua, H.; Tian, K.; Zhou, Y.; and
+Tu, Z. 2025. Openemma: Open-source multimodal model for
+end-to-end autonomous driving. In Proceedings of the Win-
+ter Conference on Applications of Computer Vision, 1001–
+1009.
+Xu, Z.; Zhang, Y.; Xie, E.; Zhao, Z.; Guo, Y.; Wong, K.-Y. K.;
+Li, Z.; and Zhao, H. 2024. DriveGPT4: Interpretable End-to-
+end Autonomous Driving via Large Language Model. arXiv
+preprint arXiv:2310.01412.
+Yang, L.; Huang, J.; Huang, Z.; Liu, S.; and Yang, H. 2026.
+Judge, Then Drive: A Critic-Centric Vision Language Ac-
+tion Framework for Autonomous Driving. arXiv preprint
+arXiv:2604.27366.
+Ye, T.; Dong, L.; Wu, X.; Huang, S.; and Wei, F. 2026.
+On-Policy Context Distillation for Language Models. arXiv
+preprint arXiv:2602.12275.
+Yuan, Z.; Qian, C.; Tang, J.; Chen, R.; Song, Z.; Sun, L.;
+Chu, X.; Cai, Y.; Zhang, D.; and Li, S. 2025. AutoDrive-
+R 2: Incentivizing Reasoning and Self-Reflection Capacity
+for VLA Model in Autonomous Driving.
+arXiv preprint
+arXiv:2509.01944.
+Zeng, S.; Chang, X.; Xie, M.; Liu, X.; Bai, Y.; Pan, Z.; Xu,
+M.; Wei, X.; and Guo, N. 2025. Futuresightdrive: Thinking
+visually with spatio-temporal cot for autonomous driving.
+arXiv preprint arXiv:2505.17685.
+Zhang, L.; Yuan, Y.; Wu, C.; Chang, X.; Cai, X.; Zeng, S.;
+Shi, L.; Wang, S.; Zhang, H.; and Xu, M. 2026.
+Mind-
+Driver: Introducing Progressive Multimodal Reasoning for
+Autonomous Driving. arXiv preprint arXiv:2602.21952.
+Zhao, R.; Yuan, Q.; Li, J.; Hu, H.; Li, Y.; Zheng, C.; and
+Gao, F. 2025. Sce2drivex: A generalized mllm framework for
+scene-to-drive learning. arXiv preprint arXiv:2502.14917.
+Zhao, S.; Xie, Z.; Liu, M.; Huang, J.; Pang, G.; Chen, F.;
+and Grover, A. 2026. Self-Distilled Reasoner: On-Policy
+Self-Distillation for Large Language Models. arXiv preprint
+arXiv:2601.18734.
+Zheng, W.; Xia, Z.; Huang, Y.; Zuo, S.; Zhou, J.; and Lu,
+J. 2024. Doe-1: Closed-loop autonomous driving with large
+world model. arXiv preprint arXiv:2412.09627.
+Zhong, Z.; Yan, H.; Li, J.; He, J.; Zhang, T.; and Li, H. 2026.
+VLA-OPD: Bridging Offline SFT and Online RL for Vision-
+Language-Action Models via On-Policy Distillation. arXiv
+preprint arXiv:2603.26666.
+Zhou, X.; Han, X.; Yang, F.; Ma, Y.; Tresp, V.; and Knoll, A.
+2025a. Opendrivevla: Towards end-to-end autonomous driv-
+ing with large vision language action model. arXiv preprint
+arXiv:2503.23463.
+Zhou, Z.; Cai, T.; Zhao, S. Z.; Zhang, Y.; Huang, Z.; Zhou,
+B.; and Ma, J. 2025b. AutoVLA: A Vision-Language-Action
+Model for End-to-End Autonomous Driving with Adaptive
+Reasoning and Reinforcement Fine-Tuning. arXiv preprint
+arXiv:2506.13757.
+Zuo, S.; Xie, Z.; Zheng, W.; Xu, S.; Li, F.; Li, H.; Chen,
+L.; Yang, Z.-X.; and Lu, J. 2026. Dvgt-2: Vision-geometry-
+action model for autonomous driving at scale. arXiv preprint
+arXiv:2604.00813.
+
+
+A
+Appendix
+In this appendix, we provide additional experimental results,
+data construction details, implementation settings, and qual-
+itative analyses to complement the main paper. Section B
+addresses several potential questions about the proposed
+framework. Section C reports the open-loop planning results
+on nuScenes and ablations on the top-k distillation support,
+KL-divergence direction, and trajectory-routing threshold.
+Section D details trajectory tokenization, Reflective Guid-
+ance construction, pretraining data, and the construction of
+planning, refinement, and self-refinement rejection-sampling
+data. Section E describes the model architecture, training
+parameters, hardware configuration, and benchmark-specific
+evaluation metrics. Finally, Section F presents detailed qual-
+itative examples and token-level analyses of how Dual-OPSD
+transfers corrective planning preferences from the guidance-
+conditioned teacher to the student.
+B
+Question
+Q1: Why not directly use Reflective Guidance during in-
+ference?
+A: Constructing Reflective Guidance requires an initial tra-
+jectory and its evaluation results, which introduces an addi-
+tional prediction–evaluation– refinement loop. Reflect-VLA
+instead treats the guidance as training-time privileged infor-
+mation and internalizes its corrective preferences, enabling
+single-pass inference without an online evaluator.
+Q2: Why does Dual-OPSD use separate learning paths
+for reliable and risky trajectories?
+A: Teacher correction is useful for risky trajectories but
+may unnecessarily modify predictions that are already re-
+liable. Dual-OPSD therefore distills guidance-conditioned
+teacher distributions for risky rollouts while applying self-
+preservation to reliable ones, balancing correction and be-
+havior retention.
+Q3: Why is Self-Refinement Rejection Sampling needed
+before Dual-OPSD?
+A: Offline refinement data may not cover the failure pat-
+terns produced by the model itself. Self-Refinement Rejec-
+tion Sampling exposes the teacher to model-generated fail-
+ures and retains only evaluator-verified improvements, mak-
+ing its corrective behavior better aligned with the student
+rollout distribution.
+Q4: Does Reflective Guidance require an additional VLM
+or manual feedback?
+A: No. Reflective Guidance is constructed through determin-
+istic templates using trajectory-evaluation results, geometric
+differences from a reference trajectory, and the navigation
+command. It therefore provides structured corrective super-
+vision without introducing another VLM or requiring manual
+annotation.
+C
+Additional Results
+C.1
+Main Results
+nuScenes Benchmark. Table 8 reports the open-loop plan-
+ning results on nuScenes. Reflect-VLA-4B achieves state-of-
+the-art performance among VLA-based methods, with the
+lowest average L2 error of 0.41 m and collision rate of 0.14%.
+These results indicate that our approach improves geometric
+trajectory accuracy while maintaining strong planning safety.
+The smaller Reflect-VLA-2B model also achieves competi-
+tive results, with an average L2 error of 0.52 m and collision
+rate of 0.20%, outperforming OpenDriveVLA and approach-
+ing FSDrive. Even the 0.8B variant remains comparable to
+AutoVLA, demonstrating consistent effectiveness across dif-
+ferent model scales.
+C.2
+Ablation Studies
+Effect of Top-k Distillation.
+Table 9 evaluates the size of
+the teacher-distribution support retained during token-level
+distillation. Increasing k from 16 to 64 improves PDMS from
+90.2 to 91.5, since the larger support preserves more infor-
+mative teacher preferences. Further increasing k to 256 or
+the full vocabulary yields only marginal gains, indicating di-
+minishing returns once the dominant teacher distribution is
+sufficiently covered. We therefore use k = 64 as the distilla-
+tion support size.
+Effect of KL-Divergence Direction.
+Table 10 shows that
+reverse KL improves PDMS from 91.0 to 91.5. Reverse KL
+encourages the student to concentrate on the teacher’s high-
+probability corrective tokens and suppress unlikely alterna-
+tives. In contrast, forward KL favors broader distribution
+coverage, which may dilute the teacher’s dominant correction
+preferences. We therefore adopt reverse KL for token-level
+distillation.
+Effect of the Routing Threshold.
+Table 11 shows that in-
+creasing s from 0.65 to 0.85 gradually improves PDMS, as
+more suboptimal trajectories are routed to distillation and
+aligned with the teacher’s corrective preferences. However,
+a larger threshold of 0.95 also distills many already reliable
+trajectories, where unnecessary teacher intervention may dis-
+rupt effective student behaviors. We therefore set s = 0.85
+to balance correction and preservation.
+D
+Data Preparation Details
+D.1
+Trajectory Tokenization
+The future trajectory is represented as o = {(xt, yt, ht)}T
+t=1,
+where xt, yt, and ht denote the longitudinal position, lateral
+position, and heading, respectively. To support autoregres-
+sive trajectory generation, we convert the continuous tra-
+jectory into structured tokens. Specifically, we prepend the
+current ego pose (x0, y0, h0) = (0, 0, 0) and represent the
+motion between consecutive timesteps by its relative dis-
+placement:
+(∆xt, ∆yt, ∆ht) = (xt−xt−1, yt−yt−1, ht−ht−1), (11)
+Each displacement component d ∈{x, y, h} is clipped to
+a predefined range and uniformly quantized with resolution
+δ = 0.01, corresponding to 0.01 m for the longitudinal and
+lateral displacements and 0.01 rad for the heading change:
+kd
+t = round
+clip(∆dt, ld, ud)
+s
+
+,
+(12)
+
+
+Method
+VLM Model
+L2 (m) ↓
+Collision (%) ↓
+1s
+2s
+3s
+Avg.
+1s
+2s
+3s
+Avg.
+Traditional End-to-end Methods
+UniAD* (Hu et al. 2023)
+-
+0.20
+0.42
+0.75
+0.46
+0.02
+0.25
+0.84
+0.37
+Vision-Language-Action Methods
+Doe-1 (Zheng et al. 2024)
+Lumina-mGPT-7B
+0.50
+1.18
+2.11
+1.26
+0.04
+0.37
+1.19
+0.53
+AutoVLA* (Zhou et al. 2025b)
+Qwen2.5-VL-3B
+0.28
+0.66
+1.16
+0.70
+0.14
+0.25
+0.53
+0.31
+RDA-Driver* (Huang et al. 2024)
+LLaVA-7B
+0.23
+0.73
+1.54
+0.80
+0.00
+0.13
+0.83
+0.32
+OpenDriveVLA* (Zhou et al. 2025a)
+Qwen2.5VL-3B
+0.19
+0.58
+1.24
+0.67
+0.02
+0.18
+0.70
+0.30
+FSDrive* (Zeng et al. 2025)
+Qwen2-VL-2B
+0.18
+0.39
+0.77
+0.45
+0.00
+0.06
+0.42
+0.16
+Reflect-VLA* (Ours)
+Qwen3.5-0.8B
+0.30
+0.69
+1.20
+0.73
+0.15
+0.27
+0.57
+0.33
+Reflect-VLA* (Ours)
+Qwen3.5-2B
+0.19
+0.46
+0.90
+0.52
+0.01
+0.11
+0.48
+0.20
+Reflect-VLA* (Ours)
+Qwen3.5-4B
+0.16
+0.35
+0.71
+0.41
+0.00
+0.05
+0.37
+0.14
+Table 8: Comparison with state-of-the-art methods on nuScenes. * indicates that ego status is used.
+Top-K
+NC↑
+DAC↑
+TTC↑
+CF↑
+EP↑
+PDMS↑
+Top-16
+98.7
+97.5
+95.1
+100
+85.4
+90.2
+Top-64 (ours)
+98.9
+98.0
+96.7
+100
+86.0
+91.5
+Top-256
+98.9
+97.9
+96.5
+100
+86.0
+91.4
+Full Vocab
+98.9
+97.9
+96.7
+100
+86.0
+91.5
+Table 9: Ablation study of the top-k truncation used for token-
+level distillation on NAVSIM with the 4B model.
+Direction
+NC↑
+DAC↑
+TTC↑
+CF↑
+EP↑
+PDMS↑
+Forward KL
+98.9
+97.8
+95.9
+100
+85.8
+91.0
+Reverse KL(ours)
+98.9
+98.0
+96.7
+100
+86.0
+91.5
+Table 10: Ablation study of the KL-divergence direction used
+for token-level distillation on NAVSIM with the 4B model.
+We use [lx, ux] = [−1.5, 15.0], [ly, uy] = [−5.0, 5.0],
+and [lh, uh]
+=
+[−0.5, 0.5], which cover the relative-
+motion ranges observed in the datasets. This gives kx
+t ∈
+[−150, 1500], ky
+t ∈[−500, 500], and kh
+t ∈[−50, 50], cor-
+responding to 1,651, 1,001, and 101 discrete values for the
+longitudinal, lateral, and heading components, respectively.
+Each quantized index is mapped to a dedicated special
+token. Non-negative indices are represented as <|x_k|>,
+<|y_k|>, and <|theta_k|>, while a negative index −k uses
+an m prefix, such as <|x_mk|>. At timestep t, the three to-
+kens are concatenated in longitudinal–lateral–heading order:
+at = τx(kx
+t )τy(ky
+t )τθ(kh
+t ). The complete trajectory is rep-
+resented by the token sequence [a1, . . . , aT ]. For example,
+<|x_208|><|y_m4|><|theta_1|> represents the relative mo-
+tion (2.08, −0.04, 0.01) between two consecutive timesteps.
+During inference, the generated indices are converted back
+into relative displacements and accumulated from the current
+ego pose:
+(ˆxt, ˆyt, ˆht) =
+t
+X
+i=1
+s (kx
+i , ky
+i , kh
+i ),
+t = 1, . . . , T.
+(13)
+Threshold s
+NC↑
+DAC↑
+TTC↑
+CF↑
+EP↑
+PDMS↑
+0.65
+98.9
+97.8
+96.0
+100
+85.9
+91.1
+0.75
+98.9
+97.8
+96.4
+100
+86.0
+91.3
+0.85 (ours)
+98.9
+98.0
+96.7
+100
+86.0
+91.5
+0.95
+98.9
+97.8
+96.2
+100
+86.0
+91.2
+Table 11: Ablation study of the PDMS routing threshold s in
+Dual-OPSD on NAVSIM with the 4B model.
+This allows the autoregressively generated token sequence to
+be directly decoded into the predicted future trajectory.
+D.2
+Reflective Guidance Construction
+We construct Reflective Guidance for low-quality trajecto-
+ries using a deterministic template-based procedure. It relies
+on training-time privileged information, including trajectory-
+evaluation results, the navigation command, and a refer-
+ence trajectory oref, without requiring an additional vision-
+language model. Given an initial trajectory oinit, we decode
+it into continuous waypoints when necessary and generate
+four components: Trajectory Verdict, Planning Diagnosis,
+Expert Alignment, and Refinement Directive.
+Trajectory Verdict.
+The Trajectory Verdict converts eval-
+uator outputs into an explicit reliability judgment. It identifies
+whether the initial prediction is problematic and summarizes
+the available PDMS, NC, DAC, TTC, EP, and CF metrics,
+providing quantitative context for subsequent correction.
+Planning Diagnosis.
+The Planning Diagnosis identifies
+the dominant causes of failure, including collision risk,
+drivable-area violation, insufficient TTC margin, inadequate
+progress, and trajectory misalignment. Safety-critical fail-
+ures are prioritized over efficiency-related errors, and only
+the most relevant diagnoses are retained. When event-level
+information is available, the first collision or boundary viola-
+tion is localized to the corresponding waypoint and position.
+
+
+Expert Alignment.
+The Expert Alignment compares oinit
+with oref and translates their geometric differences into qual-
+itative adjustments. These adjustments indicate whether to
+preserve or shift the lateral position, increase or reduce lon-
+gitudinal progress, and maintain or correct the final heading.
+The navigation command is included to keep the correction
+consistent with the intended maneuver.
+Refinement Directive.
+The Refinement Directive converts
+the diagnosis and alignment results into an ordered correc-
+tion plan. Collision and TTC failures first require creating
+a safer gap, while drivable-area violations require moving
+the path back into the valid lane corridor. The directive then
+specifies the required lateral, longitudinal, and heading ad-
+justments, while preserving smooth intermediate waypoints
+and navigation intent. A primary focus, such as scene inter-
+pretation, lateral control, or longitudinal control, is assigned
+based on the dominant failure.
+Construction Flow.
+We first normalize the trajectories and
+evaluator outputs and determine whether the initial trajectory
+requires correction. For a problematic trajectory, we extract
+the dominant failures, derive reference-relative adjustments,
+and instantiate the four components in the above order. The
+resulting guidance g is combined with the base input and
+initial trajectory as
+qgui =
+ qbase, oinit, g
+
+.
+(14)
+The expert or evaluator-verified trajectory is used as the re-
+finement target, transforming scalar evaluation results and
+geometric discrepancies into structured, trajectory-specific
+corrective supervision.
+D.3
+Details of Pretraining Data
+We collect several open-source driving QA datasets
+for driving-knowledge pretraining, including LingoQA,
+DriveGPT4, Senna, DriveLM, NuScenes-QA, NuInstruct,
+and DriveLMM.
+LingoQA. LingoQA contains approximately 419.9K QA
+pairs from short driving video clips, covering scene descrip-
+tion, localization, and reasoning.
+DriveGPT4. DriveGPT4 provides visual instruction data
+from multi-frame driving videos, covering action interpre-
+tation, driving reasoning, question answering, and low-level
+control prediction.
+Senna. Senna contains planning-oriented QA data over
+multi-view driving scenes, covering scene understanding,
+motion prediction, and high-level planning decisions.
+DriveLM. DriveLM contains approximately 0.3M image-
+question pairs from 696 nuScenes scenes for graph-based
+driving-scene reasoning.
+NuScenes-QA. NuScenes-QA provides approximately 460K
+QA pairs over multi-frame camera and LiDAR observations.
+NuInstruct. NuInstruct contains approximately 91K multi-
+view video-QA pairs across 17 spatial, temporal, and multi-
+view reasoning tasks.
+DriveLMM. DriveLMM provides over 18K training VQA
+examples with step-by-step reasoning for perception, predic-
+tion, and planning.
+D.4
+Details of SFT Data
+Planning Data.
+For each dataset, we construct a base plan-
+ning set in which each sample contains a front-view cam-
+era image, the ego-vehicle state including velocity and ac-
+celeration, a high-level navigation command (Go Straight,
+Turn Left, or Turn Right), a historical ego trajectory, and
+the ground-truth future trajectory. Both historical and future
+trajectories are sampled at 0.5-second intervals, and the fu-
+ture trajectory is converted into discrete special tokens for
+autoregressive prediction.
+Guidance-Conditioned Refinement Data.
+Each refine-
+ment sample pairs the base driving input with a low-quality
+initial trajectory, its corresponding Reflective Guidance, and
+a reference trajectory. The initial trajectories are obtained
+from two complementary sources:
+• Planner-generated trajectories. We collect trajectories
+produced by a classical planner and retain those exhibiting
+correctable failures in safety, drivable-area compliance, or
+progress.
+• Rule-perturbed trajectories. We perturb valid trajec-
+tories along the longitudinal, lateral, or heading dimen-
+sions to construct representative planning failures while
+preserving a valid trajectory format.
+All candidates are evaluated using the trajectory evaluator
+and map constraints, and low-quality but valid trajectories are
+selected as oinit. The ground-truth expert trajectory is used
+as the refinement target; alternatively, an evaluator-verified
+refined trajectory is retained when it resolves the failure and
+improves upon the initial trajectory.
+Self-Refinement Rejection Sampling Data.
+We construct
+self-refinement data from the model’s own rollouts. For each
+base input, the model first generates an unguided initial tra-
+jectory, which is evaluated to identify problematic cases. We
+then construct the corresponding Reflective Guidance and
+prompt the same model to generate a refined trajectory. A
+sample is retained only when the refined trajectory satisfies
+the trajectory and map constraints and achieves a higher eval-
+uation score than the initial trajectory. When multiple valid
+refinements are available, we retain the highest-scoring one.
+E
+Experimental Details
+E.1
+Training Parameters and Hardware
+Configuration.
+We train Qwen3.5-0.8B/2B/4B on 8 NVIDIA H20 GPUs.
+Driving-knowledge pretraining is conducted for 2 epochs
+with a batch size of 1 and a learning rate of 1 × 10−5.
+Planning-and-Refinement SFT is then performed on the
+base planning and guidance-conditioned refinement data,
+followed by Self-Refinement Rejection Sampling on the re-
+tained self-refinement data. These two stages use the same
+configuration of 2 epochs, a batch size of 4, and a learn-
+ing rate of 4 × 10−5. Dual-OPSD is subsequently performed
+for 2 epochs with a batch size of 2 and learning rates of
+8 × 10−6 and 2 × 10−6 for the first and second epochs, re-
+spectively. During Dual-OPSD, on-policy rollouts are gener-
+ated through greedy decoding, with the temperature set to 0.
+
+
+For token-level distillation, we retain the teacher’s top-k sup-
+port with k = 64 and minimize the reverse KL divergence
+over the truncated distribution. The routing threshold is set
+to s = 0.85. Reliable trajectories are optimized through self-
+preservation, whereas risky trajectories receive token-level
+supervision from the frozen guidance-conditioned teacher.
+Detailed hyperparameters are provided in Table 12.
+Stage
+Hyper-parameter
+Value
+Pretraining
+Epochs
+2
+Batch size
+1
+Learning rate
+1 × 10−5
+Gradient accumulation steps
+2
+Optimizer
+Adam
+Weight decay
+0.05
+Warmup ratio
+0.1
+SFT &
+Rejection
+Sampling
+Epochs
+2
+Batch size
+4
+Learning rate
+4 × 10−5
+Gradient accumulation steps
+2
+Optimizer
+Adam
+Weight decay
+0.05
+Warmup ratio
+0.1
+Dual-OPSD
+Epochs
+2
+Batch size
+2
+Learning rate for epoch1
+8 × 10−6
+Learning rate for epoch2
+2 × 10−6
+Gradient accumulation steps
+2
+Optimizer
+Adam
+Weight decay
+0.05
+Warmup ratio
+0.1
+Routing threshold s
+0.85
+Rollout temperature
+0.0
+Distillation support top-k
+64
+Distillation objective
+Reverse KL
+Teacher update
+Frozen
+Rollouts per input
+1
+Table 12: Training hyperparameters of Reflect-VLA.
+E.2
+Metrics.
+We use benchmark-specific metrics to comprehensively
+evaluate planning performance. For the NAVSIM suite,
+we report the Predictive Driver Model Score (PDMS) on
+NAVSIMv1 (Dauner et al. 2024) and the Extended Predic-
+tive Driver Model Score (EPDMS) on NAVSIMv2 (Cao et al.
+2025). For Bench2Drive, we evaluate interactive closed-loop
+performance using Driving Score (DS), Success Rate (SR),
+Efficiency (Effi), and Comfort (Comf). In addition, follow-
+ing UniAD (Hu et al. 2023), we evaluate open-loop trajectory
+quality on nuScenes using L2 error and collision rate.
+For NAVSIMv1, PDMS combines five sub-metrics: No
+At-Fault Collision (NC), Drivable Area Compliance (DAC),
+Time-to-Collision (TTC), Comfort (CF), and Ego Progress
+(EP). It is computed as
+PDMS = NC×DAC×
+5 × EP + 5 × TTC + 2 × CF
+12
+
+,
+(15)
+where NC and DAC serve as multiplicative penalties, while
+EP, TTC, and CF contribute to the weighted planning score.
+For NAVSIMv2, EPDMS extends the evaluation with ad-
+ditional safety, compliance, lane-level, and comfort metrics.
+It includes No At-Fault Collision (NC), Drivable Area Com-
+pliance (DAC), Driving Direction Compliance (DDC), Traf-
+fic Light Compliance (TLC), Ego Progress (EP), Time-to-
+Collision (TTC), Lane Keeping (LK), History Comfort (HC),
+and Extended Comfort (EC). The score is defined as
+EPDMS = NC × DAC × DDC × TLC×
+5 × EP + 2 × LK + 2 × HC + 5 × TTC + 2 × EC
+16
+
+,
+(16)
+For Bench2Drive, DS combines route completion with
+multiplicative penalties for driving infractions, while SR
+measures the proportion of routes completed within the time
+limit without traffic violations:
+Success Rate = nsuccess
+ntotal
+,
+Driving Score =
+1
+ntotal
+ntotal
+X
+i=1
+RCi
+ni,penalty
+Y
+j=1
+pi,j.
+(17)
+Here, nsuccess and ntotal denote the numbers of successful and
+evaluated routes, respectively; RCi is the route completion of
+route i, and pi,j is its j-th infraction penalty. Efficiency av-
+erages the ego-speed ratio relative to nearby vehicles, while
+Comfort reports the proportion of trajectory segments satis-
+fying predefined kinematic smoothness thresholds.
+For nuScenes, we report the L2 error between the planned
+and expert trajectories together with the collision rate.
+F
+Visualization Analysis
+Figure 4 presents three representative failure cases. In each
+scenario, the unguided student produces a problematic tra-
+jectory, while the guidance-conditioned teacher generates
+a safer correction. After Dual-OPSD, the distilled student
+largely reproduces this behavior without requiring guid-
+ance at inference time. For the Drivable-Area Violation, the
+teacher shifts the trajectory away from the road boundary
+and back into the valid lane corridor. For the Insufficient
+TTC Margin, it reduces forward progress to maintain a safer
+distance from the conflict region. For the At-Fault Colli-
+sion Risk, it increases clearance and postpones longitudinal
+progress until the hard safety constraint is resolved. The dis-
+tilled student exhibits similar lateral and longitudinal adjust-
+ments in all three cases. The token-level distributions further
+reveal the transfer process. Under the same student-generated
+prefix, the teacher assigns greater probability to tokens corre-
+sponding to safer lateral or longitudinal motions, whereas the
+original student favors riskier alternatives. Dual-OPSD shifts
+the student toward these corrective preferences, resulting in
+safer token selection and improved trajectory generation
+
+
+Figure 4: Detailed qualitative visualization of Reflect-VLA. We present three representative failure cases: Drivable-Area
+Violation, Insufficient TTC Margin, and At-Fault Collision Risk. For each scenario, we show the front-view image, the initial
+student trajectory, the guidance-conditioned teacher trajectory, and the distilled student trajectory, together with the constructed
+Reflective Guidance and the corresponding token-level distribution comparison at a critical waypoint under the same student-
+generated prefix. The results illustrate how Reflective Guidance shifts the teacher toward safer and more expert-aligned trajectory
+tokens, and how Dual-OPSD transfers these corrective preferences to the distilled student.

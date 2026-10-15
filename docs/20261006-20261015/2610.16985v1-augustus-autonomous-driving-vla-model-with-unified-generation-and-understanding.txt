@@ -1,0 +1,3540 @@
+AUGUstus: Autonomous Driving
+VLA Model with Unified Generation
+and Understanding
+Yuqi Ye1,∗, Caigao JIANG2,‡, Zhuonan Wang3, Congyuan Pei2, Chao Qu3, Changhao Peng1,
+Junhong Lin1, Qize Yu1, Zetian Song1, Guangzhao Fu2, Chongruo Wu2, Shiyu Huang2,
+Shuchang Zhou2, Honggou Yang2, Wei Gao1,†
+1Peking University, 2XPeng Motors, 3Fudan University
+∗First author, ‡Project lead, †Corresponding author
+Vision-language-action (VLA) models have shown strong potential for end-to-end autonomous
+driving by leveraging world knowledge and understanding to achieve great performance in
+long-tail scenarios. However, current VLAs suffer from two major limitations: 1) Degeneration
+into vision-action (VA) models. To achieve low latency, regression-based and flow-based methods
+directly generate actions, yet they do not sufficiently leverage the VLM’s understanding, leading
+to unsafe and unexplainable actions. 2) Autoregressive high latency. Autoregressive methods
+sequentially generate chain-of-thought (CoT) and action tokens, fully leveraging the VLM’s
+understanding, but high latency makes deployment difficult. To enable low-latency deployment
+while properly using CoT to assist action generation, we propose AUGUstus1, an Autonomous-
+driving VLA model with Unified Generation and Understanding. Specifically, we first unify
+diffusion-based action generation and autoregressive CoT understanding in a single model, where
+understanding is optimized only to serve generation. More concretely, joint CoT supervision
+preserves the VLM’s spatial understanding in the shared representation and keeps it useful
+for safer and more accurate trajectories. Second, we propose AUGUstus-mode, which orders
+the action generation before the CoT so that the CoT supervises the reliable action during
+training while inference needs only the action output, enabling low latency. Finally, we introduce
+AUGUstus-GRPO, a unified GRPO algorithm that jointly optimizes the action and CoT, further
+improving action performance. Extensive experiments demonstrate that AUGUstus achieves
+94.6 PDMS on NAVSIMv1 and 90.7 EPDMS on NAVSIMv2, establishing state-of-the-art (SOTA)
+planning performance without scorer module. On nuScenes, our method achieves an average L2
+error of 0.27 m and an average collision rate of 0.05%, both the best among the compared methods.
+To validate the practicality of AUGUstus, we train it on our in-house dataset using 512 NVIDIA
+H800 GPUs for approximately two days, then evaluate it on an internal 1,000 km dataset and
+preliminarily deploy it on a real vehicle, achieving 12 Hz operation.
+Project Page: https://augustus-ad.github.io
+Code: https://github.com/haha-yuki-haha/AUGUstus
+Model: https://huggingface.co/yuki-hahaha/AUGUstus
+1
+Introduction
+Autonomous driving has gradually moved from modular stacks for perception, prediction, and planning
+toward end-to-end models to reduce error accumulation, including ST-P3 (Hu et al., 2022), UniAD (Hu
+et al., 2023), and VAD (Jiang et al., 2023). Yet their limited model capacity and training data restrict the
+world knowledge available to the policy, making long-tail scenes and semantically complex interactions
+difficult to handle reliably.
+To address long-tail scenarios, many recent studies have explored large vision-language models (VLMs)
+as a promising foundation model for autonomous driving, leveraging their large-scale pre-training to
+supply broad visual concepts, language priors, and reasoning capabilities (Zhao et al., 2026; Xiong et al.,
+2026; Zhou et al., 2026b; Ye et al., 2026b). However, current mainstream autonomous driving VLA
+architectures still exhibit three limitations: 1) Regression head: Despite low latency, these methods (Zhao
+et al., 2026; Li et al., 2025) produce no action distribution, making RL post-training difficult; moreover,
+1AUGUstus refers to Augustus (Octavian), the first Roman emperor, whose consolidation of Roman authority symbolizes
+unification. Here, it denotes a unified generation and understanding VLA model.
+1
+arXiv:2610.16985v1  [cs.CV]  12 Oct 2026
+
+
+ 
+Images
+Vision Language Model (VLM)
+Ego Status
+Image Token
+Text Token
+Action Text
+(c) VLM+CoT/Latent CoT 
+(AutoVLA, OneVL)
+… 
+CoT/Latent CoT
+Having distribution, RL friendly
+Autoregression, high latency
+Sufficiently using VLM knowledge
+… 
+ 
+Images
+Vision Language Model (VLM)
+Ego Status
+Image Token
+Text Token
+Action Text
+(c) VLM+CoT/Latent CoT 
+(AutoVLA, OneVL)
+… 
+CoT/Latent CoT
+Having distribution, RL friendly
+Autoregression, high latency
+Sufficiently using VLM knowledge
+… 
+ 
+Images
+Vision Language Model (VLM)
+Ego Status
+Image Token
+Text Token
+Action Query
+Action Value
+(a) Query-based/Regression (PWM)
+… 
+No distribution, RL unfriendly
+Regression, low Latency
+Lacks explicit VLM knowledge
+ 
+Images
+Vision Language Model (VLM)
+Ego Status
+Image Token
+Text Token
+Action Query
+Action Value
+(a) Query-based/Regression (PWM)
+… 
+No distribution, RL unfriendly
+Regression, low Latency
+Lacks explicit VLM knowledge
+ 
+Images
+Vision Language Model (VLM)
+Ego Status
+Image Token
+Text Token
+Gaussian Noise
+(b) VLM+Diffusion (ReCogdrive)
+Diffusion / Flow Matching
+… 
+… 
+Lacks explicit VLM knowledge
+Having distribution, RL friendly
+Few-steps denoise, low latency
+ 
+Images
+Vision Language Model (VLM)
+Ego Status
+Image Token
+Text Token
+Gaussian Noise
+(b) VLM+Diffusion (ReCogdrive)
+Diffusion / Flow Matching
+… 
+… 
+Lacks explicit VLM knowledge
+Having distribution, RL friendly
+Few-steps denoise, low latency
+… 
+CoT/Latent CoT
+ 
+AUGUstus (Unify Generation and Understanding)
+Images
+Ego Status
+Image Token
+Text Token
+(d) Unify Architecture (Ours)
+… 
+Gaussian Noise
+CoT
+CoT
+Having distribution, RL friendly
+1/Few-steps denoise, low latency
+Sufficiently using VLM knowledge
+Inference 
+Only Action!
+ 
+AUGUstus (Unify Generation and Understanding)
+Images
+Ego Status
+Image Token
+Text Token
+(d) Unify Architecture (Ours)
+… 
+Gaussian Noise
+CoT
+CoT
+Having distribution, RL friendly
+1/Few-steps denoise, low latency
+Sufficiently using VLM knowledge
+Inference 
+Only Action!
+Action Value
+Action Value
+Action Text
+Figure 1 The difference between AUGUstus and other autonomous-driving VLA paradigms. Our method unifies
+generation and understanding under AUGUstus-mode, so that joint CoT supervision preserves the VLM’s under-
+standing in the shared representation, yielding safer, more accurate actions with an RL-friendly action distribution
+and low-latency deployment.
+they do not fully leverage VLM knowledge, resulting in low-quality generated actions (Fig. 1a). 2)
+Diffusion or flow-matching expert: To address the lack of action distribution for RL algorithm, some VLA
+methods (Xiong et al., 2026) adopt diffusion or flow-matching experts for action generation, but they still
+do not fully exploit the VLM’s spatial understanding, thereby producing unsafe and unexplainable actions
+(Fig. 1b). 3) Autoregressive decoding: To make full use of VLM understanding for action generation,
+some VLAs (Zhou et al., 2026b; Ye et al., 2026b) serially generate CoT and action, which incurs high
+latency and makes real-time deployment difficult (Fig. 1c). Overall, current VLAs struggle to reconcile the
+VLM’s understanding with low-latency control. This raises a key question: can we design an architecture that keeps
+this action-relevant understanding while remaining low-latency and easy to deploy?
+We argue that these limitations lie in the separation between VLM-based understanding and action
+generation, rather than treating them as a unified process. Autonomous driving requires understanding
+and action generation to work in synergy, where accurate spatial understanding enables reliable action
+generation. However, conventional approaches decouple them: direct regression and diffusion/flow
+experts degenerate into Vision-Action (VA) models that produce unsafe and unexplainable actions,
+whereas autoregressive CoT leverages understanding but serializes reasoning before action, causing
+high latency. Accordingly, we reconsider the role of CoT understanding in autonomous driving. Rather
+than treating CoT as an independent reasoning stage or a serial prefix to actions, CoT should be jointly
+optimized with action generation within a unified architecture, where action generation is the core and
+CoT serves to improve it. Such a unified formulation keeps VLM spatial understanding coupled to
+and useful for the action policy, while inference only outputs actions, preserving an RL-friendly action
+distribution and low latency.
+To address above fundamental limitations, we propose AUGUstus, an Autonomous-driving VLA model
+with Unified Generation and Understanding (Fig. 1d). Our objective is action-centric: understanding is
+not trained for its own sake but to generate a safer and more accurate trajectory. Specifically, (1) we unify
+diffusion-based action generation and autoregressive CoT understanding in a single model, where joint
+CoT supervision preserves the VLM’s spatial understanding in the shared representation for better action
+generation; (2) we propose AUGUstus-mode, an action-first and CoT-second ordering. This forces the
+model to learn a CoT that benefits action performance, while inference only needs the action output,
+thereby maintaining low latency. We explore various CoT designs and find that a CoT describing the
+specific positions and future orientations of other agents in the scene is most effective for action; and (3)
+we also introduce AUGUstus-GRPO, a unified GRPO algorithm that jointly optimizes the continuous
+action and CoT streams so that reasoning serves planning, further improving planning capabilities.
+We extensively evaluate AUGUstus on closed-loop NAVSIM and open-loop nuScenes. AUGUstus achieves
+94.6 PDMS on NAVSIMv1 and 90.7 EPDMS on NAVSIMv2, without a scorer module. On nuScenes, our
+method achieves an average L2 error of 0.27 m and an average collision rate of 0.05%, both the best among
+the compared methods. To validate the practicality of AUGUstus, we train it on our in-house dataset
+2
+
+
+using 512 NVIDIA H800 GPUs for approximately two days, then evaluate it on an internal 1,000 km
+dataset and preliminarily deploy it on a real vehicle, achieving 12 Hz operation. These results show that
+the shared model preserves the VLM’s spatial understanding, improving action generation while meeting
+the latency requirements of real-time planning. The main contributions of this paper are summarized as
+follows:
+1. We propose AUGUstus, a unified VLA that integrates diffusion-based action generation and
+autoregressive CoT understanding in one transformer. The shared model preserves the VLM’s
+spatial understanding for action generation, avoiding VLA-to-VA degeneration. AUGUstus-mode
+orders action before CoT to ensure low-latency inference.
+2. We introduce AUGUstus-GRPO, a unified GRPO algorithm that jointly optimizes action and CoT. It
+combines JaT-GRPO, which uses closed-form Gaussian importance sampling ratios and KL terms,
+with CoT-GRPO, which uses token-level GRPO. The reasoning stream is rewarded for serving
+planning, thereby further improving action performance.
+3. We demonstrate that AUGUstus achieves state-of-the-art performance on multiple autonomous
+driving benchmarks, underscoring the effectiveness and generality of our approach.
+It also
+demonstrates practical scalability through large-scale training, validation on an internal driving
+dataset, and real-vehicle deployment.
+2
+Related Work
+VLA models for autonomous driving. Recent driving VLAs follow three designs. Query-based policies (Zhao
+et al., 2026; Liu et al., 2026b; Shao et al., 2026) are low-latency but without action distribution for RL
+and weakly leveraging VLM semantics, which can yield unsafe and unexplainable actions. External
+flow-matching experts (Xiong et al., 2026) model continuous action distributions but keep the generator
+outside the VLM, weakening VLM semantics. Autoregressive policies (Zhou et al., 2026b; Ye et al., 2026b;
+Wang et al., 2026) expose semantic reasoning but serialize CoT and action tokens, incurring high latency.
+These designs struggle to trade off VLM understanding and low latency. AUGUstus unifies continuous
+action tokens and CoT understanding in one transformer under AUGUstus-mode, where understanding
+is trained to serve action generation rather than to maximize its own output quality, and deployment
+outputs actions directly.
+Reinforcement learning for driving VLAs. Driving-oriented VLMs increasingly adopt GRPO-style post-
+training, such as AutoVLA, AutoDrive-R2, AutoDrive-P3, and RecogDrive (Zhou et al., 2026b; Yuan et al.,
+2026; Ye et al., 2026b; Xiong et al., 2026). RecogDrive directly supervises actions but lacks explicit CoT
+supervision, making it prone to reward hacking. Other autoregressive methods supervise token-level
+outputs, which slows both training and inference. In contrast, AUGUstus-GRPO jointly optimizes CoT
+and action under a shared group-relative advantage, with CoT further improving action performance.
+3
+Methodology
+This section introduces AUGUstus framework, which unifies generation and understanding within a single
+transformer. First, we unify continuous, flow-based action generation with autoregressive, token-based
+CoT understanding in one transformer. Second, we propose AUGUstus-mode, an action-first, CoT-second
+training scheme in which the CoT stream is optimized to supervise and improve action generation. At
+inference, only the action stream is evaluated, ensuring low-latency deployment. Finally, we introduce
+AUGUstus-GRPO, a unified reinforcement learning algorithm that further improves the VLA’s planning
+capability.
+3.1
+Unified framework
+As shown in Fig. 2, for vision-based end-to-end driving, each sample contains camera video 𝑆, ego
+state 𝐸, route command 𝐶, and history trajectory 𝐻, which we write compactly as the driving context
+𝑐= (𝑆, 𝐸, 𝐶, 𝐻). During training, as summarized in Algorithm 1, the model additionally receives a noised
+trajectory 𝑥𝑡and the teacher-forced prefix 𝑦<𝑘CoT and predicts both a clean trajectory estimate and the
+next CoT token:
+ 𝑐, 𝑥𝑡, 𝑦<𝑘
+
+↦−→
+
+ˆ𝑥0, 𝑝𝜃
+ 𝑦𝑘| 𝑐, 𝑥𝑡, 𝑦<𝑘
+
+.
+(1)
+3
+
+
+Language 
+Tokenizer
+Vision Encoder
+Ego Status
+visual
+input text
+noise action
+action value
+chain-of-thought text
+Driving Video
+Training: Vision + Language -> Action + CoT
+Inference: Vision + Language  -> Action
+Language 
+Tokenizer
+LM Head
+Noise Action
+CoT (bounding box 
++ future position)
+Action 
+Projector
+Action 
+Decoder
+As an expert driving … Ego Future 
+Action is GO FORWARD. Ego current 
+state is vx: 5.82 m/s, vy: -0.03 m/s, 
+ax: -1.48 m/s², ay: -0.23 m/s², 
+and the historical trajectory …
+Predict the future trajectory for the 
+next 4 seconds (8 points).
+<prediction>```json 
+[ {"bbox_2d": [418, 
+274, 661, 378], 
+"future_position": 
+"middle, left"}, …
+```</prediction>
+Time 
+Modulation
+V
+L
+A
+L
+t = 0
+t ~ [0,1]
+Layer 1
+Layer 2
+Layer n-1
+Layer n
+AUGUstus (Unify Generation & 
+Understanding)
+V
+L
+A
+A
+L
+V
+L
+A
+A
+L
+L
+L
+V
+L
+V
+L
+V
+L
+A
+A
+V
+L
+V
+L
+A
+A
+V
+L
+…
+Figure 2 Overview of AUGUstus. AUGUstus takes video and ego status as input and uses one shared transformer to
+first generate clean action and then understand a CoT containing key-object bounding boxes and future position.
+Action tokens use bidirectional attention and cannot attend to the CoT tokens. At inference, AUGUstus directly
+outputs the action to ensure low latency.
+Algorithm 1 AUGUstus training
+Require: Context 𝑐, trajectory 𝑥0, CoT 𝑦.
+Ensure: ˆ𝑥0, CoT probabilities, updated 𝜃.
+1: Noise the target: 𝑥𝑡= (1 −𝑡)𝑥0 + 𝑡𝜀.
+2: Joint forward: context, noisy action, teacher-forced
+CoT.
+3: Predict ˆ𝑥0 and the next CoT tokens.
+4: Update with flow-matching and CoT losses.
+Algorithm 2 AUGUstus inference (1-step denoise)
+Require: Context 𝑐, noise 𝑥1, step budget 𝑁.
+Ensure: Trajectory ˆ𝑥0; optional post-hoc CoT.
+1: Cache the causal context prefix.
+2: Denoise the action block in 𝑁evaluations.
+3: For 𝑁= 1, return ˆ𝑥0 directly.
+4: Skip CoT at inference; decode it afterward only if
+requested (e.g., during RL rollout sampling).
+Here 𝑥0 ∈R𝑇×3 is the continuous target trajectory, with each waypoint represented by planar position and
+heading. 𝑦is an autoregressive token sequence describing key objects with bounding box and future
+position. At inference, as summarized in Algorithm 2, only context 𝑐is provided. The initial noise state
+𝑥1 is denoised in one or few steps denoising to generate ˆ𝑥0, and CoT decoding is optional to ensure low
+latency. We denote this action-first, CoT-second ordering as AUGUstus-mode. As shown in Fig. 2, its
+attention design is: context tokens are causal; action tokens form a bidirectional block attending to the full
+context and to each other; and CoT tokens are causal and additionally attend to the complete action block,
+while action tokens cannot attend to CoT tokens. Complete procedures are provided in Appendix D.3.
+3.2
+Supervised Fine-Tuning for AUGUstus
+As summarized in Algorithm 1, supervised fine-tuning for AUGUstus jointly trains conditional flow
+matching for actions and teacher-forced language modeling for CoT. Let 𝑥0 be the clean trajectory,
+𝜀∼𝒩(0, 𝐼) the initial noise, and 𝑡∈[0, 1] the flow time:
+𝑥𝑡= (1 −𝑡)𝑥0 + 𝑡𝜀,
+ˆ𝑥0 = 𝑓𝜃(𝑥𝑡, 𝑡, 𝑐).
+(2)
+Here 𝑓𝜃is AUGUstus model, which directly predicts the clean trajectory ˆ𝑥0 rather than a velocity, similar
+to (Li and He, 2025) which predicts the clean image in the image domain. This 𝑥0 parameterization makes
+the deployed endpoint explicit, since one Euler step at 𝑡= 1 returns ˆ𝑥0 exactly, supporting both few-step
+sampling and a genuine one-step policy.
+The supervised objective combines flow matching for continuous action reconstruction with teacher-forced
+4
+
+
+Gaussian Noise
+Action Value
+Denoising N steps
+Text Token
+Autoregression
+CoT
+… 
+… 
+Group Advantage
+Update
+Stage1 (Run Phase): 
+Focus on Progress
+Stage2 (Walk Phase): 
+Focus on Safety
+High Progress, 
+but No Safety
+High Progress,
+and Safety
+Reward
+Function
+1
+R
+2
+R
+G
+R
+… 
+3
+R
+G 1
+R −
+GRPO
+JaT
+GRPO
+CoT
+GRPO
+AUGUstus
+J
+J
+λ
+J
+−
+−
+−
+=
++
+
+Figure 3
+The pipeline of AUGUstus-GRPO. Paired 𝑥0 actions and autoregressive CoTs share a group-relative
+advantage, with closed-form JaT-GRPO and token-level CoT-GRPO. Stage I focuses on progress via PDMS reward,
+while Stage II focuses on safety via terminal and safety rewards.
+Algorithm 3 AUGUstus-GRPO: Stage I
+Require: SFT policy and contexts.
+Ensure: Progress-tuned policy 𝜋∗
+I.
+1: Sample paired action and CoT rollouts.
+2: Compute 𝑅pred,𝑖; set 𝑅plan,𝑖= PDMS𝑖.
+3: Normalize the shared group advantage 𝐴𝑖.
+4: Jointly update JaT-GRPO and CoT-GRPO.
+Algorithm 4 AUGUstus-GRPO: Stage II
+Require: Stage-I policy 𝜋∗
+I and contexts.
+Ensure: Safety-refined policy 𝜋∗
+II.
+1: Sample paired action and CoT rollouts.
+2: Keep 𝑅pred,𝑖; set 𝑅plan,𝑖= 𝑅end,𝑖+ 𝑅safe,𝑖.
+3: Normalize the shared group advantage 𝐴𝑖.
+4: Jointly update JaT-GRPO and CoT-GRPO.
+CoT entropy minimization under the same context 𝑐and noise action 𝑥𝑡:
+ℒSFT = 𝜆FM E𝑡,𝜀[∥ˆ𝑥0 −𝑥0∥1]
+|             {z             }
+flow matching loss
+−𝜆CoT E
+hÕ𝐿
+𝑘=1 log 𝑝𝜃(𝑦𝑘| 𝑦<𝑘, 𝑐, 𝑥𝑡)
+i
+|                                   {z                                   }
+CoT likelihood
+.
+(3)
+During SFT, we note that CoT for prediction, i.e., predicting the bounding boxes and future positions of
+key objects, is more beneficial for safe and efficient actions than CoT for perception or planning reasoning;
+additional CoT experiments are provided in the supplementary material.
+3.3
+Reinforcement Learning for AUGUstus
+To further improve the VLA’s planning capability, we introduce AUGUstus-GRPO, a unified RL method
+for continuous action and autoregressive CoT. As illustrated in Fig. 3, each rollout produces a paired
+action and CoT, and the two streams share a normalized group-relative advantage. JaT-GRPO applies
+GRPO to the continuous action branch under the 𝑥0 parameterization, while CoT-GRPO optimizes the
+CoT branch with token-level likelihoods.
+Unified GRPO objective. For each context, the behavior policy samples 𝐺paired rollouts. In stage
+𝑠∈{1, 2}, 𝑅pred,𝑖evaluates the CoT and 𝑅(𝑠)
+plan,𝑖denotes the corresponding planning reward. We define
+the shared reward and normalized advantage as
+𝑅(𝑠)
+𝑖
+= 𝑅pred,𝑖+ 𝑤plan𝑅(𝑠)
+plan,𝑖,
+𝐴𝑖=
+𝑅(𝑠)
+𝑖
+−mean𝑗(𝑅(𝑠)
+𝑗)
+std𝑗(𝑅(𝑠)
+𝑗) + 𝜖0
+.
+(4)
+For each branch, we compute the importance sampling ratio between 𝜋𝜃and 𝜋old:
+𝑟(action)
+𝑖,𝑞
+= 𝜋𝜃(𝑥𝑖,𝑡−Δ𝑡| 𝑥𝑖,𝑡, 𝑐𝑖)
+𝜋old(𝑥𝑖,𝑡−Δ𝑡| 𝑥𝑖,𝑡, 𝑐𝑖),
+𝑟(CoT)
+𝑖,𝑞
+= 𝜋𝜃(𝑦𝑖,𝑘| 𝑦𝑖,<𝑘, 𝑐𝑖, 𝑥𝑖)
+𝜋old(𝑦𝑖,𝑘| 𝑦𝑖,<𝑘, 𝑐𝑖, 𝑥𝑖).
+(5)
+Both branches are optimized with the same clipped GRPO objective,
+𝒥𝑚= E
+
+1
+𝐺
+𝐺
+Õ
+𝑖=1
+1
+|ℐ𝑚
+𝑖|
+Õ
+𝑞∈ℐ𝑚
+𝑖
+min
+
+𝑟(𝑚)
+𝑖,𝑞𝐴𝑖, clip(𝑟(𝑚)
+𝑖,𝑞, 1 −𝜖, 1 + 𝜖)𝐴𝑖
+
+,
+(6)
+5
+
+
+where 𝑚∈{action, CoT}, and ℐaction
+𝑖
+and ℐCoT
+𝑖
+index the denoising steps and CoT token positions,
+respectively. Combining the two branches, the overall objective is
+ℒAUGUstus-GRPO = −𝒥action + 𝛽actionKLact
+|                      {z                      }
+JaT-GRPO on 𝑥0
++𝛼CoT
+ −𝒥CoT + 𝛽CoTKLCoT
+
+|                     {z                     }
+CoT-GRPO on language
+.
+(7)
+Closed-form JaT-GRPO. The action-policy derivation starts from the linear conditional-flow path 𝑥𝑡=
+(1 −𝑡)𝑥0 + 𝑡𝜀, with 𝜀∼𝒩(0, 𝐼). Following Flow-GRPO (Liu et al., 2026a), we adopt its reverse transition:
+𝑥𝑡−Δ𝑡= 𝑥𝑡−
+
+𝑣𝜃+ 𝑔(𝑡)2
+2𝑡
+ 𝑥𝑡+ (1 −𝑡)𝑣𝜃
+
+Δ𝑡+ 𝑔(𝑡)
+√
+Δ𝑡𝑧,
+𝑧∼𝒩(0, 𝐼).
+(8)
+Here 𝑣𝜃is computed by our predicted clean trajectory ˆ𝑥𝜃
+0 (𝑥𝑡, 𝑡, 𝑐) through:
+𝑣𝜃(𝑥𝑡, 𝑡, 𝑐) =
+𝑥𝑡−ˆ𝑥𝜃
+0 (𝑥𝑡, 𝑡, 𝑐)
+𝑡
+.
+(9)
+Using Eq. (9) and 𝑔(𝑡)2 = 𝜆𝑡in Eq. (8) yields a transition with mean 𝜇𝜃= 𝑐𝑥𝑥𝑡+ 𝑐0 ˆ𝑥𝜃
+0 and variance 𝜎2
+𝑠𝐼.
+Only ˆ𝑥𝜃
+0 is policy-dependent, and the covariance is fixed. Thus, the 𝜋𝜃, 𝜋old, and 𝜋ref policies induce
+Gaussian transitions with the same covariance 𝜎2
+𝑠𝐼and means 𝜇𝜃, 𝜇old, and 𝜇ref, respectively. With
+𝛿old = ˆ𝑥𝜃
+0 −ˆ𝑥old
+0
+and 𝛿ref = ˆ𝑥𝜃
+0 −ˆ𝑥ref
+0 , the importance ratio and KL simplify to:
+log 𝑟(action)
+𝑡
+= 𝑐0
+𝜎𝑠⟨𝛿old, 𝑧⟩−
+𝑐2
+0
+2𝜎2𝑠∥𝛿old∥2
+2,
+KLact =
+𝑐2
+0
+2𝜎2𝑠∥𝛿ref∥2
+2.
+(10)
+With the closed-form solution, we plug resulting ratios and KL terms into Eq. (6), enabling optimization
+with few-step and single-step denoising. The complete derivation is in Appendix B.
+Two-stage RL. AUGUstus-GRPO uses a two-stage training procedure inspired by Run-then-Walk schedul-
+ing (Ye et al., 2026a). As summarized by Algorithms 3 and 4, Stage I starts from the SFT policy and,
+following Eq. 4, sets the planning reward 𝑅(1)
+plan,𝑖= PDMS𝑖while keeping 𝑅pred,𝑖. This encourages assertive
+progress and aligns the policy with the benchmark objective. Stage II starts from the Stage-I checkpoint
+and sets 𝑅(2)
+plan,𝑖= 𝑅end,𝑖+ 𝑅safe,𝑖, preserving the same 𝑅pred,𝑖. It therefore retains the progress learned
+in Stage I while refining the trajectory toward accurate endpoints and safe behavior. In both stages, the
+shared reward and advantage in Eq. 4 jointly update JaT-GRPO and CoT-GRPO; only planning reward is
+different.
+4
+Experiments
+4.1
+Benchmarks and Baselines
+Public benchmarks. Following (Zhou et al., 2026b; Xiong et al., 2026; Ye et al., 2026b), we evaluate on the
+NAVSIM (Dauner et al., 2024) and nuScenes (Caesar et al., 2020) benchmarks. For both benchmarks, the
+input is a 2-second, 4-frame clip from the front, front-left, and front-right cameras at 2048×512. AUGUstus
+predicts 8 waypoints over a 4-second horizon for NAVSIM, and 6 waypoints over a 3-second horizon for
+nuScenes. For NAVSIM, we report the official PDMS on NAVSIMv1 and EPDMS on NAVSIMv2. For
+nuScenes, following the ST-P3 protocol (Hu et al., 2022), we report L2 error and collision rate.
+In-house benchmarks and driving test. To validate the practicality of AUGUstus, we train it on in-house
+dataset without using any public dataset, using 512 NVIDIA H800 GPUs for approximately two days
+with a global batch size of 2048. We first evaluate it on in-house 1,000 km driving set covering safety,
+comfort, efficiency, and compliance metrics, and then deploy the model on a real vehicle for a preliminary
+driving test in Guangzhou, China.
+Baselines. We use Qwen3.5-2B (Qwen Team, 2026) as the base model. On public datasets, we compare
+against mainstream approaches, including end-to-end small planners and representative autoregressive,
+regression-based, and diffusion-based VLA planners. On the in-house dataset, we compare AUGUstus
+with diffusion-based and regression-based architectures. Note that, considering the real-time requirements
+for deployment, unless otherwise specified, inference in this paper refers to 1-step denoising without the
+subsequent CoT generation.
+6
+
+
+Table 1 Performance comparison on NAVSIMv1 benchmark.
+Method
+Ref
+RL
+NC↑
+DAC↑
+EP↑
+TTC↑
+Comf.↑
+PDMS↑
+Human
+-
+✗
+100.0
+100.0
+87.5
+100.0
+100.0
+94.8
+End-to-end small models
+TransFuser (Chitta et al., 2022)
+TPAMI’23
+✗
+97.8
+92.6
+78.9
+92.9
+99.9
+83.9
+PARA-Drive (Weng et al., 2024)
+CVPR’24
+✗
+97.9
+92.4
+79.3
+93.0
+99.8
+84.0
+Hydra-MDP (Li et al., 2024)
+CVPR’24
+✗
+98.3
+96.0
+78.7
+94.6
+100.0
+86.5
+WoTE (Guan et al., 2025)
+ICCV’25
+✗
+98.5
+96.8
+81.9
+94.9
+100.0
+88.3
+Regression-based VLA planners
+ImagiDrive (Li et al., 2025)
+ICRA’26
+✗
+97.9
+95.5
+80.7
+93.1
+99.9
+86.4
+PWM (Zhao et al., 2026)
+NeurIPS’25
+✗
+98.6
+95.9
+81.8
+95.4
+100.0
+88.1
+DriveVLA-W0 (Li et al., 2026)
+ICLR’26
+✔
+98.7
+99.1
+83.3
+95.3
+99.3
+90.2
+Autoregressive VLA planners
+AutoVLA (Zhou et al., 2026b)
+NeurIPS’25
+✔
+98.4
+97.5
+81.9
+98.0
+99.9
+89.1
+AdaThinkDrive (Luo et al., 2025)
+ICRA’26
+✔
+98.4
+97.8
+84.4
+95.2
+100.0
+90.3
+AutoDrive-R2 (Yuan et al., 2026)
+ICLR’26
+✔
+98.5
+95.9
+82.7
+95.4
+100.0
+89.1
+AutoDrive-P3 (Ye et al., 2026b)
+ICLR’26
+✔
+98.9
+97.7
+83.7
+96.6
+99.9
+90.2
+VGGDrive (Wang et al., 2026)
+CVPR’26
+✗
+98.6
+96.3
+82.9
+95.6
+100.0
+88.8
+Flow-matching VLA planners
+ReCogDrive (Xiong et al., 2026)
+ICLR’26
+✔
+98.1
+97.7
+86.5
+94.9
+100.0
+90.6
+AUGUstus (Ours, 1-step denoising)
+-
+✔
+98.6
+98.7
+91.4
+96.6
+100.0
+94.0
+AUGUstus (Ours, 3-step denoising)
+-
+✔
+98.9
+98.9
+91.9
+97.1
+100.0
+94.6
+Table 2 Performance comparison on NAVSIMv2 benchmark.
+Method
+NC↑
+DAC↑
+DDC↑
+TLC↑
+EP↑
+TTC↑
+LK↑
+HC↑
+EC↑
+EPDMS↑
+False / True
+Human
+100.0
+100.0
+99.8
+100.0
+87.4
+100.0
+100.0
+98.1
+90.1
+90.3 / 94.5
+Ego Status MLP
+93.1
+77.9
+92.7
+99.6
+86.0
+91.5
+89.4
+98.3
+85.4
+64.0 / –
+Transfuser (Chitta et al., 2022)
+96.9
+89.9
+97.8
+99.7
+87.1
+95.4
+92.7
+98.3
+87.2
+76.7 / 84.0
+Hydra-MDP++ (Li et al., 2024)
+97.2
+97.5
+99.4
+99.6
+83.1
+96.5
+94.4
+98.2
+70.9
+81.4 / –
+DiffusionDrive (Liao et al., 2025)
+98.2
+96.2
+99.5
+99.8
+87.4
+97.3
+96.9
+98.4
+87.7
+84.7 / 88.2
+WoTE (Guan et al., 2025)
+98.5
+96.8
+98.8
+99.8
+86.1
+97.9
+95.5
+98.3
+82.9
+84.2 / 87.7
+ReCogDrive (Xiong et al., 2026)
+98.2
+97.7
+98.4
+100.0
+89.9
+97.4
+90.8
+97.7
+26.8
+82.7 / –
+AutoDrive-P3 (Ye et al., 2026b)
+98.9
+97.6
+98.9
+99.8
+86.8
+98.5
+95.4
+98.3
+80.6
+85.2 / 88.7
+AUGUstus (Ours, 1-step denoising)
+99.0
+97.9
+99.7
+99.9
+87.3
+98.4
+98.0
+98.3
+87.2
+87.1 / 90.7
+4.2
+Main Results
+Public benchmark results. As shown in Table 1, AUGUstus reaches 94.0/94.6 PDMS with 1/3-step
+denoising on NAVSIMv1, only 0.2 below human performance (94.8), while only generating a single
+trajectory without any scorer module. On NAVSIMv2, as shown in Table 2, AUGUstus obtains the SOTA
+performance, 90.7 EPDMS with the human-penalty filter (87.1 without it) with only 1-step denoising. On
+nuScenes, as shown in Table 3, our method with only 1-step denoising achieves 0.27 m average L2 error
+and 0.05% average collision rate.
+In-house benchmarks and real driving test. Beyond public benchmarks, we evaluate VLM+flow matching,
+VLM+regression, and AUGUstus on an internal 1,000 km driving dataset. We report macro-averages
+across safety, comfort, efficiency, and compliance, where positive values indicate worse performance and
+AUGUstus is fixed at 0%. AUGUstus performs best in safety, comfort, and efficiency, with the largest gaps
+in safety and comfort; the flow-matching baseline is slightly better in compliance (Table 4). As shown in
+Table 5, AUGUstus achieves 13.6 Hz on a single H800 and 12.0 Hz on the real vehicle in our preliminary
+assisted driving tests. Figs. 4 and 5 further visualize its qualitative behavior on the in-house evaluation
+7
+
+
+Table 3 Performance comparison on nuScenes benchmark.
+Method
+Ref
+L2 (m) ↓
+Collision (%) ↓
+1s
+2s
+3s
+Avg.
+1s
+2s
+3s
+Avg.
+ST-P3 (Hu et al., 2022)
+ECCV’22
+1.33
+2.11
+2.90
+2.11
+0.23
+0.62
+1.27
+0.71
+VAD (Jiang et al., 2023)
+ICCV’23
+0.17
+0.34
+0.60
+0.37
+0.07
+0.10
+0.24
+0.14
+UniAD (Hu et al., 2023)
+CVPR’23
+0.44
+0.67
+0.96
+0.69
+0.04
+0.08
+0.23
+0.12
+GPT-Driver (Mao et al., 2023)
+arXiv’23
+0.20
+0.40
+0.70
+0.44
+0.04
+0.12
+0.36
+0.17
+DriveVLM (Tian et al., 2024)
+CoRL’25
+0.18
+0.34
+0.68
+0.40
+0.10
+0.22
+0.45
+0.27
+RDA-Driver (Huang et al., 2024)
+arXiv’24
+0.17
+0.37
+0.69
+0.40
+0.01
+0.05
+0.26
+0.10
+OmniDrive (Wang et al., 2024)
+CVPR’25
+0.14
+0.29
+0.55
+0.33
+0.01
+0.04
+0.27
+0.11
+OpenDriveVLA (Zhou et al., 2026a)
+AAAI’26
+0.14
+0.30
+0.55
+0.33
+0.02
+0.07
+0.22
+0.10
+AutoVLA (Zhou et al., 2026b)
+NeurIPS’25
+0.25
+0.46
+0.73
+0.48
+0.07
+0.07
+0.26
+0.13
+AutoDrive-R2 (Yuan et al., 2026)
+ICLR’26
+0.35
+0.49
+0.62
+0.49
+0.13
+0.44
+0.87
+0.48
+AutoDrive-P3 (Ye et al., 2026b)
+ICLR’26
+0.16
+0.31
+0.56
+0.34
+0.00
+0.04
+0.20
+0.08
+AUGUstus (Ours, 1-step denoising)
+-
+0.14
+0.24
+0.42
+0.27
+0.01
+0.02
+0.13
+0.05
+Table 4 In-house 1,000 km evaluation.
+Category
+VLM+Flow VLM+Reg. AUGUstus
+Safety
++18.4%
++15.1%
+0.0%
+Comfort
++8.2%
++8.2%
+0.0%
+Efficiency
++3.0%
++3.9%
+0.0%
+Compliance
+-0.5%
++0.1%
+0.0%
+Table 5 Inference time.
+Module/system
+Time (ms)
+Vision Encoder Stage
+40.2
+VLA Stage (1-step denoising)
+33.2
+Total (Locally, no CoT)
+73.6 (13.6 Hz)
+Real vehicle total
+83.0 (12.0 Hz)
+front left
+front
+front right
+rear left
+rear
+rear right
+10
+0
+10
+20
+30
+BEV
+0
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+Figure 4 In-house evaluation visualization.
+front left
+front
+front right
+rear left
+rear
+rear right
+10
+0
+10
+20
+30
+40
+BEV
+0
+lateral (m) [left +]
+Ego
+Agent
+History trajectory
+Predict trajectory
+Figure 5 Real driving test visualization.
+Table 6 Ablation Study of CoT and AUGUstus-mode.
+Setting
+PDMS↑NC↑DAC↑DDC↑EP↑TTC↑Comf.↑ADE (m)↓Time (ms)↓
+No CoT, Only Action
+89.2
+98.8
+96.8
+98.4
+83.5
+95.8
+100.0
+0.530
+73.60
+CoT first, Action second
+90.6
+99.1
+97.8
+98.6
+84.2
+96.6
+100.0
+0.521
+4587
+AUGUstus-mode (Ours)
+90.6
+99.0
+97.9
+98.5
+84.2
+96.5
+100.0
+0.520
+73.60
+and real driving test. Further details and supplementary videos are provided in the supplementary
+material.
+4.3
+Ablation Study
+4.3.1
+Ablation Study of AUGUstus-mode and CoT
+As shown in Table 6, we ablate CoT and AUGUstus-mode on SFT with NAVSIMv1. With AUGUstus-mode,
+adding CoT to training makes driving safer and further improves performance. Compared with CoT-first,
+8
+
+
+Table 7 Ablation Study of AUGUstus-GRPO.
+Setting
+PDMS↑NC↑DAC↑EP↑TTC↑Comf.↑
+SFT with AUGUstus-mode
+90.6
+99.0
+97.9
+84.2
+96.4
+100.0
++ AUGUstus-GRPO Stage I
+94.0
+98.6
+98.7
+91.4
+96.6
+100.0
++ AUGUstus-GRPO Stage II
+94.6
+98.9
+98.9
+91.9
+97.1
+100.0
++ JaT-GRPO, without CoT-GRPO
+92.6
+98.0
+97.6
+91.8
+94.1
+100.0
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 46%
+AUGUstus CoT attention
+in-box 0%
+w/o CoT training, action attention
+Figure 6 CoT attention visualization. CoT supervision anchors the action-relevant attention on the nearby risk object
+(46% in-box), whereas the no-CoT model misses it (0%).
+ 
+	
+
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+ 	
+
+ 
+ 
+	
+ 	
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+	
+ 
+	
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+	
+
+ 
+	
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+ 	
+
+ 
+ 
+
+ 		
+
+ 
+
+ 
+
+
+ 	
+	
+
+ 	
+ 
+
+
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+ 
+
+
+
+Figure 7 Visualization. Left: Trajectory visualization with and without CoT. Right: Trajectory visualization compared
+with other methods.
+AUGUstus-mode achieves comparable performance while preserving real-time inference, making the
+architecture deployable. Overall, our proposed AUGUstus-mode and unified CoT training prove effective.
+4.3.2
+Ablation Study of AUGUstus-GRPO
+As shown in Table 7, with our proposed AUGUstus-GRPO, jointly optimized with JaT-GRPO and CoT-
+GRPO, stage I improves PDMS by +4 and stage II further improves it by +0.6, achieving a SOTA PDMS of
+94.6. These results demonstrate the effectiveness of our proposed unified AUGUstus-GRPO algorithm.
+4.4
+Visualization
+As shown in Fig. 7, the no-CoT model fails to yield to the nearby agent and collides, whereas CoT
+supervision produces a safer trajectory. Compared with other methods on the same scene, AUGUstus
+avoids collision while maintaining high progress.
+5
+Conclusion and Future Work
+In this work, we propose AUGUstus, a deployable unified VLA that integrates diffusion-based action
+generation and autoregressive CoT understanding in a single transformer, with AUGUstus-mode ordering
+for low-latency inference and AUGUstus-GRPO for joint optimization. Experiments on NAVSIMv1/v2
+and nuScenes show state-of-the-art performance: AUGUstus achieves 94.6 PDMS on NAVSIMv1 and
+90.7 EPDMS on NAVSIMv2 without a scorer module, and on nuScenes it achieves an average L2 error of
+0.27 m and an average collision rate of 0.05%, both the best among the compared methods. To validate
+9
+
+
+its practicality, we train it on our in-house dataset with a large-scale GPU cluster, then evaluate it on an
+internal driving dataset and preliminarily deploy it on a real vehicle, achieving real-time operation. In
+future work, we will conduct more extensive real-vehicle tests to further validate the architecture and
+attempt to apply it to robot VLA.
+Acknowledgments
+Yuqi Ye completed this project as the first author during an internship at XPeng. We extend special
+thanks to Caigao Jiang, the project lead, for his leadership, invaluable guidance, and sustained support
+throughout the project. We also thank Zhuonan Wang, Ph.D., and Prof. Chao Qu for their insightful advice,
+Congyuan Pei for his assistance with on-vehicle deployment, and Prof. Wei Gao for academic mentorship.
+We appreciate the contributions of all other collaborators. This work is solely for non-commercial academic
+research.
+References
+Holger Caesar, Varun Bankiti, Alex H Lang, Sourabh Vora, Venice Erin Liong, Qiang Xu, Anush Krishnan, Yu Pan, Giancarlo
+Baldan, and Oscar Beĳbom. nuscenes: A multimodal dataset for autonomous driving. In Proceedings of the IEEE/CVF
+conference on computer vision and pattern recognition, pages 11621–11631, 2020.
+Kashyap Chitta, Aditya Prakash, Bernhard Jaeger, Zehao Yu, Katrin Renz, and Andreas Geiger. Transfuser: Imitation with
+transformer-based sensor fusion for autonomous driving. IEEE transactions on pattern analysis and machine intelligence, 45
+(11):12878–12895, 2022.
+Daniel Dauner, Marcel Hallgarten, Tianyu Li, Xinshuo Weng, Zhiyu Huang, Zetong Yang, Hongyang Li, Igor Gilitschenski,
+Boris Ivanovic, Marco Pavone, et al. Navsim: Data-driven non-reactive autonomous vehicle simulation and benchmarking.
+Advances in Neural Information Processing Systems, 37:28706–28719, 2024.
+Yanchen Guan, Haicheng Liao, Chengyue Wang, Xingcheng Liu, Jiaxun Zhang, and Zhenning Li. World model-based
+end-to-end scene generation for accident anticipation in autonomous driving. Communications Engineering, 4(1):144, 2025.
+Shengchao Hu, Li Chen, Penghao Wu, Hongyang Li, Junchi Yan, and Dacheng Tao. St-p3: End-to-end vision-based
+autonomous driving via spatial-temporal feature learning. In European Conference on Computer Vision, pages 533–549.
+Springer, 2022.
+Yihan Hu, Jiazhi Yang, Li Chen, Keyu Li, Chonghao Sima, Xizhou Zhu, Siqi Chai, Senyao Du, Tianwei Lin, Wenhai Wang,
+et al. Planning-oriented autonomous driving. In Proceedings of the IEEE/CVF conference on computer vision and pattern
+recognition, pages 17853–17862, 2023.
+Zhĳian Huang, Tao Tang, Shaoxiang Chen, Sihao Lin, Zequn Jie, Lin Ma, Guangrun Wang, and Xiaodan Liang. Making
+large language models better planners with reasoning-decision alignment. In European Conference on Computer Vision,
+pages 73–90. Springer, 2024.
+Bo Jiang, Shaoyu Chen, Qing Xu, Bencheng Liao, Jiajie Chen, Helong Zhou, Qian Zhang, Wenyu Liu, Chang Huang, and
+Xinggang Wang. Vad: Vectorized scene representation for efficient autonomous driving. In Proceedings of the IEEE/CVF
+International Conference on Computer Vision, pages 8340–8350, 2023.
+Jingyu Li, Bozhou Zhang, Xin Jin, Jiankang Deng, Xiatian Zhu, and Li Zhang. Imagidrive: A unified imagination-and-
+planning framework for autonomous driving. arXiv preprint arXiv:2508.11428, 2025.
+Tianhong Li and Kaiming He. Back to basics: Let denoising generative models denoise. arXiv preprint arXiv:2511.13720, 2025.
+Yingyan Li, Shuyao Shang, Weisong Liu, Bing Zhan, Haochen Wang, Yuqi Wang, Yuntao Chen, Xiaoman Wang, Yasong
+An, Chufeng Tang, et al. Drivevla-w0: World models amplify data scaling law in autonomous driving. In International
+Conference on Learning Representations, volume 2026, pages 7890–7911, 2026.
+Zhenxin Li, Kailin Li, Shihao Wang, Shiyi Lan, Zhiding Yu, Yishen Ji, Zhiqi Li, Ziyue Zhu, Jan Kautz, Zuxuan Wu, et al.
+Hydra-mdp: End-to-end multimodal planning with multi-target hydra-distillation. arXiv preprint arXiv:2406.06978, 2024.
+Bencheng Liao, Shaoyu Chen, Haoran Yin, Bo Jiang, Cheng Wang, Sixu Yan, Xinbang Zhang, Xiangyu Li, Ying Zhang,
+Qian Zhang, et al. Diffusiondrive: Truncated diffusion model for end-to-end autonomous driving. In 2025 IEEE/CVF
+Conference on Computer Vision and Pattern Recognition (CVPR), pages 12037–12047. IEEE, 2025.
+Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli Ouyang.
+Flow-grpo: Training flow matching models via online rl. Advances in neural information processing systems, 38:40783–40818,
+2026a.
+Qiqi Liu, Huan Xu, Jingyu Li, Bin Sun, Zhihui Hao, Dangen She, Xiatian Zhu, and Li Zhang. Uni-world vla: Interleaved
+world modeling and planning for autonomous driving. arXiv preprint arXiv:2603.27287, 2026b.
+Yuechen Luo, Fang Li, Shaoqing Xu, Zhiyi Lai, Lei Yang, Qimao Chen, Ziang Luo, Zixun Xie, Shengyin Jiang, Jiaxin Liu, et al.
+Adathinkdrive: Adaptive thinking via reinforcement learning for autonomous driving. arXiv preprint arXiv:2509.13769,
+2025.
+Jiageng Mao, Yuxi Qian, Junjie Ye, Hang Zhao, and Yue Wang. Gpt-driver: Learning to drive with gpt. arXiv preprint
+arXiv:2310.01415, 2023.
+Qwen Team. Qwen3.5: Towards native multimodal agents, February 2026. https://qwen.ai/blog?id=qwen3.5.
+10
+
+
+Hao Shao, Letian Wang, Yang Zhou, Yuxuan Hu, Zhuofan Zong, Steven L Waslander, Wei Zhan, and Hongsheng Li.
+Lmgendrive: Bridging multimodal understanding and generative world modeling for end-to-end driving. arXiv preprint
+arXiv:2604.08719, 2026.
+Xiaoyu Tian, Junru Gu, Bailin Li, Yicheng Liu, Yang Wang, Zhiyong Zhao, Kun Zhan, Peng Jia, Xianpeng Lang, and
+Hang Zhao. Drivevlm: The convergence of autonomous driving and large vision-language models. arXiv preprint
+arXiv:2402.12289, 2024.
+Jie Wang, Guang Li, Zhĳian Huang, Chenxu Dang, Hangjun Ye, Yahong Han, and Long Chen. Vggdrive: Empowering
+vision-language models with cross-view geometric grounding for autonomous driving. arXiv preprint arXiv:2602.20794,
+2026.
+Shihao Wang, Zhiding Yu, Xiaohui Jiang, Shiyi Lan, Min Shi, Nadine Chang, Jan Kautz, Ying Li, and Jose M Alvarez.
+Omnidrive: A holistic llm-agent framework for autonomous driving with 3d perception, reasoning and planning. CoRR,
+2024.
+Xinshuo Weng, Boris Ivanovic, Yan Wang, Yue Wang, and Marco Pavone. Para-drive: Parallelized architecture for real-time
+autonomous driving. In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 15449–15458.
+IEEE, 2024.
+Kaixin Xiong, Xiangyu Guo, Fang Li, Sixu Yan, Gangwei Xu, Lĳun Zhou, Long Chen, Haiyang Sun, Bing Wang, Kun Ma,
+et al. Recogdrive: A reinforced cognitive framework for end-to-end autonomous driving. In International Conference on
+Learning Representations, volume 2026, pages 157518–157556, 2026.
+Zeyue Xue, Jie Wu, Yu Gao, Fangyuan Kong, Lingting Zhu, Mengzhao Chen, Zhiheng Liu, Wei Liu, Qiushan Guo, Weilin
+Huang, et al. Dancegrpo: Unleashing grpo on visual generation. arXiv preprint arXiv:2505.07818, 2025.
+Yuqi Ye, Shangkun Sun, Junhong Lin, Jiayi Zhao, Changhao Peng, Wei Zheng, Guoqing Liu, Tiesong Zhao, and Wei Gao.
+Sometimes you gotta run before you can walk: Run-then-walk scheduling strategy for vlm autonomous driving, 2026a.
+https://arxiv.org/abs/2609.25831.
+Yuqi Ye, Zĳian Zhang, Junhong Lin, Shangkun Sun, Changhao Peng, and Wei Gao. 𝑎𝑢𝑡𝑜𝑑𝑟𝑖𝑣𝑒-𝑝3: Unified chain of
+perception-prediction-planning thought via reinforcement fine-tuning, 2026b. https://arxiv.org/abs/2603.28116.
+Zhenlong Yuan, Chengxuan Qian, Jing Tang, Rui Chen, Zĳian Song, Lei Sun, Xiangxiang Chu, Yujun Cai, Dapeng Zhang,
+and Shuo Li. Autodrive-r2: Incentivizing reasoning and self-reflection capacity for vla model in autonomous driving. In
+International Conference on Learning Representations, volume 2026, pages 97934–97955, 2026.
+Zhida Zhao, Talas Fu, Yifan Wang, Lĳun Wang, and Huchuan Lu. From forecasting to planning: Policy world model for
+collaborative state-action prediction. In Advances in Neural Information Processing Systems, volume 38, pages 134585–134611,
+2026.
+Kaiwen Zheng, Huayu Chen, Haotian Ye, Haoxiang Wang, Qinsheng Zhang, Kai Jiang, Hang Su, Stefano Ermon, Jun Zhu,
+and Ming-Yu Liu. Diffusionnft: Online diffusion reinforcement with forward process. In International Conference on
+Learning Representations, volume 2026, pages 134129–134150, 2026.
+Xingcheng Zhou, Xuyuan Han, Feng Yang, Yunpu Ma, Volker Tresp, and Alois Knoll. Opendrivevla: Towards end-to-end
+autonomous driving with large vision language action model. In Proceedings of the AAAI Conference on Artificial Intelligence,
+volume 40, pages 13782–13790, 2026a.
+Zewei Zhou, Tianhui Cai, Seth Zhao, Yun Zhang, Zhiyu Huang, Bolei Zhou, and Jiaqi Ma. Autovla: A vision-language-action
+model for end-to-end autonomous driving with adaptive reasoning and reinforcement fine-tuning. Advances in Neural
+Information Processing Systems, 38:27920–27956, 2026b.
+11
+
+
+Linear
+Linear
+SiLU
+Linear
+c
+Time Emb.
+Action Projector
+A
+𝑡~ [0,1]
+𝑥𝑡∈𝑅8×3
+𝑒𝑎𝑐𝑡∈𝑅8×𝐷
+noise action
+Concatenate
+Time Emb.
+Sin/Cos
+𝒆𝒂𝒄𝒕: Action token embedding
+𝒉𝒂𝒄𝒕: Action token hidden state
++
+Residual Add 
+visual
+input text
+chain-of-thought text
+A
+V
+L
+L
+Linear
+SiLU
+Linear
+SiLU
+𝑐𝑜𝑛𝑑∈𝑅𝐵×𝑆×𝐷
+Time Emb.
+AdaRMSNorm
+Attention
+AdaRMSNorm
+MLP
+ℎ𝑎𝑐𝑡∈𝑅8×𝐷
+𝑥∈𝑅𝐵×𝑆×𝐷
+𝑐𝑜𝑛𝑑∈𝑅𝐵×𝑆×𝐷
+RMSNorm
+(normalize x)
+Linear
+scale
+shift
+𝑥𝑛𝑜𝑟𝑚
+𝑜𝑢𝑡∈𝑅𝐵×𝑆×𝐷
+𝑤
+𝑠∈𝑅𝐵×𝑆×𝐷
+𝑏∈𝑅𝐵×𝑆×𝐷
+c
+𝑥
+c
++
++
+V
+V
+V
+L
+L
+A
+A
+A
+L
+L
+L
+t = 0
+t = 0
+t ~ [0,1]
+t = 0
+Transformer Decoder Layer x N
+AUGUstus
+AdaRMSNorm
+V
+L
+L
+A
+L
+Input Sequence
+(tokens)
+Time
+Modulation
+V
+L
+A
+L
+LayerNorm
+Linear
+SiLU
+Linear
+LayerNorm
+Action Decoder
+ℎ𝑎𝑐𝑡∈𝑅8×𝐷
+ො𝑥0 ∈𝑅8×3
+𝒄𝒐𝒏𝒅: Time condition
+𝒔/𝒃: Adaptive scale/shift
+𝒘: RMSNorm weight
+𝒙𝒏𝒐𝒓𝒎(𝟏+ 𝒘)(𝟏+ 𝒔) + 𝒃
+Figure 8 Detailed AUGUstus module. Left: Action Projector. A normalized noisy trajectory 𝑥𝑡∈R8×3 and a sinusoidal
+time embedding are projected, concatenated, and passed through Linear–SiLU layers to form 𝑒act ∈R8×𝐷. Center:
+shared decoder. Visual tokens 𝑉, input text 𝐿, noisy action tokens 𝐴, and CoT text share the transformer; the action
+block is bidirectional, and the segment-specific time modulation uses 𝑡=0 for context/CoT and the sampled 𝑡for
+action tokens. Each layer contains attention, MLP, residual additions, and AdaRMSNorm. The inset expands the
+adaptive scale/shift 𝑠, 𝑏and the pretrained RMSNorm weight 𝑤. Right: Action Decoder. LayerNorm–Linear–SiLU–
+LayerNorm–Linear decoding maps ℎact ∈R8×𝐷to ˆ𝑥0 ∈R8×3.
+A
+Supplementary Architecture Details
+A.1
+Backbone and action projections
+Action-module data path. Given a normalized noisy trajectory 𝑥𝑡∈R8×3 and flow time 𝑡∈[0, 1], the
+module produces a clean trajectory estimate ˆ𝑥0 ∈R8×3 through three stages: an Action Projector, the
+shared transformer action-token block, and an Action Decoder. The eight rows always correspond to the
+eight future waypoints; all linear maps are shared across waypoint positions, while positional information
+is carried by the backbone’s continued token positions.
+Action Projector. In the left block of Fig. 8, each waypoint is first mapped from three coordinates
+to the hidden width by a linear layer. In parallel, the scalar flow time is encoded with a sinusoidal
+sine/cosine embedding. The two representations are concatenated row-wise and passed through a
+Linear–SiLU–Linear MLP, yielding action-token embeddings 𝑒act ∈R8×𝐷. Thus the time condition is
+available at the input of every action token without changing the dimensionality of the pretrained
+language-vision stream.
+Shared action-token block. The embeddings 𝑒act are inserted as an eight-token action block after the
+multimodal context. In AUGUstus-mode, the action block reads the cached video, ego-state, route, and
+language context and is bidirectional within itself; the subsequent causal CoT block may read the action
+states, but action tokens cannot read CoT tokens. The action states therefore receive scene information
+from the shared trunk while remaining independent of the optional autoregressive decoding path.
+During training, this is also the route by which the CoT loss can shape the action representation; during
+deployment, only the action block is evaluated.
+Segmented input sequence and transformer layer. The center of Fig. 8 expands one forward pass
+into its token segments: visual tokens 𝑉, input-language tokens 𝐿, noisy action tokens 𝐴, and causal
+chain-of-thought tokens 𝐿. The action segment is a single bidirectional block, while the language and
+CoT segments retain their autoregressive masks. Every decoder layer applies the same residual pattern,
+AdaRMSNorm→Attention→Add→AdaRMSNorm→MLP→Add, to the shared hidden states. The
+time condition is segment-specific: visual and input-language tokens use 𝑡=0, the noisy action tokens use
+the sampled 𝑡∈[0, 1], and the CoT tokens again use 𝑡=0. This keeps the diffusion state from contaminating
+the language stream while allowing every action layer to adapt to the denoising point.
+Action Decoder. The right block of Fig. 8 maps the final action hidden states ℎact ∈R8×𝐷back to waypoint
+coordinates. It applies LayerNorm, a linear projection, SiLU, a second LayerNorm, and a final linear
+projection to three channels, producing ˆ𝑥0 ∈R8×3. The output is inverse-normalized to metric 𝑥, 𝑦, and
+heading coordinates before being sent to the planner. At 𝑡= 1, the 𝑥0-parameterization makes this
+decoder output the deployed one-step trajectory directly; for a multi-step ODE/SDE rollout, the output is
+re-embedded as the next noisy action state and the same shared module is applied again. No separate
+action transformer or scorer is introduced.
+12
+
+
+Table 8 Kernel coefficients per schedule (Eq. (8); one reverse step 𝑡→𝑡−Δ𝑡). The first row names each method and
+the second row gives its diffusion schedule 𝑔(𝑡)2; the remaining rows give the induced kernel coefficients and
+endpoint behavior. †Flow-GRPO implementations substitute a clamp 𝜎max for 𝜎𝑠near 𝑡=1.
+Flow-GRPO (Liu et al., 2026a) DanceGRPO (Xue et al., 2025)
+JaT-GRPO (ours)
+𝑔(𝑡)2
+𝑎2
+𝑡
+1−𝑡
+𝜂2
+𝜆𝑡
+𝑐𝑥
+1 −Δ𝑡
+𝑡
+ 1 +
+𝑎2
+2(1−𝑡)
+
+1 −Δ𝑡
+𝑡
+ 1 + 𝜂2
+2𝑡
+
+1 −Δ𝑡
+𝑡
+ 1 + 𝜆
+2
+
+𝑐0
+Δ𝑡
+𝑡
+ 1 + 𝑎2
+2
+
+Δ𝑡
+𝑡
+ 1 + 𝜂2(1−𝑡)
+2𝑡
+
+Δ𝑡
+𝑡
+ 1 + 𝜆(1−𝑡)
+2
+
+𝜎𝑠
+𝑎
+q
+𝑡Δ𝑡
+1−𝑡
+𝜂
+√
+Δ𝑡
+√
+𝜆𝑡Δ𝑡
+𝑡=1, Δ𝑡=1
+𝑐𝑥→−∞, 𝜎𝑠→∞†
+𝑐𝑥= −𝜂2
+2 , 𝑐0=1, 𝜎𝑠=𝜂
+𝑐𝑥= −𝜆
+2 , 𝑐0=1, 𝜎𝑠=
+√
+𝜆
+single-step policy
+undefined
+𝒩( ˆ𝑥0 −𝜂2
+2 𝑥1, 𝜂2𝐼)
+𝒩( ˆ𝑥0 −𝜆
+2 𝑥1, 𝜆𝐼)
+terminal state 𝑡=0
+clean
++𝒩(0, 𝜂2Δ𝑡𝐼) corruption
+clean
+Flow time is injected with per-segment AdaRMSNorm. For hidden state ℎand condition 𝑞, we use
+AdaRMSNorm(ℎ; 𝑞) = RMSNorm(ℎ) ⊙(1 + 𝑤) ⊙(1 + 𝑠(𝑞)) + 𝑏(𝑞),
+[𝑠(𝑞), 𝑏(𝑞)] = 𝑊𝑞𝑞,
+(11)
+where 𝑤is the pretrained RMSNorm weight. Context, language, and boundary tokens use a zero-time
+condition, while action tokens use the sampled flow time. The positional indices continue from the
+multimodal context into the action and CoT blocks, so the pretrained positional statistics are preserved.
+B
+Algorithmic Details for JaT-GRPO
+B.1
+Reverse-time SDE kernel in x0-parameterization
+With the convention 𝑡=1 pure noise, 𝑡=0 data, the forward CFM interpolation 𝑥𝑡= (1 −𝑡)𝑥0 + 𝑡𝜀defines
+the probability-flow ODE ¤𝑥𝑡= 𝑣𝜃(𝑥𝑡, 𝑡) in the direction of decreasing 𝑡. Adding Langevin diffusion
+with coefficient 𝑔(𝑡) (the Flow-GRPO construction (Liu et al., 2026a)) gives the reverse-time SDE; its
+Euler–Maruyama step of size Δ𝑡> 0 (from 𝑡to 𝑡−Δ𝑡) is
+𝑥𝑡−Δ𝑡= 𝑥𝑡−
+h
+𝑣𝜃+ 𝑔(𝑡)2
+2𝑡
+ 𝑥𝑡+ (1 −𝑡)𝑣𝜃
+i
+Δ𝑡+ 𝑔(𝑡)
+√
+Δ𝑡𝑧,
+(12)
+where −1
+𝑡(𝑥𝑡+ (1 −𝑡)𝑣) is the score ∇log 𝑝𝑡of the linear interpolation path.
+Substituting the 𝑥0-
+parameterized velocity 𝑣𝜃= (𝑥𝑡−ˆ𝑥𝜃
+0 )/𝑡and collecting 𝑥𝑡and ˆ𝑥𝜃
+0 yields the kernel of Eq. (8) with
+𝑐𝑥= 1 −Δ𝑡
+𝑡
+
+1 + 𝑔(𝑡)2
+2𝑡
+
+,
+𝑐0 = Δ𝑡
+𝑡
+
+1 + 𝑔(𝑡)2 (1 −𝑡)
+2𝑡
+
+,
+𝜎𝑠= 𝑔(𝑡)
+√
+Δ𝑡.
+For 𝑔(𝑡)2 = 𝜆𝑡these reduce to 𝑐𝑥= 1 −Δ𝑡
+𝑡(1 + 𝜆
+2 ), 𝑐0 = Δ𝑡
+𝑡(1 + 𝜆(1−𝑡)
+2
+), 𝜎𝑠=
+√
+𝜆𝑡Δ𝑡; at 𝑡=1, Δ𝑡=1: 𝑐𝑥= −𝜆/2,
+𝑐0 = 1, 𝜎𝑠=
+√
+𝜆, hence Eq. (16).
+The action-transition schedules used by GRPO are summarized in Table 8. The proposed schedule is finite
+at the pure-noise endpoint and vanishes at the clean endpoint, so it supports both one-step deployment
+and a clean terminal trajectory. The schedule enters the exact ratio and KL only through 𝑐0 and 𝜎𝑠, so the
+same implementation covers all three alternatives.
+B.2
+Closed-form log-ratio and KL
+Both kernels share variance 𝜎2
+𝑠𝐼, so with 𝑧= (𝑥𝑡−Δ𝑡−𝜇old)/𝜎𝑠:
+log 𝜌𝑡= −1
+2𝜎2
+𝑠
+𝑥𝑡−Δ𝑡−𝜇𝜃
+2 −
+𝑥𝑡−Δ𝑡−𝜇old
+2
+(13)
+= 1
+𝜎2
+𝑠
+⟨𝜇𝜃−𝜇old, 𝑥𝑡−Δ𝑡−𝜇old⟩−
+1
+2𝜎2
+𝑠
+𝜇𝜃−𝜇old
+2 = 𝑐0
+𝜎𝑠
+⟨𝛿, 𝑧⟩−
+𝑐2
+0
+2𝜎2
+𝑠
+∥𝛿∥2.
+(14)
+13
+
+
+Since E[𝑧] = 0, E[log 𝜌𝑡] = −
+𝑐2
+0
+2𝜎2𝑠∥𝛿∥2 = −KL(𝜋old∥𝜋𝜃) (equal-covariance Gaussian KL). The same derivation
+applies per coordinate 𝑑when 𝜎𝑠and 𝑧are diagonal per-dimension quantities – the form used in our
+implementation with multivariate noise levels 𝜆𝑥,𝑦,𝜓.
+The corresponding reference-policy KL and deployed one-step policy are
+KLact =
+𝑐2
+0
+2𝜎2
+𝑠
+∥ˆ𝑥𝜃
+0 −ˆ𝑥ref
+0 ∥2
+2.
+(15)
+𝜋𝜃(𝑥0 | 𝑥1, 𝑐) = 𝒩
+
+ˆ𝑥𝜃
+0 −𝜆
+2 𝑥1, 𝜆𝐼
+
+(𝑡= 1, Δ𝑡= 1).
+(16)
+Scalar parametric form. Writing 𝑚= 𝛿/𝑡(the velocity-space prediction difference) and defining the
+schedule coefficient 𝜅≜𝑐0 𝑡/𝜎𝑠, Eq. (14) factorizes per element into the compact quadratic form
+log 𝜌= 𝜅⟨𝑚, 𝑧⟩−1
+2𝜅2∥𝑚∥2,
+KL = 1
+2𝜅2∥𝑚∥2,
+𝜌≤exp  ∥𝑧∥2/2
+,
+with equality of the bound at 𝑚= −𝑧/𝜅– the quadratic dependence of 𝜌max on the exploration
+noise is a second, independent motivation for two-sided PPO clipping. For the constant-𝜂schedule,
+𝜅=
+√
+Δ𝑡( 𝜂−1 + 𝜂(1−𝑡)
+2𝑡
+); at 𝑡=1 this stays finite (𝜅=
+√
+Δ𝑡/𝜂).
+B.3
+Gradient decomposition and comparison
+Writing 𝜙(𝜃) ≜log 𝜌𝑡and differentiating Eq. (14):
+∇𝜃𝜙= 𝑐0
+𝜎𝑠
+
+⟨∇𝜃ˆ𝑥𝜃
+0 , 𝑧⟩−𝑐0
+𝜎𝑠
+⟨∇𝜃ˆ𝑥𝜃
+0 , 𝛿⟩
+
+,
+(17)
+i.e. an advantage-weighted noise-following term (move ˆ𝑥0 along 𝑧when 𝐴𝑖> 0) and a trust-region-like term
+pulling ˆ𝑥0 back toward ˆ𝑥old
+0 , which vanishes at the behavior policy; on-policy, E𝑧∇𝜙= 𝐴𝑖
+𝑐0
+𝜎𝑠𝑧, equivalent
+to minimizing ℒequiv = −Í
+𝑡𝐴𝑖
+𝑐0
+𝜎𝑠⟨𝑧, ˆ𝑥𝜃
+0 ⟩. This contrasts with DiffusionNFT (Zheng et al., 2026), whose
+gradient follows the velocity difference direction with a built-in trust region of radius ∝𝐴𝑖/𝛽; Flow-GRPO
+coincides direction-wise with our first term but has no closed-form KL and a diverging 𝑡=1 schedule.
+B.4
+Necessity of 𝜆> 0 for Single-Step GRPO
+When 𝑁= 1, all rollouts in a group share the same initial condition 𝑥1, so they can differ only in the
+noise variable 𝑧. If 𝜆= 0, the kernel collapses to a point mass. Consequently, all 𝐺samples are identical,
+std𝐺(𝑅) = 0, and the advantages are undefined or zero. Therefore, 𝜆> 0 is necessary. Sufficiency follows
+because 𝒩(𝜇, 𝜆𝐼) has full support.
+B.5
+Exploration Noise Engineering
+Per-dimension levels and trajectory smoothing. Exploration noise is applied in the quantile-normalized
+action space, with per-dimension levels (𝜆𝑥, 𝜆𝑦, 𝜆𝜓). The injected noise is smoothed along the trajectory,
+keeping perturbed trajectories kinematically plausible. The group shares the initial 𝑥1 state so that
+advantages compare like-for-like trajectories.
+𝜎-sensitivity of heteroscedastic noise. For fixed prediction shift 𝛿𝑑in dimension 𝑑, Eq. (15) gives per-step
+KL ∝𝛿2
+𝑑𝜆−1
+𝑑, while the induced update drift of dimension 𝑑scales as ∇∝𝛿𝑑𝜆−1
+𝑑
+(gradient) and the
+post-update KL as ∝𝜆−2
+𝑑; with per-dimension noise levels spanning ∼2.5× and time-scaled reweighting
+across waypoints, the effective step-size ratio across dimensions blows up to ∼103 in drift terms, collapsing
+the effective sample size of the group to a few near-deterministic slots. As a result, we set noise level
+5×10−2 and groups with 𝐺=8.
+C
+More detail about CoT
+This appendix complements the main-text CoT ablation with the complete CoT-content metrics and
+supervision templates (Table 9) and additional CoT-vs-no-CoT attention statistics. To avoid duplicate
+reporting, the metric table and the format table are merged: each CoT variant is listed once with its
+supervision template and full PDMS sub-metric breakdown.
+14
+
+
+Table 9 CoT content ablation (complete metrics and supervision formats). All variants share the Section 4.1 protocol
+and are evaluated with the deterministic one-step evaluator on the full navtest split; only the CoT content changes.
+PDMS is reported together with its full sub-metric breakdown: NC, DAC, DDC, EP, TTC, Comfort, and ADE. NC:
+no-collision, DAC: drivable-area compliance, DDC: driving-direction compliance, EP: ego progress, TTC:
+time-to-collision, Comfort: comfort, ADE: average L2 displacement. The default prediction CoT (risk-object boxes +
+future positions) is bolded; the last row is the CoT-first ordering control (identical recipe and prediction content,
+reverse token order). Inference time is reported once for the shared 73.60 ms action-only path and separately for the
+CoT-first path.
+CoT type
+Template
+PDMS↑NC↑DAC↑DDC↑EP↑TTC↑Comf.↑ADE↓Time (ms)
+No CoT
+action-only training
+89.2
+98.8
+96.8
+98.4
+83.5 95.8
+100.0
+0.530
+Planning
+slow, keep lane, pass
+after crossing
+90.1
+98.9
+97.4
+98.5
+83.8 96.1
+100.0
+0.522
+Reasoning
+perception + future
+bins + maneuver
+89.6
+98.7
+96.9
+98.4
+83.4 96.1
+100.0
+0.534
+Perception car [x1,y1,x2,y2]; ped.
+[x1,y1,x2,y2]
+90.3
+98.9
+97.5
+98.6 84.3 96.1
+100.0
+0.517
+73.60
+Perception
++
+Prediction
+boxes + future bins, no
+maneuver sentence
+90.3
+98.9
+97.6
+98.6 84.1 96.3
+100.0
+0.513
+Short-
+prediction
+atomic vocabulary
+encoding
+89.1
+98.7
+96.7
+98.3
+83.1 95.4
+100.0
+0.559
+Prediction
+car [box] ->
+near-front; ped. [box]
+-> far-left
+90.6
+99.0 97.9
+98.5
+84.2 96.5
+100.0
+0.520
+CoT first
+same as Prediction,
+CoT tokens precede
+action
+90.6
+99.1
+97.8
+98.6
+84.2 96.6
+100.0
+0.521
+4597
+CoT content (Table 9). Removing CoT costs 1.4 PDMS (89.2 vs. 90.6), concentrated in drivable-area
+compliance (−1.1 DAC) and ego progress (−0.7 EP). This ablation directly tests the VLA-to-VA hypothesis:
+CoT is useful only when its content is action-relevant and its supervision reaches the shared action
+representation. Among CoT types, prediction beats perception (+0.3), planning (+0.5), and their union (+0.3):
+future-position labels carry the operative information, and stacking perception on top adds tokens without
+information. Free-form reasoning is worse (89.6), and a 2573-token-vocabulary atomic short-prediction
+encoding (∼14 tokens per scene, 7× shorter than the default) even falls below the no-CoT baseline (89.1 vs.
+89.2) – aggressive CoT compression trades away the planning gain entirely. Order analysis confirms the
+“pre > per/perpre > pla” ranking. The CoT-first ordering control (last row) reaches the same 90.6 PDMS
+as the action-first default, confirming that the quality gain comes from the CoT supervision itself rather
+than the ordering; the ordering decides only the deployment cost, as reported in Fig. 6 (left).
+C.1
+CoT content and supervision formats
+C.1.1
+What each CoT teaches
+Our CoT ablation is a comparison of three alternative supervision targets, not a three-stage pipeline: every
+variant is trained on the identical scene and action, and only the content of the single CoT block differs.
+We take the three task-oriented CoT definitions from AutoDrive-P3 (Ye et al., 2026b) – Perception CoT (the
+2-D boxes of relevant agents), Prediction CoT (each box plus a discretized future-position label, such as
+near-front or far-left), and Planning CoT (textual ego waypoints or maneuvers) – and ask which one makes
+the action head plan best, since only one of them is emitted per sample. We do not chain them, and the
+model never consumes its own perception output to produce a prediction or a plan; the three streams are
+competing ways of describing the same scene, and Table 9 reports the outcome (prediction CoT wins).
+A fourth variant, reasoning CoT, concatenates the three signals into a compact approximately 100-token
+15
+
+
+explanation: it first names the relevant agents, then states their future bins, and finally gives the resulting
+ego maneuver. This is intentionally shorter and more structured than unconstrained free-form reasoning.
+Figure 9 instantiates the three variants on one NAVSIM right-turn scene, using the ground-truth annotation
+of the released evaluation split. The three panels share the identical scene and the identical agent ordering,
+so the figure isolates exactly what each CoT content contributes. All coordinates below are reported on
+the deployment canvas (2048 × 512), matching the model input coordinate system.
+(a) Perception CoT: what is where. This variant emits a 2-D bounding box and a semantic class for every
+agent that can influence ego motion. Here the annotation contains five agents—two vehicles (one in the
+left lane, one far ahead in the center) and three vulnerable road users (two pedestrians and one cyclist on
+the right sidewalk)—each drawn with a class-colored box and a label tag in Figure 9(a). The complete
+answer field is
+<perception >[{"bbox_2d " : [ 0 , 2 6 5 , 1 4 6 , 5 0 9 ] , " l a b e l ":" v e h i c l e "} ,
+{"bbox_2d ":[994 ,222 ,1085 ,329] ," l a b e l ":" v e h i c l e "} ,
+{"bbox_2d ":[1954 ,259 ,2018 ,378] ," l a b e l ":" pedestrian "} ,
+{"bbox_2d ":[1676 ,262 ,1740 ,372] ," l a b e l ":" pedestrian "} ,
+{"bbox_2d ":[1728 ,283 ,1807 ,366] ," l a b e l ":" b i c y c l e "}]</ perception >
+All five boxes are the salient agents that can influence ego motion: the two vehicles lie along the ego
+path, and the three vulnerable road users stand on the sidewalk that the right turn sweeps past. The
+ego vehicle is moving at 10.35 m/s, so the pedestrians and the cyclist are the agents whose distance the
+maneuver changes most rapidly. This variant carries location but no motion: it tells the planner where
+the conflicts currently are, not where they will be.
+(b) Prediction CoT: where each agent will be. This variant keeps the same boxes and assigns each of them
+a coarse future relative position over the next 4 s (e.g. near, right / far, front / behind), drawn as a directional
+arrow and a text tag on every box in Figure 9(b):
+<prediction >[{"bbox_2d " : [ 0 , 2 6 5 , 1 4 6 , 5 0 9 ] , " future_position ":" behind "} ,
+{"bbox_2d ":[994 ,222 ,1085 ,329] ," future_position ":" far ,
+f r o n t "} ,
+{"bbox_2d ":[1954 ,259 ,2018 ,378] ," future_position ":" near ,
+r i g h t "} ,
+{"bbox_2d ":[1676 ,262 ,1740 ,372] ," future_position ":" near ,
+r i g h t "} ,
+{"bbox_2d ":[1728 ,283 ,1807 ,366] ," future_position ":" near ,
+r i g h t "}]</ prediction >
+The boxes share the same order as the perception variant. The vehicle in the adjacent left lane drops to
+behind, the lead vehicle stays far, front, and all three vulnerable road users remain near, right—the right-side
+road users are the safety-critical agents for this maneuver. This variant is the one our default model uses:
+it adds the future bearing of each conflict to its current location, and Table 9 shows that this extra content,
+and not merely the presence of language, is what lifts PDMS from 89.2 to 90.6.
+(c) Planning CoT: what the ego does. This variant instead describes the ego maneuver itself, as eight
+waypoints (𝑥, 𝑦, 𝜃) at 0.5 s intervals over a 4 s horizon. Figure 9(c) projects the ground-truth trajectory
+(green) back onto the camera strip and shows the complete top-down arc in a BEV inset; note that the
+inset is drawn with ego-left on the left, so the right turn bends to the right of the star:
+<planning >[{"x_y_radian " : [ 5 . 2 2 , 0 . 0 , - 0 . 0 1 ] , " l a b e l " : " 0 . 5 s "} ,
+{"x_y_radian " : [ 1 0 . 5 8 , - 0 . 0 7 , - 0 . 0 2 ] , " l a b e l " : " 1 . 0 s "} ,
+{"x_y_radian " : [ 1 6 . 0 4 , - 0 . 2 8 , - 0 . 0 5 ] , " l a b e l " : " 1 . 5 s "} ,
+{"x_y_radian " : [ 2 1 . 5 5 , - 0 . 6 , - 0 . 0 7 ] , " l a b e l " : " 2 . 0 s "} ,
+{"x_y_radian " : [ 2 7 . 0 6 , - 1 . 0 2 , - 0 . 0 9 ] , " l a b e l " : " 2 . 5 s "} ,
+{"x_y_radian " : [ 3 2 . 5 7 , - 1 . 5 5 , - 0 . 1 ] , " l a b e l " : " 3 . 0 s "} ,
+{"x_y_radian " : [ 3 8 . 0 9 , - 2 . 1 1 , - 0 . 1 ] , " l a b e l " : " 3 . 5 s "} ,
+{"x_y_radian " : [ 4 3 . 7 6 , - 2 . 6 9 , - 0 . 1 ] , " l a b e l " : " 4 . 0 s "}]</ planning>
+The eight waypoints trace a gentle, high-speed right curve that advances from (5.2, 0.0) m to (43.8, −2.7) m
+while the heading rotates from −0.01 to −0.10 rad, keeping a lateral offset from the sidewalk agents on
+the right. Because this variant describes the answer rather than the evidence, it is farther from the visual
+input than (a) and (b): its 90.1 PDMS sits below prediction CoT, consistent with the view that the most
+useful CoT content is the one that supplies the action head with the operative scene information.
+Prediction CoT is the most useful target because it supplies the action head with both the current conflict
+location and its likely future bearing. Perception alone gives the object but not its motion, while planning
+text is farther from the visual evidence. Free reasoning is less stable under teacher forcing, and aggressive
+atomic compression removes useful spatial context. The supervision templates and the complete PDMS
+sub-metric breakdown (NC, DAC, DDC, EP, TTC, Comfort, and ADE) are reported together in Table 9.
+16
+
+
+(a) Perception  
+  2D bounding box + semantic class
+vehicle
+veh.
+ped.
+ped.bike
+GT Perception answer  (2048x512 canvas)
+[
+  {"bbox_2d": [0, 265, 146, 509], "label": "vehicle"},
+  {"bbox_2d": [994, 222, 1085, 329], "label": "vehicle"},
+  {"bbox_2d": [1954, 259, 2018, 378], "label": "pedestrian"},
+  {"bbox_2d": [1676, 262, 1740, 372], "label": "pedestrian"},
+  {"bbox_2d": [1728, 283, 1807, 366], "label": "bicycle"}
+]
+(b) Prediction  
+  future relative position + motion arrow
+behind
+far
+front
+near
+right
+near
+rightnear
+right
+GT Prediction answer  (2048x512 canvas)
+[
+  {"bbox_2d": [0, 265, 146, 509], "future_position": "behind"},
+  {"bbox_2d": [994, 222, 1085, 329], "future_position": "far, front"},
+  {"bbox_2d": [1954, 259, 2018, 378], "future_position": "near, right"},
+  {"bbox_2d": [1676, 262, 1740, 372], "future_position": "near, right"},
+  {"bbox_2d": [1728, 283, 1807, 366], "future_position": "near, right"}
+]
+(c) Planning  
+  ground-truth 4 s trajectory
+2
+0
+2
+y (m, left+)
+0
+20
+40
+x (m, forward)
+BEV
+GT Planning answer  (metric, 0.5 s per waypoint)
+[
+  {"x_y_radian": [5.22, 0.0, -0.01], "label": "0.5s"},
+  {"x_y_radian": [10.58, -0.07, -0.02], "label": "1.0s"},
+  {"x_y_radian": [16.04, -0.28, -0.05], "label": "1.5s"},
+  {"x_y_radian": [21.55, -0.6, -0.07], "label": "2.0s"},
+  {"x_y_radian": [27.06, -1.02, -0.09], "label": "2.5s"},
+  {"x_y_radian": [32.57, -1.55, -0.1], "label": "3.0s"},
+  {"x_y_radian": [38.09, -2.11, -0.1], "label": "3.5s"},
+  {"x_y_radian": [43.76, -2.69, -0.1], "label": "4.0s"}
+]
+Figure 9 The three CoT contents compared on one NAVSIM right-turn scene (ground-truth annotations). The three
+rows are three alternative supervision targets, not a serial pipeline: each is trained alone on the same scene and action,
+and the model never consumes one row’s output to produce another’s. One pastel outer frame encloses the title,
+annotated scene, and JSON answer of each CoT variant. (a) Perception CoT: a 2-D box and a class label for every
+salient agent (vehicle: blue, bicycle: orange, pedestrian: violet) on the 2048 × 512 deployment canvas. (b) Prediction
+CoT: each box is annotated with its future relative position and a motion arrow; this is the default target. (c) Planning
+CoT: the ground-truth 4 s trajectory (green) projected onto the camera strip, with a BEV inset (ego-left on the left)
+showing the top-down right-turn arc.
+C.2
+CoT attention visualization
+We visualize the last-frame attention from the final full-attention layer, as shown in Figure 10. With
+prediction-CoT supervision, the action queries consistently concentrate on nearby vehicles and vulnerable
+road users that constrain the maneuver, rather than spreading attention over the whole image. More
+17
+
+
+importantly, we observe a clear qualitative difference between models trained with and without CoT.
+Without CoT supervision, the attention is dominated by the lead vehicle that the ego car is following,
+while surrounding vehicles receive little attention. This narrow focus becomes problematic in cluttered or
+safety-critical scenes: nearby hazardous vehicles can be overlooked, which in turn prevents the policy
+from reacting safely. In contrast, adding CoT supervision broadens the attention of the VLA to a larger
+set of task-relevant objects, including adjacent vehicles, pedestrians, and cyclists that may affect the
+maneuver. As a result, the model acquires more comprehensive spatial awareness and produces safer
+driving strategies. These observations are consistent with the quantitative gains in NC and DAC reported
+in Table 9.
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 58%
+AUGUstus CoT attention
+in-box 1%
+w/o CoT training, action attention
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 66%
+AUGUstus CoT attention
+in-box 2%
+w/o CoT training, action attention
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 59%
+AUGUstus CoT attention
+in-box 9%
+w/o CoT training, action attention
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 62%
+AUGUstus CoT attention
+in-box 3%
+w/o CoT training, action attention
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 48%
+AUGUstus CoT attention
+in-box 0%
+w/o CoT training, action attention
+raw frame (+GT boxes + GT path)
+AUGUstus action attention
+in-box 60%
+AUGUstus CoT attention
+in-box 1%
+w/o CoT training, action attention
+Figure 10 CoT attention visualization. After prediction-CoT supervision, action tokens attend more to key objects
+across these scenes.
+18
+
+
+C.3
+Trajectory visualization: collision reduction
+The attention evidence is reflected in the trajectories. Training CoT reduces collisions and improves the
+safety terms in Table 9: NC rises from 98.8 to 99.0, DAC from 96.8 to 97.9, and TTC from 95.8 to 96.5. The
+following three collision cases show the qualitative counterpart: the no-CoT policy enters the conflict
+region, whereas the CoT-trained policy identifies the nearby agent and keeps a feasible clearance, as
+shown in 11.
+ 
+	
+
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+ 	
+
+ 
+ 
+	
+ 	
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+	
+ 
+	
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+	
+
+ 
+	
+
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+
+ 	
+
+ 
+ 
+	
+ 	
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+	
+ 
+	
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+	
+
+Figure 11 Collision cases. Each row compares the no-CoT and prediction-CoT trajectories in the same scene. CoT
+redirects the action away from the conflict agent, consistent with the improved NC, DAC, and TTC values in Table 9.
+C.4
+Trajectory visualization: progress preservation
+Safety does not come from stopping.
+The prediction-CoT model also improves ego progress (EP
+83.5 →84.2) and the aggregate PDMS (89.2 →90.6) in Table 9, while retaining full comfort. The three
+progress cases, as shown in 12, below show that the CoT policy avoids the conflict and continues along
+the route instead of replacing unsafe motion with an overly conservative halt.
+19
+
+
+GT
+w/o CoT training
+w/ CoT training
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+Longitudinal (m)
+GT
+PDMS 0.85
+EP 0.63
+Human reference
+10
+0
+10
+20
+30
+Lateral (m)
+w/o CoT training
+PDMS 0.65
+EP 0.15
+Low progress
+10
+0
+10
+20
+30
+Lateral (m)
+w/ CoT training
+PDMS 0.83
+EP 0.59
+High progress
+GT
+w/o CoT training
+w/ CoT training
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+Longitudinal (m)
+GT
+PDMS 0.93
+EP 0.83
+Human reference
+10
+0
+10
+20
+30
+Lateral (m)
+w/o CoT training
+PDMS 0.90
+EP 0.76
+Low progress
+10
+0
+10
+20
+30
+Lateral (m)
+w/ CoT training
+PDMS 1.00
+EP 1.00
+High progress
+GT
+w/o CoT training
+w/ CoT training
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+Longitudinal (m)
+GT
+PDMS 1.00
+EP 1.00
+Human reference
+10
+0
+10
+20
+30
+Lateral (m)
+w/o CoT training
+PDMS 0.90
+EP 0.77
+Low progress
+10
+0
+10
+20
+30
+Lateral (m)
+w/ CoT training
+PDMS 1.00
+EP 1.00
+High progress
+Figure 12 Progress-preserving cases. Prediction CoT keeps the route-directed motion while avoiding the nearby
+agent. The qualitative cases complement the EP and PDMS gains reported in Table 9; they are representative examples
+rather than a pointwise guarantee.
+D
+Algorithmic Details: SFT, AUGUstus-GRPO
+D.1
+Reward Design Details and Curriculum Rationale
+Prediction (CoT) reward. Predicted boxes are greedily matched to ground-truth boxes by descending IoU
+at threshold 0.5; 𝑟det = Í IoU/max(#pred, #gt) is a soft F1 (penalizing both misses and hallucinations),
+and 𝑟fp is the fraction of matched boxes whose future-position label agrees; 𝑟pred = 𝑟det·𝑟fp. A strict
+format gate requires exactly one <prediction>...</prediction> block with clean JSON content and no
+surrounding text or code fences; violations zero 𝑟pred (and only 𝑟pred).
+Planning reward. Stage I uses 𝑅= 𝑟pred + 5 · PDMS. Stage II uses 𝑅= 𝑟pred + 5 (𝑟endpoint + 𝑟safe), where
+𝑟endpoint maps the final-waypoint deviation to {1, .8, .6, .4, .2} over progressively looser L1 thresholds (the
+20
+
+
+softest of four tested “soft-error” shapings worked best), and
+𝑟safe =
+(
+mean {TTC, DAC}
+,
+min𝑚∈𝒢subscore𝑚> 0
+0
+otherwise,
+𝒢= {NC, DAC, TTC, EP}.
+with the hard gate additionally zeroing the whole planning term. PDMS is deliberately removed from the
+stage-II reward for two reasons: (i) late-stage PDMS becomes near-constant within a group (std∼0.02), so
+its group-relative advantage is dominated by noise, a measured failure mode of dense-score rewards; (ii)
+direct PDMS optimization slightly trades NC/TTC for EP. The endpoint-plus-shield shaping preserves
+a dense informative signal (waypoint geometry) but re-imposes safety ceilings; PDMS remains the
+validation/model-selection metric throughout, so there is no metric/reward mismatch risk in checkpoint
+choice.
+D.2
+Implementation details
+D.2.1
+SFT Training Detail
+We adopt Qwen3.5-2B backbone network. The action sequence consists of 8 action tokens with hidden
+dimension 𝐻=2048. The ActionEncoder is a 3-layer SiLU MLP with concatenated sinusoidal time
+embedding 𝑡. The ActionDecoder follows the structure LN →Lin →SiLU →LN →Lin(3) and uses
+a near-zero final initialization. Each layer applies per-norm modulation projections that map 𝐻to
+2𝐻, corresponding to a DiT variant with approximately 8M additional parameters. We apply quantile
+normalization with (𝑞01, 𝑞99) per action dimension. Training uses DeepSpeed ZeRO-2 with bf16 precision.
+The loss weights are 𝜆diff=10 and 𝜆lm=1. The main model uses dimension weights (1, 1, 1).
+For every training example we sample a flow time 𝑡and noise 𝜀, construct 𝑥𝑡= (1 −𝑡)𝑥0 + 𝑡𝜀, and run one
+joint AUGUstus-mode forward. The action head predicts ˆ𝑥0 while the language head teacher-forces the
+structured CoT 𝑦. The complete objective is
+ℒSFT = 𝜆diffℒ𝑥0 + 𝜆lmℒCE,
+(18)
+where ℒ𝑥0 is the dimension-normalized flow-matching L1 loss. We use 𝜆diff=10 and 𝜆lm=1 in the default
+recipe. The CoT labels are generated from the same scene annotation as the action target. Teacher forcing
+is used only during SFT: the action tokens are visible to the CoT stream, whereas the action tokens never
+read CoT tokens. Consequently, ℒCE back-propagates through the action states and the shared trunk, but
+does not create an inference-time dependency on generated text.
+D.2.2
+RL Training Detail
+We perform synchronous rollouts based on Verl, where a unified actor serves both rollout generation
+and policy updates. Each iteration uses 32 prompts with 𝐺=8 rollouts per prompt, resulting in 256
+sequences. The rollout uses a 3-step SDE with per-dimension diffusion coefficients 𝑔𝑑(𝑡)2 = 𝑎2
+𝑑𝑡, where
+𝑎𝑑∈(0.05, 0.05, 0.02). All rollouts in a group share the same initial state 𝑥1. During rollout, the prefix KV
+is frozen, and the behaviour policy output ˆ𝑥0 as well as the CoT token log-probabilities are recorded. For
+the update, we use a single PPO mini-batch that is fully on-policy, with a learning rate of 10−6, a clipping
+threshold of 0.2 for both heads, and a gradient clipping norm of 1.0.
+For a context group 𝑐we draw one shared initial noise state 𝑥1 and 𝐺independent transition-noise
+sequences. Each rollout returns an action trajectory 𝑥𝑖and a CoT sequence 𝑦𝑖. Its scalar reward is
+𝑅𝑖= 𝑅pred(𝑦𝑖) + 𝜆𝑅plan(𝑥𝑖),
+𝐴𝑖=
+𝑅𝑖−mean𝑗(𝑅𝑗)
+std𝑗(𝑅𝑗) + 10−6 ,
+(19)
+where we set 𝜆= 5. The same outcome signal trains both modalities. Stage I sets 𝑅plan = PDMS; Stage II
+replaces this saturating score by the endpoint-plus-safety shaping in Appendix D.1.The action objective is
+the clipped JaT-GRPO surrogate, and the language objective is token-level clipped CoT-GRPO:
+𝒥𝑎= E
+
+min(𝜌𝑎𝐴, clip(𝜌𝑎, 1 −𝜖, 1 + 𝜖)𝐴)
+
+,
+(20)
+𝒥𝑐= E
+"
+1
+|𝑦|
+Õ
+𝑘
+min(𝜌𝑐,𝑘𝐴, clip(𝜌𝑐,𝑘, 1 −𝜖, 1 + 𝜖)𝐴)
+#
+.
+(21)
+21
+
+
+The update maximizes 𝒥𝑎+ 𝛼𝑐𝒥𝑐while adding the exact action KL in Eq. (15) and a token-level reference
+KL for CoT. Thus CoT-GRPO is ordinary PPO on the discrete suffix, but its advantage is tied to the same
+simulator outcome as the continuous action head.
+Algorithm 5 AUGUstus supervised fine-tuning: complete procedure
+Require: Pretrained parameters 𝜃; training samples 𝒟= {(𝑐, 𝑥0, 𝑦)}; loss weights and optimizer.
+Ensure: Cold-start policy 𝜋SFT with action and prediction-CoT outputs.
+1: for each supervised training iteration do
+2:
+Sample a minibatch of contexts, target trajectories, and prediction CoTs from 𝒟.
+3:
+Normalize target trajectories using the fixed action statistics.
+4:
+Sample flow times 𝑡and independent noise 𝜀∼𝒩(0, 𝐼).
+5:
+Form 𝑥𝑡= (1 −𝑡)𝑥0 + 𝑡𝜀for each training sample.
+6:
+Encode context 𝑐= (𝑆, 𝐸, 𝐶, 𝐻), noisy action 𝑥𝑡with time 𝑡, and shifted CoT tokens 𝑦<𝑘.
+7:
+Run one shared-transformer forward pass with AUGUstus-mode hybrid attention.
+8:
+Read the clean-trajectory prediction ˆ𝑥0 and the token distribution 𝑝𝜃(𝑦𝑘| 𝑦<𝑘, 𝑐, 𝑥𝑡).
+9:
+Compute the joint flow-matching and teacher-forced CoT loss in Eq. (3) and include the auxiliary module
+losses.
+10:
+Backpropagate both losses jointly through the shared transformer and update 𝜃.
+11:
+Validate with action-only denoising.
+12: end for
+13: return The selected cold-start policy 𝜋SFT.
+Algorithm 6 AUGUstus deployment: complete AUGUstus-mode inference
+Require: Trained policy 𝜋𝜃; context 𝑐= (𝑆, 𝐸, 𝐶, 𝐻); schedule 1 = 𝑡0 > · · · > 𝑡𝑁= 0; optional CoT flag.
+Ensure: Future ego trajectory 𝑥out and, only if requested, prediction CoT 𝑦.
+1: Encode the causal context prefix once and cache its states.
+2: Draw 𝑥∼𝒩(0, 𝐼) in normalized action space.
+3: for 𝑛= 0 to 𝑁−1 do
+4:
+Evaluate the bidirectional action block against the cached context to obtain ˆ𝑥0.
+5:
+Apply the deterministic flow step: 𝑥←𝑥−(𝑡𝑛−𝑡𝑛+1)(𝑥−ˆ𝑥0)/𝑡𝑛.
+6: end for
+7: Invert the fixed action normalization to obtain 𝑥out.
+8: if prediction CoT is requested then
+9:
+Append the denoised action block to the context with zero-time conditioning.
+10:
+Autoregressively decode 𝑦𝑘∼𝑝𝜃(· | 𝑦<𝑘, 𝑐, 𝑥) with causal CoT attention.
+11:
+return (𝑥out, 𝑦).
+12: else
+13:
+return 𝑥out without CoT decoding.
+14: end if
+D.3
+Complete Training and Inference Algorithms
+Algorithms 5 and 6 give the full cold-start and deployment procedures corresponding to the contrasts
+in Algorithms 1 and 2. Both use the same AUGUstus-mode attention (action before CoT): context is
+causal, actions are bidirectional, and causal CoT tokens can read context and actions but not vice versa.
+Training uses noisy ground-truth actions and teacher-forced prediction CoT; deployment uses initial
+Gaussian noise and deterministic action denoising, with no ground-truth action or CoT required. Action
+normalization, time conditioning, and auxiliary module losses follow Appendix A and Appendix D.2.
+D.4
+Complete two-stage unified GRPO
+Algorithm 7 specifies the complete two-stage post-training procedure. The reference is frozen at SFT
+throughout both stages; the behavior policy is snapshotted before each on-policy rollout batch. Within
+each context group, initial flow noise is shared, whereas transition exploration noise and CoT sampling
+distinguish the rollouts. The standard run uses the noise settings in Appendix B.5, the reward and format
+gates in Appendix D.1, and the optimization settings in Appendix D.2. The same prediction reward is
+used in both stages. Stage I uses 𝑅pred + 5 PDMS, whereas Stage II uses 𝑅pred + 5(𝑅endpoint + 𝑅safe) with
+the planning safety gate.
+22
+
+
+Algorithm 7 AUGUstus-GRPO: complete two-stage unified optimization
+Require: Cold-start policy 𝜋SFT; contexts 𝒟; group size 𝐺; denoising schedule; clip and KL weights.
+Ensure: Two-stage action–CoT policy 𝜋∗
+II.
+1: Freeze 𝜋ref ←𝜋SFT and initialize 𝜋𝜃←𝜋SFT.
+2: for stage 𝑠∈{1, 2} do
+3:
+if 𝑠= 2 then
+4:
+Warm-start 𝜋𝜃←𝜋∗
+I, the best validation-PDMS Stage-I checkpoint.
+5:
+end if
+6:
+for each on-policy RL iteration do
+7:
+Snapshot the behavior policy 𝜋old ←𝜋𝜃and sample a context minibatch.
+8:
+for each context 𝑐in the minibatch do
+9:
+Draw one initial 𝑥1 ∼𝒩(0, 𝐼) shared by the 𝐺rollouts.
+10:
+for 𝑖= 1 to 𝐺do
+11:
+Initialize 𝑥𝑖,𝑡0 ←𝑥1.
+12:
+for 𝑛= 0 to 𝑁−1 do
+13:
+Predict ˆ𝑥old
+0
+= 𝑓old(𝑥𝑖,𝑡𝑛, 𝑡𝑛, 𝑐).
+14:
+Draw kernel noise 𝑧and sample 𝑥𝑖,𝑡𝑛+1 ←𝑐𝑥𝑥𝑖,𝑡𝑛+ 𝑐0 ˆ𝑥old
+0
++ 𝜎𝑠𝑧via Eq. (8).
+15:
+Record both states, ˆ𝑥old
+0
+, 𝑧, and the kernel coefficients for re-scoring.
+16:
+end for
+17:
+Set 𝑥𝑖←𝑥𝑖,0; decode action-conditioned CoT 𝑦𝑖and record its token log probabilities.
+18:
+Compute 𝑅pred,𝑖with the same prediction scoring and format gate in both stages.
+19:
+if 𝑠= 1 then
+20:
+Set 𝑅plan,𝑖←PDMS𝑖.
+21:
+else
+22:
+Set 𝑅plan,𝑖←𝑅ep,𝑖+ 𝑅safe,𝑖and apply the planning safety gate.
+23:
+end if
+24:
+Set 𝑅𝑖←𝑅pred,𝑖+ 5𝑅plan,𝑖.
+25:
+end for
+26:
+Normalize group rewards into the shared advantages 𝐴𝑖using Eq. (4).
+27:
+end for
+28:
+Re-evaluate recorded action states and CoT prefixes under 𝜋𝜃and the frozen 𝜋ref.
+29:
+Evaluate JaT-GRPO ratios directly from ˆ𝑥𝜃
+0 −ˆ𝑥old
+0
+using Eq. (14).
+30:
+Evaluate the action and CoT ratios and their native KL terms; keep each rollout’s shared 𝐴𝑖.
+31:
+Compute the two clipped objectives 𝒥𝑎and 𝒥𝑐.
+32:
+Jointly update 𝜃with ℒ= −𝒥𝑎+ 𝛽𝑎KLact + 𝛼𝑐(−𝒥𝑐+ 𝛽𝑐KLCoT).
+33:
+Synchronize the updated policy for the next rollout batch and retain the best validation checkpoint.
+34:
+end for
+35:
+Save the selected stage checkpoint as 𝜋∗
+I or 𝜋∗
+II.
+36: end for
+37: return 𝜋∗
+II.
+D.5
+Three-stage training trace
+The SFT checkpoint provides scene grounding and a stable action prior. Stage I uses PDMS to improve
+progress and establishes the first RL checkpoint. Stage II switches to endpoint and safety shaping to
+recover within-group variance after PDMS saturates. The qualitative traces in Fig. 13 show the same
+progression: the predicted path becomes more compliant at Stage I and then adds a larger safety margin
+at Stage II. Meanwhile, the CoT prediction accuracy improves from 0.75 at SFT to 0.85 after RL, indicating
+increasingly accurate identification of critical objects and thereby enhancing the model’s action planning
+capability.
+23
+
+
+SFT
+RL stage 1
+RL stage 2
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+40
+Longitudinal (m)
+SFT
+PDMS 0.47 
+10
+0
+10
+20
+30
+Lateral (m)
+RL stage 1
+PDMS 0.97 
+10
+0
+10
+20
+30
+Lateral (m)
+RL stage 2
+PDMS 0.98 
+SFT
+RL stage 1
+RL stage 2
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+40
+50
+Longitudinal (m)
+SFT
+PDMS 0.47 
+10
+0
+10
+20
+30
+Lateral (m)
+RL stage 1
+PDMS 0.96 
+10
+0
+10
+20
+30
+Lateral (m)
+RL stage 2
+PDMS 0.97 
+SFT
+RL stage 1
+RL stage 2
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+Longitudinal (m)
+SFT
+PDMS 0.49 
+10
+0
+10
+20
+30
+Lateral (m)
+RL stage 1
+PDMS 0.96 
+10
+0
+10
+20
+30
+Lateral (m)
+RL stage 2
+PDMS 0.98 
+Figure 13 Three-stage RL visualization. Each case shows the same scene under SFT, RL Stage I, and RL Stage II.
+Stage I moves the path toward the desired progress profile; Stage II retains that progress while increasing the safety
+margin. The displayed case-level PDMS values are illustrative qualitative traces, whereas the aggregate values are in
+Table 7.
+D.6
+Deployment Complexity
+Latency. The deployed path is a causal visual prefix followed by one bidirectional eight-token action suffix.
+The vision encoder remains eager because the multimodal preprocessing contains host synchronization;
+the prefix and denoising suffix are captured in one CUDA graph. Table 10 reports the steady-state
+batch-one measurements from the profiling script in fast_inference.md.
+The eager profile launches about 3.7k small kernels and performs roughly 200 pageable host-to-device
+copies per sample. Graph replay removes this CPU dispatch overhead and reduces the LLM stage from
+91.83 to 33.19 ms (2.77×), while leaving the visual stage unchanged. The action suffix contributes only
+eight tokens on top of a roughly 2,257-token context. Optional post-hoc CoT is therefore deliberately
+disabled in the speed-critical configuration: a measured 166-token explanation takes about 4.5 s at batch
+one, whereas the action-only path is below 100 ms.
+Scorer Module. Let 𝐶vis be the visual encoder cost, 𝐶pre(𝐿) the prefix cost for 𝐿context tokens, and 𝐶act(𝑇)
+24
+
+
+Table 10 Measured batch-one latency on one H800.
+Path or module
+Mean (ms)
+Fraction
+Vision encoder and M-RoPE
+40.20
+54.6%
+Context prefix, eager
+46.04
+34.8%
+One-step denoising, eager
+45.70
+34.6%
+LLM stage, CUDA-graph replay
+33.19
+45.1%
+End-to-end, eager
+131.88
+–
+End-to-end, CUDA graph
+73.67
+13.6 Hz
+the eight-token action suffix. Our single-trajectory path is
+𝑇ours = 𝐶vis + 𝐶pre(𝐿) + 𝐶act(𝑇),
+𝑇= 8,
+(22)
+and is independent of the number of candidates. A VLA+scorer system that generates 𝑁trajectories and
+scores them costs approximately
+𝑇scorer(𝑁) = 𝑁 𝐶pre(𝐿) + 𝐶act(𝑇)
++ 𝐶vis + 𝑁𝐶score.
+(23)
+Thus, 𝑁=32–64 multiplies the expensive VLM pass even if the scorer itself is lightweight. As a result,
+this VLA+scorer design is difficult to run in real time on vehicle hardware. We therefore generate one
+trajectory in one network evaluation; the deployed path takes 73.6 ms on an H800 (13.6 Hz) and 83 ms on
+the real vehicle (12 Hz), while retaining SOTA public-benchmark performance.
+E
+Qualitative Results on Public, Private Data, and Driving Test
+E.1
+Public benchmark examples
+The public examples compare the same scene across ReCogDrive (Xiong et al., 2026), AutoDrive-P3 Ye
+et al. (2026b), and AUGUstus. The twelve cases in Fig. 14 and Fig. 15 provides representative qualitative
+comparisons.
+E.2
+Internal 1,000 km data
+The internal set contains long-tail interactions and camera conditions not present in NAVSIM. Figures 16
+and Figures 17 shows twelve representative cases from the 1,000 km evaluation; the category-level
+aggregate remains the one reported in Table 4.
+E.3
+Regression and flow-matching baselines
+Figure 18 and Figure 19 keeps the direct VLM+regression and VLM+flow-matching comparison in one
+image. Both baselines use the same scene input; the comparison isolates the action parameterization and
+the shared CoT training rather than a sensor change.
+25
+
+
+ 
+	
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+ 	
+
+ 
+ 
+
+ 		
+
+ 
+
+ 
+
+
+ 	
+	
+
+ 	
+
+ 
+
+
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+
+ 
+
+
+
+ 
+	
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+ 	
+
+ 
+ 
+
+ 		
+
+ 
+
+ 
+
+
+ 	
+	
+
+ 	
+ 
+
+
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+ 
+
+
+
+ 
+	
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+
+
+ 	
+
+ 
+ 
+
+ 		
+
+ 
+
+ 
+
+
+ 	
+	
+
+ 	
+
+ 
+
+
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+
+ 
+
+
+
+Figure 14 Public-set qualitative comparison (part 1/2). Each panel contrasts ReCogDrive, AutoDrive-P3, and
+AUGUstus on the same public scene. The single AUGUstus trajectory is both collision-free and route compliant in
+these examples.
+26
+
+
+RecogDrive
+AutoDrive-P3
+AUGUstus (Ours)
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+Longitudinal (m)
+RecogDrive
+PDMS 0.00
+NC 0.00
+Having collision
+10
+0
+10
+20
+30
+Lateral (m)
+AutoDrive-P3
+PDMS 0.79
+EP 0.50
+Low progress
+10
+0
+10
+20
+30
+Lateral (m)
+AUGUstus (Ours)
+PDMS 1.00
+EP 1.00
+NC 1.00
+Safety and high progress
+ 
+	
+
+	
+
+
+ 
+
+ 
+
+
+ 	
+ 
+
+ 
+
+
+ 	
+
+ 
+ 
+
+ 		
+
+ 
+
+ 
+
+
+ 	
+	
+
+ 	
+
+ 
+
+
+ 
+
+ 
+
+
+ 	
+	
+
+
+ 
+
+ 
+
+
+
+RecogDrive
+AutoDrive-P3
+AUGUstus (Ours)
+10
+0
+10
+20
+30
+Lateral (m)
+10
+0
+10
+20
+30
+40
+Longitudinal (m)
+RecogDrive
+PDMS 0.00
+NC 0.00
+Having collision
+10
+0
+10
+20
+30
+Lateral (m)
+AutoDrive-P3
+PDMS 0.79
+EP 0.51
+Low progress
+10
+0
+10
+20
+30
+Lateral (m)
+AUGUstus (Ours)
+PDMS 1.00
+EP 1.00
+NC 1.00
+Safety and high progress
+Figure 15 Public-set qualitative comparison (part 2/2). Three additional public scenes comparing ReCogDrive,
+AutoDrive-P3, and AUGUstus under the same visualization protocol.
+27
+
+
+front left
+front
+front right
+rear left
+rear
+rear right
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+BEV
+10
+0
+10
+Ego
+Agent
+History trajectory
+GT trajectory
+Predict trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+60
+50
+40
+30
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+BEV
+30
+20
+10
+0
+Ego
+Agent
+History trajectory
+GT trajectory
+Predict trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+70
+60
+50
+40
+30
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+BEV
+40
+30
+20
+10
+0
+Ego
+Agent
+History trajectory
+GT trajectory
+Predict trajectory
+Figure 16 Internal 1,000 km qualitative examples. Representative long-tail interactions and camera conditions from
+the private evaluation set.
+28
+
+
+front left
+front
+front right
+rear left
+rear
+rear right
+30
+20
+10
+0
+10
+20
+30
+40
+BEV
+0
+10
+Ego
+Agent
+History trajectory
+GT trajectory
+Predict trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+30
+20
+10
+0
+10
+20
+30
+40
+50
+BEV
+0
+10
+20
+Ego
+Agent
+History trajectory
+GT trajectory
+Predict trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+10
+0
+10
+20
+BEV
+0
+Ego
+Agent
+History trajectory
+GT trajectory
+Predict trajectory
+Figure 17 Internal 1,000 km qualitative examples. Representative long-tail interactions and camera conditions from
+the private evaluation set. (part 2/2).
+29
+
+
+front left
+front
+front right
+rear left
+rear
+rear right
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+BEV
+10
+0
+10
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+10
+0
+10
+20
+30
+40
+BEV
+0
+10
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+80
+BEV
+10
+0
+10
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+Figure 18 Internal qualitative comparison of VLM+regression, VLM+flow matching, and AUGUstus (part 1/2).
+30
+
+
+front left
+front
+front right
+rear left
+rear
+rear right
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+BEV
+10
+0
+10
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+80
+70
+60
+50
+40
+30
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+BEV
+0
+10
+20
+30
+40
+50
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+40
+30
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+BEV
+30
+20
+10
+0
+Ego
+Agent
+History trajectory
+GT trajectory
+Ours trajectory
+FM trajectory
+RH trajectory
+Figure 19 Internal qualitative comparison of VLM+regression, VLM+flow matching, and AUGUstus (part 2/2).
+31
+
+
+E.4
+Real-vehicle visualization
+The real-vehicle examples use the same action-only deployment path as the latency measurement. The
+camera mosaic and bird’s-eye trajectory in Fig. 20 show that the one-step output remains smooth in
+nighttime and multi-camera conditions.
+front left
+front
+front right
+rear left
+rear
+rear right
+10
+0
+10
+20
+BEV
+0
+lateral (m) [left +]
+Ego
+Agent
+History trajectory
+Predict trajectory
+front left
+front
+front right
+rear left
+rear
+rear right
+20
+10
+0
+10
+20
+30
+40
+50
+60
+70
+BEV
+10
+0
+10
+lateral (m) [left +]
+Ego
+Agent
+History trajectory
+Predict trajectory
+Figure 20 Real-vehicle qualitative examples. The deployed action-only path runs at 12 Hz on the vehicle. The BEV
+trajectory is generated directly by the shared model; CoT decoding is omitted from this loop.
+32

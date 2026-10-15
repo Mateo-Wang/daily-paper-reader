@@ -1,0 +1,2411 @@
+Beyond Planning: Differentiable Control-in-the-loop
+End-to-End Autonomous Driving
+Zhidong Wang, Zirui Li, Zitong Shan, Zhiqi Mao, Qihang Huang,
+Zhan Chen, Jingsong Liang, Han Yu, and Chen Lv
+Abstract—End-to-end autonomous driving has achieved re-
+markable progress by planning trajectories directly from raw
+sensor data. Yet the step from planning to control still relies
+on hand-tuned tracking controllers that block the gradient path
+from vehicle motion back to the network. This gap stems from
+non-differentiable vehicle dynamics, aliased supervision from
+coarsely sampled expert labels, rate mismatch between high-rate
+control and low-rate re-planning, and vehicle model discrep-
+ancies between training and deployment. This paper proposes
+DIVA (Differentiable Identified Vehicle dynamics for end-to-end
+Autonomous driving) to close this gap. An identified actuator-
+level vehicle model is embedded in the training loop of the
+end-to-end driving network, forming a differentiable chain from
+perception to vehicle states. A learning-based control decoder
+replaces the external controller and is supervised on the rolled-
+out vehicle states, bypassing the aliased control-input labels. A
+rate-consistent control-input parameterization reconciles the het-
+erogeneous sampling rates and enables asynchronous execution
+with a 3.8 ms control-only cycle. On-policy re-identification and
+an online disturbance observer address training-time distribution
+shift and deployment-time model mismatch respectively. On the
+closed-loop Bench2Drive benchmark, DIVA achieves a driving
+score of 86.7, surpassing the widely adopted state-of-the-art
+approach by 3.3 points while nearly halving mean jerk and
+reducing brake switching by 64%, and maintains superior path
+tracking accuracy under significant vehicle model mismatch at
+deployment.
+Index Terms—End-to-end autonomous driving, vehicle dy-
+namics, system identification, differentiable simulation, motion
+control, imitation learning.
+I. INTRODUCTION
+E
+ND-to-end autonomous driving unifies perception and
+planning within a single differentiable model that maps
+raw sensor data to a reference trajectory [1, 2]. Propagating
+the planning losses back through the perception backbone
+reduces the compound error that accumulates across hand-
+crafted module boundaries. The planned trajectory serves as
+the imitation target and is tracked by lateral and longitudinal
+controllers at deployment. Training thus stops at the planning
+output, while closed-loop performance depends on the actual
+control response of the vehicle: the tracking controller, the
+actuator subsystems and the chassis dynamics remain outside
+Zhidong Wang, Zirui Li, Zitong Shan, Zhiqi Mao, Qihang Huang, Zhan
+Chen, Jingsong Liang, and Chen Lv are with the School of Mechanical
+and Aerospace Engineering, Nanyang Technological University, Singapore.
+Zhidong Wang is also with the Collaborative Initiative, Interdisciplinary
+Graduate Programme, Nanyang Technological University, Singapore. Han Yu
+is with the College of Computing and Data Science, Nanyang Technological
+University, Singapore.
+Zhidong Wang and Zirui Li contributed equally to this work. Corresponding
+author: Chen Lv.
+the differentiable pipeline and block the gradient path from
+the vehicle response back to the network.
+The execution of the end-to-end planning results relies on
+classical controllers designed for modular pipelines, which
+assume a smooth, feasible trajectory and a known vehicle
+model [3, 4]. An end-to-end planner satisfies neither assump-
+tion: its output is temporally inconsistent, exhibits discrete
+speed jumps and loses reliability over long horizons. The re-
+sulting planning-to-control discontinuity comprises three gaps.
+The supervision gap: expert commands are recorded at a label
+rate far below the control rate, yielding aliased control-input
+labels. The gradient gap: the non-differentiable controller and
+vehicle dynamics keep the training loss from reflecting the
+actual control response. The deployment gap: the vehicle
+model presumed in training differs from the deployed vehicle,
+and the label, perception and control rates also differ.
+This
+paper
+proposes
+DIVA
+(Differentiable
+Identified
+Vehicle dynamics for end-to-end Autonomous driving) to
+bridge these gaps. DIVA embeds a differentiable actuator-
+level vehicle dynamics model in the training loop, forming
+a single differentiable pathway from perception to vehicle
+states (Fig. 1), and replaces the external controller with a
+learned control decoder whose supervision, gradient flow and
+deployment all pass through the identified vehicle dynamics
+model. The main contributions are:
+• End-to-end autonomous driving model differentiable
+through to vehicle states. An actuator-level vehicle
+dynamics model links the planning output to the vehicle
+response, making the architecture differentiable from
+perception to vehicle states; on-policy re-identification
+keeps the model consistent with the learned controller.
+• Dynamics-in-the-loop
+imitation
+learning
+in
+state
+space. Supervision on vehicle states through the dy-
+namics model bypasses the aliased control-input la-
+bels that make direct control-input cloning ill-posed; an
+identifiability-aware loss and a gradient gate enable joint
+training of the controller and planner.
+• Rate-consistent asynchronous execution at deploy-
+ment. A rate-consistent control-input parameterization
+reconciles the label, perception and control rates; asyn-
+chronous execution decouples control from perception
+latency, enabling full-rate feedback and closed-loop ro-
+bustness under vehicle model mismatch.
+1
+arXiv:2610.18167v1  [cs.RO]  13 Oct 2026
+
+
+Perception  
+Backbone
+Camera & Lidar
+Onboard
+Sensors
+Perception
+tokens
+Planning 
+Decoder
+Control 
+Decoder
+Vehicle State
+Route & 
+Target Speed
+Rate-Consistent
+Control-Input Knots
+FOH
+Differentiable Vehicle  Dynamics
+Dynamics-in-the-Loop
+Imitation Learning
+Asynchronous Execution
+& Online Estimation
+Online Disturbance Estimate
+Explicit Reference
+Pretraining
+State 
+Imitation
+Loss
+Gradient Path
+Control-Input Anchor
+Risk-sensitive loss
+Mismatch Training
+Memory Tokens
+Cross-
+attention
+On-policy
+re-identification
+Straight-through
+gradients
+Slew-Rate
+Limiters
+Powertrain
+Maps
+Discrete
+Regimes
+Longitudinal channel
+Closed-Loop 
+Autonomous 
+Driving
+Slew-Rate
+Limiters
+Ackermann
+steering
+Lateral channel
+Tire
+Model
+Disturbance Observer
+Perception Cache
+Receding horizon
+Low-latency 
+control
+Upstream
+Interfaces
+Perception
+Reference
+State
+Feedback
+Planning
+Reference
+Disturbance
+Estimate
+Non-Smooth Actuator Characteristics
+Targeted 
+Challenges
+Gradient Gap
+PID
+Model mismatch
+Train
+Deploy
+Rate Inconsistency
+Unreliable Reference
+Aliased Demonstration
+Closed-loop Transfer
+Fig. 1. Overview of DIVA: the control decoder cross-attends to memory tokens that combine the scene and planning features, the explicit route and target-speed
+reference, the state feedback and the disturbance estimate, and its control-input knots pass through a first-order hold into the identified differentiable vehicle
+dynamics, whose longitudinal and lateral actuator channels drive a single-track model integrated at 20 Hz. Under imitation learning in state space, the state
+loss propagates along the gradient path back through the vehicle dynamics into the control and planning decoders, and at deployment the control decoder runs
+on a fast path over cached perception, executing receding-horizon control inputs conditioned on the disturbance estimate of the online observer.
+II. RELATED WORK
+A. The Planning-to-Control Interface in Autonomous Driving
+In modular stacks, planning interfaces with control through
+a reference trajectory tracked by geometric, PID, linear-
+quadratic or model predictive controllers [5, 6], with modern
+MPC designs incorporating actuator delays and tire limits [7].
+In end-to-end stacks, the output representation determines
+where this interface resides [8]: end-to-end networks output
+control commands [9], trajectory–control fusions [10], tempo-
+ral trajectories [11, 12], or geometric paths to be tracked [13],
+where retuning controller gains alone can improve driving
+performance significantly [14]. Yet the training always stops
+at the planning output, and the learned reference trajectory
+is state-conditioned, temporally inconsistent and reliable only
+within the preview distance.
+Several works extend the differentiable chain beyond the
+planner through kinematic or nominal vehicle models: Diff-
+Stack [15] employs a unicycle-based LQR, analytic pol-
+icy gradients [16, 17] supervise through bicycle dynamics,
+Rodr´ıguez-Vidal et al. [18] enable waypoint-space supervision
+via a kinematic model, and DIPC [19] couples a differentiable
+planner with a neural MPC through a six-state vehicle model
+with Magic Formula tires. In all cases, the vehicle model
+is kinematic or nominal with assumed parameters, without
+actuator dynamics such as slew-rate limits or lags, and the
+label, perception and control rates are not decoupled.
+B. Learning-based Controllers Considering Model Mismatch
+Reinforcement learning [20] and imitation learning [21] can
+train end-to-end vehicle controllers, but the learned dynamics
+are implicitly encoded in the network weights and cannot be
+re-calibrated when the vehicle dynamics changes. The classical
+remedy pairs a nominal model with an observer: unknown-
+input observers generate steering commands [22], and adaptive
+Kalman filters supply tire and friction estimates to hand-
+designed controllers [23]. Hybrid neural–physical structures
+increasingly identify the nominal model itself [24, 25]. On
+the learning side, domain randomization tolerates a range
+of vehicle dynamics characters [26], and continual meta-
+learning adapts dynamics models online [27]. Explicit dis-
+turbance estimates have been supplied to learned quadrotor
+controllers [28], while for ground vehicles online adaptation
+refines the dynamics model within an optimizer [29]; DIPC
+examined certain vehicle parameter variation without retrain-
+ing or adaptation [19].
+These approaches remain disconnected: observer-based
+methods serve rule-based controllers, learned controllers ab-
+sorb mismatch through domain randomization, and online
+adaptation refines the dynamics model rather than the con-
+troller. No existing work feeds explicit mismatch estimates
+to a learned controller within an end-to-end driving stack;
+DIVA does so by unifying model identification, differentiable
+planning and mismatch-aware control in a single trainable
+framework.
+III. METHODOLOGY
+A. Overall Framework
+The end-to-end autonomous driving networks are supervised
+at the planning level; DIVA extends the differentiable compu-
+tation graph to the vehicle-state level so that the training loss
+directly reflects closed-loop execution performance.
+1) Architecture Overview: Fig. 1 illustrates the overall
+architecture. A perception backbone fuses camera and LiDAR
+observations into perception tokens, from which a planning
+decoder produces a reference route and a target speed dis-
+tribution. A subsequent control decoder maps these planning
+outputs together with state feedback and disturbance estimate
+into control-input knots that are upsampled to the control rate
+via first-order hold (FOH) interpolation. The identified vehicle
+2
+
+
+dynamics model then propagates these control inputs forward
+over the prediction horizon, yielding predicted vehicle states
+that are supervised against the expert demonstrations. The con-
+trol decoder’s outputs influence the training loss exclusively
+through the differentiable vehicle model: the state-loss gradient
+back-propagates through the vehicle dynamics into the control
+decoder and, modulated by a learnable gradient gate, further
+into the planning decoder. At deployment, the control decoder
+executes at every control step with cached perception features
+and receives an online disturbance estimate, enabling real-time
+mismatch-aware control.
+2) Problem Formulation: The planner output is a geometric
+path decoupled from a target speed [30], which performs
+markedly better in closed-loop driving than a temporal tra-
+jectory [2]. It consists of a route R = (ρ1, . . . , ρN) of
+N points ρi ∈R2 in the vehicle frame, uniformly spaced
+along the arc length, and a probability vector pv over discrete
+speed classes. The vehicle accepts a actuator command vector
+c = [ct, cb, cs]⊤of throttle, brake and steering at the control
+rate fctrl = 20 Hz, with control period Ts = 1/fctrl. The
+expert demonstrations are recorded at flab = 4 Hz with label
+period Tlab = 1/flab: for a frame at time t, the labels
+span a 2 s horizon and comprise K = 8 future expert states
+z⋆
+j = [X⋆
+j , Y ⋆
+j , ψ⋆
+j , v⋆
+j ]⊤of position, heading and speed at
+t + jTlab, j = 1, . . . , K, and the recorded expert commands,
+expressed as control inputs u⋆
+j, j = 0, . . . , K. Perception runs
+at a rate fperc ≤fctrl, bounded by the latency of the backbone
+and the planner.
+The control decoder C maps the memory tokens to K + 1
+control-input knots U at the label rate. The knots are inter-
+polated to a control-rate sequence ¯u0:H−1 over H = 5K
+control steps, and rolled out through the identified vehi-
+cle dynamics model zk+1 = F (zk, c(¯uk); θ), written as
+z1:H = Φ (z0, ¯u0:H−1; θ), where z is the model state and θ
+collects vehicle dynamics mismatch parameters, drawn from a
+distribution p(θ) in training. The map c(·) from control inputs
+to commands is given in Section III-B2. The control decoder
+is trained to solve
+min
+C
+ED, θ∼p(θ)
+h K
+X
+j=1
+ℓ
+ z5j, z⋆
+j
+ i
+,
+(1)
+where D denotes the demonstrations and ℓis the discrepancy
+between z5j and z⋆
+j in position, heading and speed. Eq. (1)
+addresses control rather than prediction: the control inputs are
+the unknowns, and the model maps them to the states that the
+demonstrations record. The planning decoder is trained jointly
+with its own loss.
+B. Control Decoder
+The learned planner regenerates its reference at every
+perception update, conditioned on the current vehicle state
+and reliable only within the preview horizon. A controller
+that relies solely on this reference inherits its uncertainty.
+To mitigate this limitation, the control decoder receives not
+only the explicit reference but also the raw scene tokens and
+the planner’s intermediate features, enabling compensation for
+planning inaccuracies through richer contextual information.
+1) Memory Tokens: The perception backbone and the plan-
+ning decoder follow TF++ [30]. The fused bird’s-eye-view
+feature is projected and positionally encoded into perception
+tokens M, augmented by a speed and navigation token.
+A transformer with learned queries Qp attends to M and
+produces planning tokens P, from which a GRU decodes the
+route R and a softmax head outputs the speed distribution pv.
+The control decoder is an independent three-layer trans-
+former whose memory
+S =
+
+ϕM(M); ϕP (P); ER(Rref);
+Ev(pv
+ref); Eo(o); Ed(d)
+
+(2)
+concatenates four groups of tokens, formed by learned adapters
+ϕM, ϕP and learned embeddings ER, Ev, Eo, Ed. The feature
+interface ϕM(M), ϕP (P) lets the controller attend to the scene
+and the planner’s intermediate representation. The explicit
+reference, per-point route tokens ER(Rref) and a speed token
+Ev(pv
+ref), keeps the interpretable interface of the planner. The
+state-feedback token Eo(o), with o = [vx, ravg]⊤, closes
+the loop on speed and yaw rate and deliberately excludes
+accelerations. The disturbance-estimate token Ed(d) carries
+the observer estimates. Here ravg is the yaw rate averaged
+over one label period Tlab. At deployment, the reference
+(Rref, pv
+ref) is the planner output (R, pv). In training, it is
+replaced by the ground truth with probability 0.5, and the
+feature tokens are masked with probability 0.1, so that the
+controller can also operate on the explicit reference alone.
+2) Rate-Consistent Control-Input Knots: The decoder out-
+put yields the knots
+U = tanh (MLP (Decc (Qc, S))) ∈[−1, 1](K+1)×2,
+(3)
+where Decc denotes this transformer with K + 1 learned
+queries Qc. Each knot uj = [ux,j, us,j]⊤is converted to
+vehicle commands by c(u) = [[ux]+, [−ux]+, us]⊤, where
+[x]+ = max{x, 0}. The single signed longitudinal input ux
+excludes simultaneous throttle and brake and keeps the longi-
+tudinal acceleration monotone in ux. As absolute commands
+are bounded by tanh, the knots require no previous-command
+input and cannot drift like an integrator.
+Parameterizing the control inputs at the control rate would
+introduce far more free inputs per sample than the state
+labels can constrain, overfitting to the temporal aliasing. DIVA
+therefore places the knot values at the label rate, but integrates
+the model and executes the commands at the control rate. The
+knots are interpolated to the control period by FOH,
+¯uk =
+ 1 −
+ k
+5
+	
+u⌊k/5⌋+
+ k
+5
+	
+u⌊k/5⌋+1,
+(4)
+for k = 0, . . . , H −1, where ⌊·⌋and {·} denote the integer
+and fractional parts. The loss is evaluated only at the control
+steps that coincide with the label instants, with control step 0
+applying knot 0 exactly. Retaining the full control-rate inte-
+gration is essential: coarsening the model to one step per knot
+would introduce numerical distortion, and the controller would
+learn to compensate for this model bias rather than for the
+true vehicle dynamics. During deployment, the control decoder
+executes at every control step with the latest state feedback
+o and disturbance estimate d, applying only knot 0 in a
+3
+
+
+0
+5
+10 15 20
+Speed (m/s)
+0.25
+0.50
+0.75
+1.00
+Throttle
+(a)
+0
+5
+10
+15
+Speed (m/s)
+0
+2
+4
+6
+ (m/s )
+(b)
+−0.2 0 0.2 0.4
+Time (s)
+0
+2
+4
+6
+ (m/s )
+(c)
+0
+1
+2
+Time (s)
+0
+2
+4
+6
+Speed (m/s)
+(d)
+0
+1
+2
+Horizon (s)
+−0.1
+0.0
+0.1
+0.2
+0.3
+Speed bias (m/s)
+(e)
+0
+1
+2
+Horizon (s)
+0.02
+0.1
+0.5
+2
+Position error (m)
+(f)
+measured vehicle
+identified model
+identified, step 
+/
+calibrated model
+kinematic bicycle
+Fig. 2.
+On-policy re-identification: (a) coverage of the identification exci-
+tations (gray) and of the base controller (red, 50% and 85% contours); (b)
+map at throttle 0.7; (c) 141 on-policy upshifts; (d) 49 on-policy launches; (e)
+speed bias of both models under the controller’s commands; (f) position error
+on held-out drives; kinematic bicycle: the constant-parameter model of [31]
+shipped with TF++.
+receding-horizon fashion. The knot parameterization therefore
+serves purely as a training-time mechanism for temporal credit
+assignment and does not reduce the closed-loop control rate.
+C. Identified Differentiable Vehicle Dynamics
+The vehicle dynamics model F constitutes the sole differ-
+entiable path from the control decoder’s output knots to the
+predicted vehicle states; consequently, the controller implicitly
+adapts its commands to the characteristics of this model. This
+coupling imposes three requirements on F. First, the model
+must faithfully capture the actuator dynamics that govern the
+vehicle’s response to a given command. Second, it must pro-
+vide well-defined gradients throughout the controller’s operat-
+ing envelope, including at standstill. Third, it must generalize
+beyond the identification excitations and remain accurate under
+the command distribution induced by the trained controller. In
+addition, F serves a fourth role by parameterizing the vehicle-
+side model mismatch for online estimation.
+1) Model Structure: The state of the model is
+z = [X, Y, ψ, vx, vy, r, ˜cs, ˜ct, ˜cb, ad, ab, χ]⊤,
+(5)
+which comprises the vehicle pose (X, Y, ψ), the longitudinal
+and lateral velocities vx and vy, the yaw rate r, and the actuator
+states: the rate-limited steering, throttle and brake inputs ˜cs,
+˜ct and ˜cb, the lagged powertrain and brake accelerations ad
+and ab, and a wheel-lock indicator χ ∈{0, 1}.
+The model explicitly represents the actuator chain from
+commanded input to vehicle response. Each command first
+passes through the vehicle’s slew-rate limiter, which enforces
+the physical rate constraints on steering, throttle and brake.
+The powertrain acceleration ad is governed by a static map
+A(vx, ˜ct), filtered through a first-order lag; this map encodes
+the steady-state acceleration on a flat road, accounting for road
+load, engine braking and the gear selected by the transmission
+shift schedule at the current speed. The brake acceleration ab
+is similarly modeled as a constant deceleration abrk < 0:
+ax,k = ad,k+1 + ab,k+1 −g sin γk,
+(6)
+where g is the gravitational acceleration and γk is the road
+grade angle, positive uphill. Two discrete regimes, a wheel
+lock in the first gear and a standstill hold under braking,
+complete the longitudinal channel. In the lateral channel, the
+steering input sets the road-wheel angle through a speed-
+dependent steering limit and the Ackermann geometry. A
+single-track model with saturating lateral tire forces yields vy
+and r, and blends into the kinematic single-track model at low
+speed.
+The model advances by one control period Ts per step and
+is formulated directly in discrete time rather than as a numer-
+ical discretization of continuous-time dynamics; empirically,
+reducing the integration step below Ts yields no improvement
+in open-loop accuracy on held-out drives (Fig. 2(f)). This
+discrete-time formulation also motivates the design choice:
+the control-input knots are interpolated to the control rate and
+integrated at that rate, rather than integrated at the coarser
+label rate. The model parameters are identified through a three-
+tier procedure in which each tier is fitted with all preceding
+tiers held fixed: specification-level parameters are drawn from
+the vehicle datasheet, calibration-level parameters are obtained
+from constant-input, step and coast-down experiments, and the
+remaining parameters are identified from step-steer and swept-
+sine maneuvers. Appendix A provides the complete model
+equations, the identification protocol, the resulting parameter
+values, and a validation against measured vehicle data.
+2) Gradients Through Non-Smooth Actuator Characteris-
+tics: Several elements of F are non-smooth: the split of ux
+into throttle and brake, the floor [·]+ on the speed, the dead
+band of A, the discrete regimes, the slew-rate limiter and the
+clipping of the commands. A zero gradient there would stop
+learning exactly where the vehicle launches and stops. The
+split and the floor therefore use a leaky straight-through esti-
+mator [32]: the forward pass computes [x]+, and the backward
+pass uses the slope 1 for x > 0 and ϵst = 0.1 otherwise.
+Gradients thus still flow at standstill and in the dead band. The
+indicators of the discrete regimes are detached in the backward
+pass, and the limiter and the clipping keep the subgradient.
+The Ackermann relation is implemented in a form that is
+continuously differentiable at zero steering (Appendix A). A
+finite-difference check confirms the analytical gradients with
+respect to the knots.
+3) Policy-Induced
+Model
+Shift
+and
+On-Policy
+Re-
+Identification:
+System
+identification
+relies
+on
+designed
+excitations, such as constant inputs, steps and bang-bang
+sequences, which hold a few discrete input levels (Fig. 2(a)).
+A controller trained through the model instead applies smooth,
+moderate throttle and modulated braking. It drives the model
+into regimes that the identification data cover only sparsely,
+and inherits the model error there. This paper terms the
+effect policy-induced model shift, the model-side counterpart
+of the covariate shift of imitation learning; it instantiates
+identification for control, under which the identification
+4
+
+
+experiment should reflect the operating conditions of the
+controller [33].
+Replaying open loop the closed-loop telemetry of a first
+controller trained through the calibrated model reveals a sys-
+tematic speed over-prediction (Fig. 2(e)). The error stems from
+the upshift torque interruptions, the shift points and the brake-
+release lag (Fig. 2(b)–(d)). The correction has deliberately low
+capacity with 12 scalars in total: it edits only the tractive
+part of A and the two lag constants (Appendix A). It largely
+eliminates the speed bias under the first controller’s commands
+and improves the accuracy on the held-out drives (Fig. 2(e)
+and (f)). DIVA is trained through the re-identified model.
+4) Mismatch Parameterization: The deployed vehicle never
+matches the training model exactly: the model structure is
+simplified, and the mass, actuator gains, biases and friction
+change in operation. These deviations are parameterized by
+θ = [ks, bs, bt, kd, kb, km, kµ, dx]⊤.
+(7)
+The steering gain ks, the steering bias bs and the throttle bias bt
+act on the commands before the slew-rate limiter, cs ←kscs+
+bs and ct ←ct+bt. The powertrain and brake gains kd and kb
+scale ad and ab. The mass factor km divides the longitudinal
+acceleration and scales the mass, the yaw moment of inertia
+and the cornering stiffnesses jointly, which leaves the lateral
+response unchanged. The tire–road friction factor kµ scales
+the tire saturation and the locked-wheel deceleration, and dx
+adds a longitudinal acceleration disturbance. The acceleration
+in Eq. (6) thus becomes ax,k = (kdad,k+1 + kbab,k+1)/km +
+dx−g sin γk, and the nominal value θ0 = [1, 0, 0, 1, 1, 1, 1, 0]⊤
+recovers the identified model.
+Given that only speed and yaw rate are available as mea-
+surements, the individual components of θ acting on the same
+dynamic channel are not separately observable. The observable
+quantities reduce to two lumped deviations,
+¯bs = bs + (ks −1) cs,
+¯dx = dx +
+ kd
+km
+−1
+
+ad +
+ kb
+km
+−1
+
+ab −g sin γ,
+(8)
+representing the net steering bias and the total unexplained
+longitudinal acceleration. These two lumped deviations con-
+stitute the disturbance signals on which the control decoder
+is conditioned: during training they are computed analytically
+from θ, while at deployment they are estimated online. The
+identified model consequently fulfills three roles: it serves as
+the differentiable plant for controller training, as the process
+model of the online observer, and, through the observer’s
+estimates, as the dynamics model underlying the classical
+baseline controllers.
+D. Dynamics-in-the-Loop Imitation Learning
+With the differentiable chain from control decoder to ve-
+hicle states now defined, this section addresses the training
+procedure: the supervision signal and loss formulation, the
+strategies that ensure closed-loop validity and robustness to
+model mismatch, and the joint training of the controller with
+the planner.
+1) State-Space
+Supervision
+With
+Identifiability-Aware
+Control-Input Anchor: The design of the supervision signal
+is governed by two properties of the expert demonstrations.
+First, the expert commands are recorded at a rate lower than
+the control rate, so the raw control-input labels suffer from
+temporal aliasing and cannot faithfully reproduce the expert
+motion; in contrast, control-input knots recovered from the
+expert states via gradient-based inversion yield substantially
+more accurate trajectories. Second, the longitudinal command
+is not identifiable from the vehicle motion at standstill, since
+any command within the pedal dead band produces zero
+acceleration and leaves the vehicle state unchanged.
+The supervision therefore combines a state-space loss with
+a control-input anchor, where the anchor is weighted more
+heavily in regimes where the state provides insufficient gradi-
+ent signal (e.g., standstill) or where the control-input labels are
+reliable. Specifically, the state loss projects the position error
+of the roll-out at each label instant j onto the expert heading
+direction, decomposing it into a longitudinal component ex,j
+and a lateral component ey,j, alongside the heading error eψ,j
+and the speed error ev,j, all defined as the difference between
+rollouts and demonstration:
+Lstate =
+D
+wy Hub0.1(ey,j) + wx ℓκ(ex,j)
++ wψ Hub0.02(eψ,j) + wv ℓκ(ev,j)
+E
+ω + wRLR,
+(9)
+where Hubς is the Huber function with transition point ς,
+ℓκ is the risk-sensitive loss in Eq. (11), ⟨·⟩ω is the mean over
+samples and valid label instants weighted by the sample weight
+ω, and LR ties each rolled-out position to the lane center
+via the route label. The sample weight emphasizes decision-
+informative rare samples: launch and stop windows, onsets of
+emergency braking, and hard-steering samples. The control-
+input anchor
+Lanc =
+P
+j Ωj
+
+ηj Hub0.2
+ ux,j −u⋆
+x,j
+
++ 4
+us,j −u⋆
+s,j
+
+P
+j Ωj
+(10)
+encodes identifiability: the longitudinal weight ηj is strong
+where the state loss is blind (standstill braking or launch),
+weak while moving (aliased labels), raised on sustained emer-
+gency brakes (clean labels), and zero on recovery samples.
+The weight Ωj combines the sample weight ω with a decay
+along the horizon and a raise at standstill. The steering term is
+L1, robust to aliased steering peaks, and scaled for its smaller
+range. With weights w∆, wJ, way and wζ, a regularizer
+Lreg penalizes knot-to-knot changes, longitudinal jerk, lateral
+acceleration ay beyond a comfort limit, and tire utilization
+ζ = maxi |Fy,i|/(µiFz,i) of Eq. (16) beyond a limit.
+2) Closing the Loop: Four mechanisms narrow the open-
+loop-to-closed-loop transfer gap:
+• Risk-sensitive loss. In braking situations the distribution
+of future trajectories is bimodal (the vehicle either stops
+or proceeds), and a symmetric loss converges to the
+conditional median between the two modes, resulting in
+braking commands that are delayed. DIVA instead applies
+5
+
+
+an asymmetric quantile loss
+ℓκ(e) = (1 + κ ι I[e > 0]) |e|,
+(11)
+to the longitudinal and speed errors ex,j and ev,j, which
+are positive when the roll-out is ahead of or faster than the
+expert. The indicator ι ∈{0, 1} activates the asymmetry
+(κ = 3) in braking situations; the minimizer is then the
+1/(2 + κ) quantile, so the roll-out commits to stopping
+once the stop-class probability exceeds 1/(2+κ) = 0.2. A
+braking situation is flagged when the vehicle is moving
+and either (i) a hazard has been flagged or braked for
+within the horizon while the speed reference signals a
+stop, or (ii) an emergency brake has occurred within 0.5 s.
+An auxiliary head predicts the emergency-braking flags
+with a binary cross-entropy loss Lhaz.
+• Causal state feedback. Including acceleration states in
+the feedback token introduces a causal shortcut [34], since
+these states effectively encode the previous command and
+allow the network to copy rather than predict it. This
+shortcut manifests after each upshift torque interruption,
+where the closed loop settles into a self-confirming low-
+acceleration equilibrium. The state-feedback token is
+therefore restricted to vx and ravg, where the yaw rate
+is computed via a backward finite difference to preserve
+strict causality; a central difference would implicitly leak
+the next expert state into the current observation.
+• Recovery samples. With probability 0.3, the initial speed
+of both the roll-out and o is perturbed while the targets
+remain the expert states, so that the controller learns speed
+feedback from off-trajectory states without additional
+sensor data.
+• Beyond-preview reference distrust. With probability
+0.5, the reference route beyond the preview distance is
+shifted along its normal by an offset that grows quadrat-
+ically from zero at the preview boundary to a random
+value at the final point, so that the controller learns to
+rely on its own scene understanding.
+3) Training Under Model Mismatch:
+In training, p(θ)
+places probability 0.5 on the nominal value θ0 and spreads
+the rest over randomized deviations. The targets remain the
+nominal expert states, so the controller learns commands that
+reproduce the expert behavior under mismatch. The controller
+is informed of the mismatch through the same lumped devia-
+tions the observer would report:
+d = ν
+¯bs + ns, ¯dx + nx, 1
+⊤,
+ν ∼Bernoulli(0.7),
+(12)
+where ¯bs and ¯dx are the lumped deviations in Eq. (8), evaluated
+once at the steady state of the expert command at t and held
+over the horizon, ns and nx are zero-mean Gaussian noises
+emulating the estimation error, the last component flags an
+available estimate, and withholding the estimate (ν = 0) keeps
+the controller valid before observer convergence.
+4) Gradient Gate for Joint Training: The planner and the
+control decoder are trained jointly from scratch on the frozen
+pretrained backbone, and the control loss reaches the planner
+through the feature interface and the explicit reference in
+Eq. (2). On the shared layers, the control-loss gradient is
+negligible at initialization but grows to dominate the planning-
+loss gradient at convergence. Every tensor that the control
+branch receives from the planner therefore passes a gate
+Gλ(x) = sg(x) + λ (x −sg(x)) ,
+(13)
+where sg is the stop-gradient operator. The gate is the identity
+in the forward pass and scales the backward pass by a constant
+λ = 0.1, which brings the two gradients to the same order at
+convergence. Unlike a loss weight, it leaves every forward
+value and the planner’s own gradient untouched; λ = 0
+reproduces the training signal of a standalone planner exactly.
+The complete objective is
+L = Lstate + waLanc + Lreg + whLhaz + wpLplan,
+(14)
+where Lplan is the route and speed loss of the planning
+decoder [30].
+E. Asynchronous Execution and Online Disturbance Estima-
+tion
+During training, the controller is evaluated on open-loop
+roll-outs initialized from recorded states, with perception avail-
+able at every step. At deployment, however, two additional
+challenges arise: the control decoder must execute at every
+control step while perception updates arrive at a lower rate,
+and the deployed vehicle inevitably deviates from the nominal
+dynamics model.
+1) Asynchronous Execution: Because perception cannot run
+at the control rate, the tokens in Eq. (2) are split into two
+groups by update rate. The tokens derived from perception,
+ϕM(M), ϕP (P) and the speed token, are cached at fperc
+together with the route and the pose of their sensor frame,
+while Eo(o), Ed(d) and the route tokens of the vehicle-
+relative route are recomputed at every control step. Between
+perception updates, the cached route is transformed to the
+current pose by a rigid-body transform,
+ρ′
+i =
+ cos ∆ψ
+sin ∆ψ
+−sin ∆ψ
+cos ∆ψ
+ 
+ρi −
+∆X
+∆Y
+
+,
+(15)
+where (∆X, ∆Y, ∆ψ) denotes the displacement of the vehicle
+relative to the sensor frame of the cached route. After arc-
+length resampling of the transformed route, only the three-
+layer control decoder needs to be evaluated, constituting the
+fast path of the system. To inform the control decoder of
+the staleness of its cached perception, a latency embedding
+encodes both the elapsed time since the last perception update
+and the accumulated ego-motion (∆X, ∆Y, ∆ψ) over that
+interval. This embedding is initialized to zero, so that the
+decoder’s behavior is unaffected when perception is syn-
+chronous with control. During training, latency robustness
+is encouraged by randomly delaying the perception inputs
+by one or two label periods with probability 0.3. In the
+limiting case where perception runs at every control step with
+zero latency, the asynchronous execution path degenerates to
+standard synchronous operation.
+6
+
+
+2) Online Disturbance Observer:
+The lumped devia-
+tions defined in Eq. (8) are estimated online by an aug-
+mented unscented Kalman filter (UKF). The filter state is
+[vx, vy, r, bs, dx]⊤, with speed and yaw rate serving as mea-
+surements. The process model consists of one control step
+of F evaluated at the nominal parameters θ0, in which
+¯bs and ¯dx are augmented as random-walk states; the filter
+estimates of these augmented states thus converge to ¯bs and
+¯dx. The road grade γ is set to zero in the process model
+so that its effect is absorbed into the longitudinal deviation
+dx. To prevent uninformative measurements from degrading
+the estimates, each deviation is frozen in operating regimes
+where the corresponding measurement channel carries negli-
+gible observability, such as low-speed steering for ¯bs or near-
+standstill braking for ¯dx. Additionally, a speed innovation
+exceeding Ts times the maximum tire-limited acceleration
+triggers a temporary freeze of both estimates, safeguarding the
+filter against corruption from collision events. The resulting
+estimates ˆbs and ˆdx are assembled into the disturbance token
+d = [ˆbs, ˆdx, 1]⊤that the control decoder receives as input.
+Two quantities are deliberately excluded from the estimation:
+tire-road friction, which is observable from speed and yaw rate
+only during the brief transients in which the tires saturate and
+is therefore not reliably estimable in steady driving, and the
+brake gain deviation, which is not separately identifiable and
+enters the filter through ¯dx.
+IV. EXPERIMENTS
+The experiments address four questions: (1) does extending
+the differentiable chain to vehicle control improve closed-
+loop driving and execution quality? (2) which components of
+DIVA account for the effect? (3) how does the model behave
+under sustained vehicle dynamics mismatch, compared with
+classical controllers that use the same identified model and
+observer? (4) what does the control loop cost, and does it
+remain effective when perception runs slower than the control
+rate? Section IV-F presents case studies.
+A. Experimental Setup and Baselines
+1) Benchmark and Training Data: All closed-loop experi-
+ments use the Bench2Drive-220 benchmark [35] with its offi-
+cial metrics: driving score (DS), success rate (SR), efficiency,
+comfortness and five ability scores. Training follows [30] on
+the PDM-Lite dataset [36], recorded at 4 Hz, with the same
+route filter and data split; the perception backbone is pretrained
+as in [30] and frozen.
+2) Evaluation
+Subsets:
+The
+ablation,
+mismatch
+and
+perception-rate studies use Hard-52, a subset of 52 routes
+from Bench2Drive-220 that emphasize lateral and longitudinal
+control complexity: 23 lateral maneuvers, 13 junction turns,
+12 merging or highway routes and 4 emergency-braking
+routes, fixed before any ablation run. On the remaining routes,
+DIVA and DIVA+PID are nearly tied (92.14 vs. 91.20 DS).
+The model mismatch study additionally uses a traffic-free
+maneuver suite of 16 routes grouped into six families (junction
+turns, highway, lane changes, stop-and-go, emergency braking,
+curves). Background traffic and scenario actors are removed
+except in the emergency-braking family; the evaluation is then
+nearly deterministic, so tracking metrics resolve the controllers
+and a single trial per condition suffices.
+3) Shared Stack and Controllers: All configurations share
+the same backbone, rules and safety logic of [30]; only the
+planner and the controller change. Two planners are used: the
+baseline planner (trained alone) and the joint planner (trained
+together with the control decoder of DIVA). The compared
+configurations are:
+• TF++ [30]: the baseline planner with its PID, the
+most widely used controller of closed-loop driving in
+Bench2Drive: a lateral PID towards a look-ahead point
+and a longitudinal PID with full-brake and saturating-
+throttle branches.
+• MPC+DOB: the baseline planner with an MPC that
+shares the identified model, the disturbance observer
+(DOB) of Section III-E2, the parameterization and the
+horizon of the control decoder, solved at every control
+step by MPPI [37] with 1024 roll-outs; it optimizes a
+hand-designed tracking cost online instead of applying a
+learned mapping.
+• DIVA+PID: the joint planner with the PID of TF++,
+which isolates the effect of joint training.
+• DOB-PID: the PID of TF++ extended with the DOB,
+which subtracts the estimated steering bias and cancels
+the longitudinal disturbance via the identified map.
+• DIVA w/o observer: the full DIVA network with the
+estimate withheld (ν = 0).
+In the mismatch study, all controllers use the joint planner.
+Control-input behavior cloning is treated as an ablation.
+4) Metrics and Statistics: Beyond the official metrics, ex-
+ecution quality is quantified by dynamics metrics (mean jerk,
+mean |ax|, peak deceleration and lateral acceleration, sideslip
+angle, comfort-limit exceedances) and actuator-activity and
+tracking metrics (wide-open-throttle (WOT) fraction, throttle
+variation, brake switches, steering rate, speed error, lateral
+offset), all macro-averaged over routes. Variants are compared
+by paired per-route differences with a 95% CI.
+B. Closed-Loop Results on Bench2Drive-220
+In Table I, TF++ and DIVA+PID show that joint training
+neither improves nor degrades the planner for a hand-designed
+tracker, so the four configurations differ only in the controller.
+DIVA attains the highest DS (86.73) and SR (71.7%), with
+the largest gains on emergency braking and merging. It also
+records fewer vehicle collisions and timeouts than DIVA+PID.
+MPC+DOB obtains the best comfortness and efficiency but
+loses substantially in DS, with failures concentrated in over-
+taking scenarios. Because MPC+DOB tracks the full planned
+route over a 2 s horizon, it is sensitive to the noisy beyond-
+preview reference that the learned planner provides. The PID
+of TF++ retains its score through short preview and saturated
+commands; DIVA, trained on the planner’s actual output
+distribution, achieves both task performance and smoothness.
+In execution quality (Table I, Fig. 3), against DIVA+PID,
+which shares its planner, DIVA reduces the mean jerk by 47%,
+the brake switches by 64%, the lateral offset by 21% and the
+7
+
+
+TABLE I
+CLOSED-LOOP DRIVING AND EXECUTION RESULTS ON BENCH2DRIVE-220
+Official metrics
+Ability (%) ↑
+Execution metrics ↓
+Method
+Planner
+DS
+↑
+SR
+(%) ↑
+Effi.
+↑
+Comf.
+↑
+Over-
+taking
+Merg-
+ing
+Emerg.
+brake
+Give
+way
+Traffic
+signs
+Jerk
+(m/s3)
+|ax|
+(m/s2)
+WOT
+frac.
+Brake sw.
+(1/min)
+Steering
+rate (1/s)
+Lat. off.
+p95 (m)
+Speed err.
+(m/s)
+Speed
+(m/s)
+TF++ [30]
+baseline 83.34
+67.6
+250.97
+33.9
+55.56
+58.75
+78.33
+50.00
+86.84
+16.42
+4.54
+0.823
+42.7
+0.173
+0.159
+3.36
+8.67
+MPC+DOB
+baseline 79.59
+61.2
+259.22
+38.5
+37.78
+53.75
+76.67
+50.00
+82.63
+10.92
+3.74
+0.113
+15.8
+0.097
+0.220
+3.33
+8.67
+DIVA+PID
+joint
+83.80
+67.1
+248.31
+31.4
+60.00
+56.25
+78.33
+50.00
+82.63
+16.72
+4.57
+0.821
+42.8
+0.169
+0.126
+3.04
+8.72
+DIVA (ours) joint
+86.73
+71.7
+256.29
+36.6
+55.56
+65.82
+90.00
+40.00
+87.89
+8.86
+3.19
+0.203
+15.4
+0.098
+0.100
+2.96
+8.63
+Effi.: efficiency; Comf.: comfortness; Jerk, |ax|: means; WOT: wide-open throttle; Brake sw.: brake switches; Lat. off.: lateral offset; Speed err.: speed error; Speed: mean driving
+speed (not ranked). Execution metrics are macro-averaged over routes. Baseline planner: trained alone; joint planner: trained with the control decoder of DIVA.
+← Jerk RMS
+Deceleration
+p99 →
+(a) Longitudinal
+0
+8
+16
+24
+32
+m/s
+−38%
+← 
+ p95
+Mean || →
+(b) Lateral
+0
+2
+4
+6
+8
+10
+m/s
+−23%
+← 
+Jerk →
+(c) Comfort-limit exceedance
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+fraction
+−30%
+← Throttle
+total var.
+Steering rate →
+(d) Actuator activity
+0.0
+0.3
+0.6
+0.9
+1.2
+1/s
+−54%
+0
+6
+12
+18
+24
+m/s
+−16%
+0.0
+0.3
+0.6
+0.9
+1.2
+1.5
+deg
+−17%
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+fraction
+−32%
+0.0
+0.3
+0.6
+0.9
+1.2
+1/s
+−43%
+TF++
+MPC+DOB
+DIVA+PID
+DIVA (ours)
+Fig. 3. Execution metrics on Bench2Drive-220: (a) jerk RMS and deceleration
+p99, (b) lateral acceleration and mean sideslip angle, (c) comfort-limit
+exceedance fraction for ax and jerk, (d) throttle total variation and steering-
+rate. TF++ and MPC+DOB: baseline planner; DIVA+PID and DIVA: joint
+planner.
+steering rate by 42%, while maintaining comparable speed and
+tracking accuracy. The improvement persists on collision-free
+routes, confirming that it does not stem from fewer impacts.
+MPC+DOB matches DIVA in throttle and steering smoothness
+but tracks the path worst of all configurations. In the secondary
+metrics of Fig. 3, DIVA is lowest in seven of the eight
+indicators.
+C. Ablation Study
+Each variant repeats training with one change, except where
+noted, and is evaluated on Hard-52 on its own jointly trained
+planner.
+• Vehicle
+model (Section III-C): w/o vehicle model,
+control-input BC (loss on the expert’s 4 Hz commands;
+recovery samples and randomized dynamics, which re-
+quire the model, disabled), nominal kinematic model (the
+constant-parameter kinematic bicycle of [31], evaluated
+without observer since no identified model exists), w/o
+on-policy re-identification (the calibrated model) and w/o
+observer (ν = 0, Section III-D3).
+• Gradient into the planner (Section III-D4): λ = 0 and
+λ = 1.
+• Training strategy (Section III-D2): w/o risk-sensitive
+loss (κ = 0), non-causal state-feedback input (central dif-
+ferences and acceleration inputs restored), w/o recovery
+samples, and w/o beyond-preview reference noise, which
+also removes the emphasis on hard-steering samples.
+• Temporal discretization (Section III-B2): ZOH, 0.25 s
+step, i.e., zero-order hold of the knots together with one
+integration step per knot.
+Table II reports the DS with its paired difference to DIVA,
+closed-loop execution metrics, and offline metrics computed
+through a common reference roll-out.
+Four variants incur a statistically significant DS loss (boot-
+strap 95% CI excludes zero): DIVA+PID, control-input be-
+havior cloning, λ = 1, and the coarse-rate scheme. The abla-
+tion yields five findings. First, control-input behavior cloning
+achieves the lowest offline control-input error yet suffers a
+significant DS loss, confirming that minimizing the control-
+input residual does not guarantee closed-loop performance.
+Second, replacing the identified model with a nominal kine-
+matic bicycle preserves DS but degrades execution quality
+to the level of DIVA+PID, while omitting on-policy re-
+identification increases static collisions, indicating that ex-
+ecution fidelity demands an accurate, distribution-matched
+vehicle model. Third, removing the state-loss gradient entirely
+(λ = 0) costs DS only within noise, whereas the full gradient
+(λ = 1) causes significant DS loss and the largest lateral
+offset, as the unattenuated control loss distorts the planner’s
+route (mean point error 0.207 vs. 0.165 m for λ ≤0.1).
+Fourth, the non-causal state feedback, the risk-sensitive loss,
+and the recovery samples are each indistinguishable from
+DIVA offline, yet their removal consistently degrades closed-
+loop DS; notably, the coarse-rate scheme suffers the largest
+DS loss of all variants through route-completion collapse and
+tripled timeouts rather than collisions. Fifth, the observer adds
+no measurable benefit at nominal conditions; its value emerges
+under strong mismatch.
+D. Robustness to Vehicle Dynamics Model Mismatch
+The mass, steering gain, engine torque, brake torque and
+tire friction of the deployed vehicle are scaled at initialization,
+and a steering bias and an actuator dead time are injected
+between the controller and the vehicle. Two tiers are used:
+the traffic-free maneuver suite with 16 perturbations spanning
+seven families (Figs. 4–5(a)), and Hard-52 with traffic under
+one strength of four families (Fig. 5(b)). On the suite, DIVA
+8
+
+
+TABLE II
+ABLATION ON HARD-52: DRIVING SCORE, CLOSED-LOOP AND OFFLINE METRICS
+Closed loop
+Offline, 2 s horizon
+WOT
+Lat.
+Brake
+Speed
+Lat.
+us,0
+∆DS ↑
+SR ↑
+Jerk ↓
+frac.
+offset ↓
+sw. ↓
+err. ↓p90 ↓Speed ↓
+error
+Variant
+DS ↑
+[95% CI]
+(%)
+RC ↑(m/s3)
+↓
+p95 (m) (1/min)
+(m/s)
+(m)
+(m/s)
+↓
+DIVA (ours)
+69.3
+–
+36.5
+91.69
+10.84
+0.21
+0.109
+17.8
+4.65
+0.306
+1.110
+0.0145
+DIVA+PID
+60.1
+−9.27 [−16.6, −2.0]†
+17.3
+90.78
+15.87
+0.82
+0.143
+33.5
+4.64
+–
+–
+–
+w/o vehicle model, control-input BC
+62.0
+−7.36 [−14.3, −0.5]†
+21.2
+91.78
+12.78
+0.11
+0.159
+24.2
+4.54
+0.543
+1.345
+0.0094
+nominal kinematic model
+68.6
+−0.77 [−8.1, +6.6]
+30.8
+91.07
+16.24
+0.59
+0.147
+24.3
+4.49
+0.783
+3.283
+0.0145
+w/o on-policy re-identification
+66.3
+−3.02 [−11.7, +6.3]
+28.8
+91.27
+9.71
+0.21
+0.127
+14.3
+4.61
+0.351
+1.153
+0.0142
+w/o observer
+70.0
++0.63 [−4.0, +5.0]
+36.5
+91.47
+10.86
+0.27
+0.112
+18.6
+4.43
+–
+–
+–
+λ = 0, planner stop-gradient
+65.5
+−3.80 [−11.3, +3.7]
+28.8
+92.45
+10.32
+0.23
+0.174
+17.0
+4.56
+0.365
+1.155
+0.0148
+λ = 1, full gradient
+60.7
+−8.68 [−15.9, −2.0]†
+19.2
+89.70
+11.43
+0.22
+0.188
+17.4
+4.55
+0.363
+1.106
+0.0153
+w/o risk-sensitive loss
+65.0
+−4.29 [−12.4, +3.9]
+26.9
+91.77
+11.44
+0.24
+0.104
+15.0
+4.61
+0.312
+1.003
+0.0121
+non-causal state-feedback input
+60.3
+−9.04 [−19.1, +0.9]
+23.1
+81.90
+10.91
+0.06
+0.154
+13.6
+5.74
+0.316
+1.071
+0.0136
+w/o recovery samples
+64.7
+−4.65 [−10.7, +1.2]
+26.9
+91.89
+11.24
+0.22
+0.156
+16.8
+4.77
+0.340
+1.097
+0.0149
+w/o beyond-preview reference noise
+65.2
+−4.16 [−11.2, +3.1]
+25.0
+90.95
+10.46
+0.21
+0.156
+16.6
+4.18
+0.338
+1.104
+0.0166
+ZOH, 0.25 s step
+48.5
+−20.98 [−31.9, −10.1]†
+19.6
+65.21
+11.31
+0.00
+0.170
+22.7
+6.75
+1.536
+1.570
+0.0299
+∆DS: paired difference to DIVA with bootstrap 95% CI; †: CI excludes zero. Every variant runs on its own jointly trained planner; DIVA+PID uses the
+planner of DIVA. Offline metrics: 2 s lateral error (p90), 2 s speed error (mean) and steering-knot error us,0 (mean absolute) on 6000 validation frames.
+0.08
+0.12
+0.16
+0.20
+Lateral offset
+(m)
+Mass
+Steering gain
+Engine torque
+Brake torque
+Tire friction
+Steering bias
+Actuator dead time
+1
+1.15
+1.3
+1.5
+mass ×
+5
+10
+15
+Jerk mean
+(m/s )
+0.55
+0.7
+0.85
+1
+steering gain ×
+0.7
+0.85
+1
+torque ×
+0.5
+0.75
+1
+brake torque ×
+0.5
+0.7
+1
+friction ×
+0
+0.05
+0.1
+steering bias
+0
+1
+2
+dead time (
+)
+DIVA+PID
+DOB-PID
+MPC+DOB
+DIVA w/o observer
+DIVA (ours)
+Fig. 4.
+Lateral offset (p95, top) and mean jerk (bottom) under sustained vehicle-side mismatch on the traffic-free maneuver suite (16 routes). Columns:
+perturbed quantity with nominal at factor 1, bias 0 or dead time 0. All controllers on the joint planner.
+achieves the lowest lateral offset in all 17 conditions and the
+lowest jerk in most (Fig. 4). On Hard-52, where interaction
+with traffic dominates the score, DIVA does not collapse: it
+attains the highest DS and the lowest lateral offset in every
+perturbed condition.
+Under reduced steering gain and steering bias, the two
+controllers receiving the observer’s estimate (DOB-PID and
+DIVA) degrade least, whereas DIVA+PID and DIVA w/o
+observer suffer large lateral-offset increases and substantial
+DS losses, confirming that the observer determines where the
+mismatch is observable. Fig. 6 illustrates a representative case:
+the observer converges within 0.25 s and the observer-equipped
+controllers compensate the bias immediately, while the others
+depart the lane and collide with roadside infrastructure. DOB-
+PID achieves comparable path-holding but retains the elevated
+jerk of DIVA+PID. Under actuator dead time, which lies out-
+side the training distribution p(θ), DOB-PID degrades sharply
+in both lateral offset and jerk, whereas DIVA remains stable,
+indicating that the amortized receding-horizon controller is
+inherently more tolerant of unmodeled dead time than direct
+feedforward compensation. With the clean reference of the
+traffic-free suite, MPC+DOB attains the highest DS in most
+conditions, but with the noisy reference of a learned planner in
+traffic it yields the lowest (Table I), revealing that its advantage
+lies in tracking rather than reference robustness. Finally, fric-
+tion constitutes a negative result: it is not observable over the
+brief transients in which the tires saturate, the observer carries
+no channel for it, and the disturbance estimate therefore cannot
+compensate for friction variations.
+E. Latency and Perception-Rate Decoupling
+Table III shows that perception dominates every cycle at
+about 16 ms, while the fast path of DIVA costs less than
+0.5 ms; all configurations except MPC+DOB with the GPU
+solver meet the 50 ms budget of 20 Hz. Fig. 7 evaluates the
+closed loop at reduced perception rates: with the fast path the
+9
+
+
+80
+90
+100
+DS
+Mass
+Steering gain
+Engine torque
+Brake torque
+Tire friction
+Steering bias
+57.6
+68.3
+Actuator dead time
+1
+1.15
+1.3
+1.5
+mass ×
+4.0
+4.5
+5.0
+Speed error
+(m/s)
+0.55
+0.7
+0.85
+1
+steering gain ×
+0.7
+0.85
+1
+torque ×
+0.5
+0.75
+1
+brake torque ×
+0.5
+0.7
+1
+friction ×
+0
+0.05
+0.1
+steering bias
+6.29
+0
+1
+2
+dead time (
+)
+55
+60
+65
+70
+75
+Nominal
+Steering gain ×0.7
+Mass ×1.3
+Engine torque ×0.7
+Brake torque ×0.5
+DS ↑
+0.10
+0.13
+0.16
+0.19
+Lateral offset (m) ↓
+4.0
+4.5
+5.0
+5.5
+Speed error (m/s) ↓
+8
+11
+14
+17
+Jerk mean (m/s ) ↓
+(a) Traffic-free maneuver suite, 16 routes
+(b) Hard-52 with traffic, 52 routes
+DIVA+PID
+DOB-PID
+MPC+DOB
+DIVA w/o observer
+DIVA (ours)
+Fig. 5. DS and tracking under vehicle-side mismatch, all controllers on the joint planner. (a) Maneuver suite: DS (top) and speed error (bottom) vs. perturbed
+quantity. (b) Hard-52 with traffic: DS, lateral offset p95, speed error and jerk for the nominal vehicle (shaded) and one strength of four perturbation families.
+stop sign
+10 m
+2
+4
+6
+8
+0.00
+0.05
+0.10̂
+injected bias
+2
+4
+6
+8
+−0.2
+−0.1
+0.0
+= −
+2
+4
+6
+8
+Time (s)
+0
+1
+2
+Offset (m)
+lane edge
+2
+4
+6
+8
+Time (s)
+0
+5
+10
+Speed (m/s)
+(a) Bird's-eye view
+(b) Front camera, DIVA+PID at 5.8 s
+(c) Observer estimate of the bias
+(d) Steering command
+(e) Lateral offset from lane centre
+(f) Speed
+DIVA+PID
+DOB-PID
+MPC+DOB
+DIVA w/o observer
+DIVA (ours)
+collision
+frame (b)
+Fig. 6. Steering bias +0.10 on suite route 2084 (junction left turn at night).
+(a) Paths of the five controllers. (b) Front camera of DIVA+PID at 5.8 s, 0.5 s
+before its collision. (c) Observer estimate ˆbs against the injected bias. (d)
+Steering command; dotted: exact compensation cs = −bs. (e) Lateral offset
+from the lane center; dotted: lane edge. (f) Speed. DIVA+PID and DIVA w/o
+observer use no estimate.
+DS of DIVA is insensitive to the perception rate and its lateral
+offset grows only slowly, whereas the same network with its
+command zero-order held collapses at 5 Hz. DIVA+PID runs
+5
+10
+20
+Perception rate (Hz)
+50
+55
+60
+65
+70
+Driving score
+(a) Driving score
+5
+10
+20
+Perception rate (Hz)
+0.10
+0.15
+0.20
+Lateral offset (m)
+(b) Lateral offset p95
+DIVA+PID, hold
+DIVA+PID, 20 Hz on held path
+DIVA, hold
+DIVA, fast path
+Fig. 7. DS (a) and lateral offset p95 (b) on Hard-52 at reduced perception
+rates with 0.1 s latency; at 20 Hz, the synchronous runs without latency, where
+hold and fast path coincide. Hold: command held at the perception rate; fast
+path: asynchronous DIVA; DIVA+PID on held path: its PID at 20 Hz on the
+last perception result transformed to the current pose.
+at 20 Hz on the held path, transformed to the current pose,
+with the current speed. It stays close to its synchronous DS.
+F. Case Studies
+On the six routes of Fig. 8, all controllers score 100 and
+finish in similar time, so that the execution differences are
+comparable. DIVA attains the lowest jerk on every route and
+far fewer brake switches than TF++, which alternates relay-
+like between wide-open throttle and full brake. Behind the
+hard-braking lead vehicle, TF++ stops and relaunches repeat-
+edly, DIVA only once; under the control-loss disturbance,
+DIVA holds its cruise speed, whereas TF++ and MPC+DOB
+10
+
+
+0
+5
+10
+15
+20
+25
+30
+Time (s)
+0
+5
+10
+Speed (m/s)
+0
+5
+10
+15
+20
+25
+30
+Time (s)
+0
+5
+10
+Speed (m/s)
+0
+5
+10
+15
+Time (s)
+0
+5
+10
+Speed (m/s)
+0
+5
+10
+15
+20
+Time (s)
+0
+5
+10
+Speed (m/s)
+0
+5
+10
+15
+20
+Time (s)
+0
+5
+10
+Speed (m/s)
+0
+5
+10
+15
+20
+Time (s)
+0
+5
+10
+Speed (m/s)
+(a) Route 28154
+(b) Route 3540
+(c) Route 3561
+(d) Route 18252
+(e) Route 3514
+(f) Route 18305
+Route 28154, 16.0 s
+Route 3540, 5.8 s
+Route 3561, 9.8 s
+Route 18252, 8.9 s
+Route 3514, 6.3 s
+Route 18305, 7.5 s
+TF++
+MPC+DOB
+DIVA (ours)
+Fig. 8.
+Case studies on six routes where all controllers score 100; TF++ and MPC+DOB run on the baseline planner. (a) T-junction stop and turn. (b)
+Hard-braking lead vehicle. (c) Control-loss disturbance. (d) Pedestrian stepping out. (e) Parking exit into traffic. (f) Vehicle cut-in. Bottom row: front camera
+of DIVA on each route.
+TABLE III
+LATENCY OF THE COMPLETE CONTROL CYCLE
+Configuration
+Mean (ms)
+p95 (ms)
+Rate (Hz)
+DIVA+PID
+17.28
+17.97
+58
+DOB-PID
+18.08
+20.60
+55
+MPC+DOB, CPU
+45.08
+45.92
+22
+MPC+DOB, GPU
+81.47
+83.79
+12
+DIVA, synchronous
+21.30
+23.93
+47
+DIVA, async., 20 Hz perception
+18.44
+19.19
+54
+DIVA, 10 Hz perc.: perception cycle
+18.57
+19.25
+54
+DIVA, 10 Hz perc.: control-only cycle
+3.78
+4.09
+265
+Fast path without CUDA graph
+4.78
+5.22
+209
+RTX 5090, Core Ultra 9 285K, PyTorch 2.7.1, CUDA 12.8, 32-bit. The
+control-only cycle of DIVA runs only the fast path.
+suffer large speed drops; after the pedestrian and parking-exit
+encounters, DIVA settles to a steadier speed than both.
+V. CONCLUSION
+DIVA bridges the planning-to-control gap in end-to-end
+autonomous driving by jointly training the controller through
+identified differentiable vehicle dynamics. Supervising on
+states rather than commands decouples the demonstrations
+from the recording vehicle’s actuators: a dedicated controller
+can be trained for any identified vehicle on the same demon-
+stration set in a single run, without per-vehicle controller-
+tuning. The identified model and observer are independently
+valuable, already conferring mismatch robustness on classical
+controllers, while the learned controller adds smooth, actuator-
+aware execution at the control rate with a sub-millisecond
+control-only cycle decoupled from perception latency. On
+Bench2Drive, DIVA achieves a higher driving score than the
+most widely adopted baseline with substantially smoother ex-
+ecution. The ablations confirm that task performance requires
+a vehicle dynamics model, execution quality depends on its
+fidelity, and closed-loop viability demands rate consistency
+across control-input parameterization, supervision, and execu-
+tion. Future work will transfer the framework to real vehicles,
+add observer channels for friction and brake effectiveness, and
+extend this method into wider end-to-end paradigms.
+APPENDIX
+A. Vehicle Dynamics Model and Identification
+This appendix gives the complete model of Section III-C,
+its identification and its parameters.
+1) Model
+Equations:
+Each
+actuator
+command
+c
+∈
+{cs, ct, cb} is processed by a slew-rate limiter that advances
+its rate-limited counterpart ˜c towards c by at most ˙c↑Ts per
+step when the input magnitude increases and ˙c↓Ts when it
+decreases, where ˙c↑and ˙c↓denote the apply and release
+rates, respectively. The powertrain and brake accelerations ad
+and ab track their respective references A(vx, ˜ct) and abrk˜cb
+through exactly discretized first-order lags with time constants
+τd and τb. The map A is bilinearly interpolated; although the
+11
+
+
+0
+10 20 30
+Speed (m/s)
+−6
+−3
+0
+3
+6
+9
+ (m/s )
+0
+0.3
+0.5
+0.7
+1̃
+(a)
+0
+1
+2
+3
+Time (s)
+0
+5
+10
+15
+Speed (m/s)
+0.2
+0.3
+0.5
+ = 1
+(b)
+0
+0.5
+1
+Time (s)
+0
+−10
+−20
+ (m/s )
+(c)
+0
+1
+2
+Time (s)
+0
+35
+70
+Road-wheel angle (deg)
+(d)
+0
+1
+2
+Time (s)
+0.0
+0.4
+0.8
+Yaw rate (rad/s)
+8 m/s
+12 m/s
+20 m/s
+(e)
+0
+5
+10 15 20
+ (m/s )
+0.8
+0.9
+1.0
+/
+(f)
+5 m/s
+12 m/s
+20 m/s
+measured vehicle
+identified model
+command
+Fig. 9. Identification experiments: measured vehicle against model roll-outs
+under the same commands. (a) Acceleration map; (b) launch from rest; (c)
+full-brake step; (d) steering slew-rate limiter; (e) yaw-rate steps up to a lateral
+acceleration ay ≈6 m/s2; (f) steady-state yaw-rate gain in all 86 step-steer
+tests (dots) and of the model at 5, 12 and 20 m/s (lines; shaded: benchmark
+range).
+TABLE IV
+PARAMETERS OF THE IDENTIFIED VEHICLE MODEL
+Symbol
+Quantity
+Value
+Specification
+m
+Mass
+1696 kg
+lf, lr
+Center of mass to front, rear axle
+1.172, 1.689 m
+W
+Track width
+1.593 m
+xo
+Center of mass ahead of reference point
+0.30 m
+δmax(vx) At 0, 20, 60, 120 km/h
+70, 63, 56, 49◦
+Calibrated
+˙c↑, ˙c↓
+Apply, release rate of steering
+2.5, 5.0 s−1
+of throttle and brake
+6, 10 s−1
+τd, τb
+Powertrain, brake lag: calibrated
+0.15, 0.15 s
+re-identified
+0.10, 0.05 s
+abrk
+Deceleration per unit brake input
+−4.83 m/s2
+alock
+Locked-wheel deceleration
+−26.5 m/s2
+vg1
+Upper speed of first gear under the shift
+schedule
+5.5 m/s
+[vlo, vhi]
+Non-locking speed band in first gear
+[1.8, 4.6] m/s
+A
+Grid: speed (0–40 m/s) × throttle
+161×21
+Upshift q →q+1
+1
+2
+3
+4
+5
+vup
+q (˜ct) (m/s)
+5.1–6.0 8.4–11.3 13.5–17.9 18.0–22.5 26.2–32.6
+tsh
+q
+(s)
+0.122
+0.017
+0.058
+0.024
+0.077
+σq (m/s)
+0.34
+1.0
+1.0
+0.63
+0.25
+Identified
+Iz
+Yaw moment of inertia
+2377 kg m2
+Cf, Cr
+Cornering stiffness
+125.3, 90.5 kN/rad
+µf, µr
+Lateral force saturation coefficient
+2.40, 2.65
+underlying shift schedule exhibits hysteresis, omitting the gear
+state does not degrade the open-loop accuracy.
+Two discrete regimes supplement the longitudinal channel.
+A wheel-lock regime (χ = 1) engages when the brake input
+exceeds 0.02 in the first gear at speeds between 0.05 m/s and
+the maximum first-gear speed vg1, outside the non-locking
+band [vlo, vhi]; while active, it overrides ax with the locked-
+wheel deceleration alock and persists until the brake is released
+or the vehicle stops. A standstill-hold regime constrains vx ≥0
+and resets ad to zero when vx < 0.02 m/s and the brake input
+exceeds 0.005.
+In the lateral channel, the inner road-wheel steer angle is
+δin = δmax(vx) ˜cs. The equivalent single-track angle δ follows
+from the Ackermann relation cot δ = cot δin + W/(2L),
+with track width W and wheelbase L = lf + lr, and is
+computed as δ = arctan
+ tan δin/(1 + | tan δin|W/(2L))
+
+,
+an odd, continuously differentiable approximation. The single-
+track model is
+αf = δ −arctan vy + lfr
+v+
+x
+,
+αr = −arctan vy −lrr
+v+
+x
+,
+Fy,i = µiFz,i tanh Ciαi
+µiFz,i
+,
+i ∈{f, r},
+(16)
+˙vy = Fy,f cos δ + Fy,r
+m
+−vxr,
+˙r = lfFy,f cos δ −lrFy,r
+Iz
+,
+where v+
+x
+=
+max(vx, 1 m/s), αi are the axle slip an-
+gles, Fy,i the lateral axle forces, and Fz,f = mglr/L and
+Fz,r = mglf/L the static axle loads; Table IV lists the
+other symbols. At low speed, (vy, r) blends into the kinematic
+values vy,kin = vx tan βkin and rkin = vx tan δ cos βkin/L,
+with βkin = arctan(lr tan δ/L). The blending weight ϖ =
+min{max{(vx −1)/2, 0}, 1} moves from purely kinematic
+behavior below 1 m/s to purely dynamic behavior above 3 m/s.
+The pose follows
+˙X = vx cos ψ −(vy −xor) sin ψ, ˙Y =
+vx sin ψ + (vy −xor) cos ψ and ˙ψ = r. The lateral and pose
+channels advance by Ns = 5 semi-implicit Euler sub-steps per
+control step.
+2) Identification
+Protocol:
+Specification
+parameters,
+namely the mass, the position of the center of mass, the
+wheelbase, the track width, δmax(vx) and the gear ratios, are
+taken from the vehicle specification. Calibrated parameters
+are measured with constant-input, step and coast-down
+experiments on a flat road: the map A (Fig. 9(a)), abrk, the
+slew-rate limits (Fig. 9(c), (d)), the lags, the dead bands
+(Fig. 9(b)), the shift schedule, the lock regime (Fig. 9(c))
+and the standstill behavior. Identified parameters, which no
+single experiment exposes, are estimated from step-steer tests
+(Fig. 9(e), (f)) and swept-sine steering excitations: Iz, Cf,
+Cr, µf and µr. Dead times, brake deceleration, shift speeds
+and yaw-rate gains re-measured on a second test platform
+agree with the fitted values to three or four significant digits.
+Drives with random excitation are withheld from every fit for
+held-out validation.
+3) On-Policy Re-Identification: Under the first controller’s
+commands, the calibrated model reveals four error sources
+(Fig. 2(b)–(d)): prolonged upshift torque interruptions, map
+artifacts that cap output at moderate throttle, fixed rather than
+throttle-dependent shift points, and an overestimated brake-
+release lag. To address these, for ˜ct ≥0.5 the cells below
+the first upshift are raised to the in-gear value and the gear
+boundaries are aligned with the measured upshift speeds
+vup
+q (˜ct). Where A > 0, the expected time lost per upshift
+is folded into the map via
+A′(vx, ˜ct) =
+A
+1 + A P5
+q=1 tsh
+q N
+ vx −vup
+q (˜ct); 0, σ2q
+, (17)
+12
+
+
+TABLE V
+IMPLEMENTATION DETAILS AND HYPERPARAMETERS
+Item
+Value
+Token width, embedding MLP width
+256, 128
+Planning decoder: heads, FFN, GRU
+width
+8, 2048, 64
+Control decoder: heads, FFN, dropout
+8, 1024, 0.1
+wy, wx, wψ, wv, wR
+1.0, 0.5, 2.0, 0.5, 0.5
+wa, wh, wp
+0.5, 0.2, 1.0
+Anchor Ωj: decay per knot, factor at
+standstill
+0.8, 4
+Anchor ηj: standstill or launch, moving,
+emergency brake
+1, 0.2, 0.6
+w∆, wJ, way, wζ
+0.05, 2 × 10−3, 0.01, 1.0
+Positive-class weight in Lhaz
+3
+Randomized ln ks, ln kd, ln kb, ln km
+±0.25
+Randomized bs, bt, kµ, dx
+±0.08, ±0.05, [0.4, 1], ±1 m/s2
+Noise s.d. of ns, nx
+0.01, 0.15 m/s2
+Relative noise on o
+5%
+Learning rate, warm-up steps, cosine
+floor
+3 × 10−4, 1000, 1%
+Gradient clipping: control decoder,
+planner
+1.0, 5000
+Batch size, training steps
+32×8 GPUs, 58 380
+UKF process s.d.: vx, vy, r, bs, dx
+0.05, 0.05, 0.02, 0.002, 0.03
+UKF measurement s.d.: vx, r
+0.05, 0.01
+UKF initial s.d.: vx, vy, r, bs, dx
+0.32, 0.32, 0.22, 0.05, 0.5
+UKF limits of |ˆbs|, | ˆdx|
+0.25, 3
+Unscented transform αUT, βUT, κUT
+0.5, 2, 0
+Lateral sub-steps Ns of the UKF process
+model
+3
+where A abbreviates A(vx, ˜ct), tsh
+q
+is the net upshift delay
+from gear q, and N(·; 0, σ2
+q) is a Gaussian kernel of width
+σq; the expression adds the expected pause to the reciprocal
+acceleration 1/A. The lag constants (τd, τb) are selected by
+grid search on the open-loop speed error over training routes,
+while the lateral model, brake gain, and lock regime remain
+unchanged. The held-out drives were used only for structure
+selection; thus Fig. 2(f) constitutes a validation rather than a
+test result.
+4) Parameters: Table IV lists the parameters of F for the
+vehicle of Bench2Drive in CARLA 0.9.15 at Ts = 0.05 s,
+grouped by tier. About 7% of the command changes take
+effect one control period late, presumably because the client
+applies them asynchronously to the simulation step. For the
+calibrated model, the 1 s position error on the held-out drives
+concentrates in discrete longitudinal events: low-speed braking
+and lock-up (0.585 m), gear shifts (0.411 m) and launches
+(0.257 m), ahead of high lateral acceleration (0.222 m), grades
+(0.180 m) and late commands (0.151 m); event-free windows
+show 0.057 m.
+B. Implementation Details and Hyperparameters
+Table V lists the settings of DIVA, shared by all ablation
+variants except for their defining change. The yaw rate ravg in
+o is a backward heading difference over Tlab in training and
+the mean measured yaw rate over the last five control steps at
+deployment.
+REFERENCES
+[1] K. Chitta, A. Prakash, B. Jaeger, Z. Yu, K. Renz, and A. Geiger,
+“Transfuser: Imitation with transformer-based sensor fusion for au-
+tonomous driving,” IEEE Transactions on Pattern Analysis and Machine
+Intelligence, vol. 45, no. 11, pp. 12 878–12 895, 2023.
+[2] Y. Hu, J. Yang, L. Chen, K. Li, C. Sima, X. Zhu, S. Chai, S. Du,
+T. Lin, W. Wang, L. Lu, X. Jia, Q. Liu, J. Dai, Y. Qiao, and H. Li,
+“Planning-oriented autonomous driving,” in 2023 IEEE/CVF Conference
+on Computer Vision and Pattern Recognition (CVPR), 2023, pp. 17 853–
+17 862.
+[3] S. Thrun, M. Montemerlo, H. Dahlkamp, D. Stavens, A. Aron, J. Diebel,
+P. Fong, J. Gale, M. Halpenny, G. Hoffmann, K. Lau, C. Oakley,
+M. Palatucci, V. Pratt, P. Stang, S. Strohband, C. Dupont, L.-E. Jen-
+drossek, C. Koelen, C. Markey, C. Rummel, J. van Niekerk, E. Jensen,
+P. Alessandrini, G. Bradski, B. Davies, S. Ettinger, A. Kaehler, A. Ne-
+fian, and P. Mahoney, “Stanley: The robot that won the darpa grand
+challenge,” Journal of Field Robotics, vol. 23, no. 9, pp. 661–692, 2006.
+[4] B. Paden, M. ˇC´ap, S. Z. Yong, D. Yershov, and E. Frazzoli, “A survey of
+motion planning and control techniques for self-driving urban vehicles,”
+IEEE Transactions on Intelligent Vehicles, vol. 1, no. 1, pp. 33–55, 2016.
+[5] P. Stano, U. Montanaro, D. Tavernini, M. Tufo, G. Fiengo, L. Novella,
+and A. Sorniotti, “Model predictive path tracking control for automated
+road vehicles: A review,” Annual Reviews in Control, vol. 55, pp. 194–
+236, 2023.
+[6] A. Artu˜nedo, M. Moreno-Gonzalez, and J. Villagra, “Lateral control
+for autonomous vehicles: A comparative evaluation,” Annual Reviews in
+Control, vol. 57, p. 100910, 2024.
+[7] J. Lee, Y. Hwang, and S. B. Choi, “Robust tube-mpc based steering
+and braking control for path tracking at high-speed driving,” IEEE
+Transactions on Vehicular Technology, vol. 72, no. 12, pp. 15 301–
+15 316, 2023.
+[8] L. Chen, P. Wu, K. Chitta, B. Jaeger, A. Geiger, and H. Li, “End-to-end
+autonomous driving: Challenges and frontiers,” IEEE Transactions on
+Pattern Analysis and Machine Intelligence, vol. 46, no. 12, pp. 10 164–
+10 183, 2024.
+[9] Z. Yang, X. Jia, Q. Li, X. Yang, M. Yao, and J. Yan, “Raw2drive:
+Reinforcement learning with aligned world models for end-to-end au-
+tonomous driving (in carla v2),” in Advances in Neural Information Pro-
+cessing Systems, D. Belgrave, C. Zhang, H. Lin, R. Pascanu, P. Koniusz,
+M. Ghassemi, and N. Chen, Eds., vol. 38, Main Conference.
+Curran
+Associates, Inc., 2025, pp. 134 122–134 147.
+[10] P. Wu, X. Jia, L. Chen, J. Yan, H. Li, and Y. Qiao, “Trajectory-guided
+control prediction for end-to-end autonomous driving: A simple yet
+strong baseline,” in Advances in Neural Information Processing Systems,
+S. Koyejo, S. Mohamed, A. Agarwal, D. Belgrave, K. Cho, and A. Oh,
+Eds., vol. 35.
+Curran Associates, Inc., 2022, pp. 6119–6132.
+[11] B. Jiang, S. Chen, Q. Xu, B. Liao, J. Chen, H. Zhou, Q. Zhang,
+W. Liu, C. Huang, and X. Wang, “Vad: Vectorized scene representation
+for efficient autonomous driving,” in Proceedings of the IEEE/CVF
+International Conference on Computer Vision (ICCV), October 2023,
+pp. 8340–8350.
+[12] X. Jia, J. You, Z. Zhang, and J. Yan, “Drivetransformer: Unified trans-
+former for scalable end-to-end autonomous driving,” in International
+Conference on Learning Representations, Y. Yue, A. Garg, N. Peng,
+F. Sha, and R. Yu, Eds., vol. 2025, 2025, pp. 67 227–67 243.
+[13] K. Renz, L. Chen, E. Arani, and O. Sinavski, “Simlingo: Vision-only
+closed-loop autonomous driving with language-action alignment,” in
+2025 IEEE/CVF Conference on Computer Vision and Pattern Recog-
+nition (CVPR), 2025, pp. 11 993–12 003.
+[14] W. Liang, P. R. Baldivieso, R. Drummond, and D. Shin, “Tuning the
+feedback controller gains is a simple way to improve autonomous
+driving performance,” in 2024 UKACC 14th International Conference
+on Control (CONTROL), 2024, pp. 72–77.
+[15] P. Karkus, B. Ivanovic, S. Mannor, and M. Pavone, “Diffstack: A
+differentiable and modular control stack for autonomous vehicles,” in
+Proceedings of The 6th Conference on Robot Learning, ser. Proceedings
+of Machine Learning Research, K. Liu, D. Kulic, and J. Ichnowski, Eds.,
+vol. 205.
+PMLR, 14–18 Dec 2023, pp. 2170–2180.
+[16] A. Nachkov, D. P. Paudel, and L. Van Gool, “Autonomous vehicle
+controllers from end-to-end differentiable simulation,” in 2025 IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS),
+2025, pp. 2697–2704.
+[17] A. Nachkov, D. P. Paudel, J.-N. Zaech, D. Scaramuzza, and L. Van Gool,
+“Unlocking efficient vehicle dynamics modeling via analytic world mod-
+els,” in Proceedings of the AAAI Conference on Artificial Intelligence,
+vol. 40, no. 29, 2026, pp. 24 467–24 475.
+[18] J. D. Rodr´ıguez-Vidal, G. Villalonga, D. Porres, and A. M. L. Pe˜na,
+“Addressing the waypoint-action gap in end-to-end autonomous driving
+via vehicle motion models,” 2026.
+[19] C. Zhang, W. Shi, H. Chu, J. Zhao, Y. Huang, J. Sun, W. Ding,
+B. Gao, J. Wang, and H. Chen, “Dynamics-aware integrated trajectory
+planning and control for end-to-end autonomous driving systems,” IEEE
+Transactions on Vehicular Technology, pp. 1–13, 2026.
+13
+
+
+[20] J. Liu, Y. Cui, J. Duan, Z. Jiang, Z. Pan, K. Xu, and H. Li, “Reinforce-
+ment learning-based high-speed path following control for autonomous
+vehicles,” IEEE Transactions on Vehicular Technology, vol. 73, no. 6,
+pp. 7603–7615, 2024.
+[21] C. Gong, C. Lu, Z. Li, Z. Liu, J. Gong, and X. Chen, “Beyond imi-
+tation: A life-long policy learning framework for path tracking control
+of autonomous driving,” IEEE Transactions on Vehicular Technology,
+vol. 73, no. 7, pp. 9786–9799, 2024.
+[22] D. Tan and B. Zhu, “Twin-observers-based control approach for intelli-
+gent vehicle path-tracking,” IEEE Transactions on Vehicular Technology,
+vol. 73, no. 7, pp. 9604–9615, 2024.
+[23] Z. Qin, L. Chen, M. Hu, and X. Chen, “A lateral and longitudinal
+dynamics control framework of autonomous vehicles based on multi-
+parameter joint estimation,” IEEE Transactions on Vehicular Technology,
+vol. 71, no. 6, pp. 5837–5852, 2022.
+[24] Z. Zhou, Y. Wang, G. Zhou, X. Liu, M. Wu, and K. Dai, “Vehicle
+lateral dynamics-inspired hybrid model using neural network for pa-
+rameter identification and error characterization,” IEEE Transactions on
+Vehicular Technology, vol. 73, no. 11, pp. 16 173–16 186, 2024.
+[25] X. Wu, C. Wei, H. Zhang, C. Jiang, and C. Hu, “Path-tracking and
+lateral stabilization for automated vehicles via learning-based robust
+model predictive control,” IEEE Transactions on Vehicular Technology,
+vol. 73, no. 12, pp. 18 571–18 583, 2024.
+[26] E. Ghignone, N. Baumann, and M. Magno, “Tc-driver: A trajectory-
+conditioned reinforcement learning approach to zero-shot autonomous
+racing,” IEEE Transactions on Field Robotics, vol. 1, pp. 527–536, 2024.
+[27] Y. Tsuchiya, T. Balch, P. Drews, and G. Rosman, “Online adaptation of
+learned vehicle dynamics model with meta-learning approach,” in 2024
+IEEE/RSJ International Conference on Intelligent Robots and Systems
+(IROS), 2024, pp. 802–809.
+[28] K. Huang, R. Rana, A. Spitzer, G. Shi, and B. Boots, “Datt: Deep
+adaptive trajectory tracking for quadrotor control,” in Proceedings of
+The 7th Conference on Robot Learning, ser. Proceedings of Machine
+Learning Research, J. Tan, M. Toussaint, and K. Darvish, Eds., vol.
+229.
+PMLR, 06–09 Nov 2023, pp. 326–340.
+[29] F. Djeumou, T. J. Lew, N. DING, M. Thompson, M. Suminaka,
+M. Greiff, and J. Subosits, “One model to drift them all: Physics-
+informed conditional diffusion model for driving at the limits,” in Pro-
+ceedings of The 8th Conference on Robot Learning, ser. Proceedings of
+Machine Learning Research, P. Agrawal, O. Kroemer, and W. Burgard,
+Eds., vol. 270.
+PMLR, 06–09 Nov 2025, pp. 604–630.
+[30] B. Jaeger, K. Chitta, and A. Geiger, “Hidden biases of end-to-end driving
+models,” in 2023 IEEE/CVF International Conference on Computer
+Vision (ICCV), 2023, pp. 8206–8215.
+[31] D. Chen, V. Koltun, and P. Kr¨ahenb¨uhl, “Learning to drive from a world
+on rails,” in 2021 IEEE/CVF International Conference on Computer
+Vision (ICCV), 2021, pp. 15 570–15 579.
+[32] Y. Bengio, N. L´eonard, and A. C. Courville, “Estimating or propagat-
+ing gradients through stochastic neurons for conditional computation,”
+CoRR, vol. abs/1308.3432, 2013.
+[33] M. Gevers, “Identification for control: From the early achievements to
+the revival of experiment design*,” European Journal of Control, vol. 11,
+no. 4, pp. 335–352, 2005.
+[34] C. Wen, J. Lin, T. Darrell, D. Jayaraman, and Y. Gao, “Fighting copycat
+agents in behavioral cloning from observation histories,” in Advances
+in Neural Information Processing Systems, H. Larochelle, M. Ranzato,
+R. Hadsell, M. Balcan, and H. Lin, Eds., vol. 33.
+Curran Associates,
+Inc., 2020, pp. 2564–2575.
+[35] X. Jia, Z. Yang, Q. Li, Z. Zhang, and J. Yan, “Bench2drive: Towards
+multi-ability benchmarking of closed-loop end-to-end autonomous driv-
+ing,” in Advances in Neural Information Processing Systems, A. Glober-
+son, L. Mackey, D. Belgrave, A. Fan, U. Paquet, J. Tomczak, and
+C. Zhang, Eds., vol. 37.
+Curran Associates, Inc., 2024, pp. 819–844.
+[36] C. Sima, K. Renz, K. Chitta, L. Chen, H. Zhang, C. Xie, J. Beißwenger,
+P. Luo, A. Geiger, and H. Li, “Drivelm: Driving with graph visual
+question answering,” in Computer Vision – ECCV 2024, A. Leonardis,
+E. Ricci, S. Roth, O. Russakovsky, T. Sattler, and G. Varol, Eds. Cham:
+Springer Nature Switzerland, 2025, pp. 256–274.
+[37] G. Williams, P. Drews, B. Goldfain, J. M. Rehg, and E. A. Theodorou,
+“Information-theoretic model predictive control: Theory and applications
+to autonomous driving,” IEEE Transactions on Robotics, vol. 34, no. 6,
+pp. 1603–1622, 2018.
+14
